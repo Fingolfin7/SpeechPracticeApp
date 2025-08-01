@@ -16,6 +16,7 @@ import pyqtgraph as pg
 import db
 from script_loader import pick_next_script
 from audio_player import AudioPlayer
+from transcribe_worker import TranscribeWorker
 
 
 class SpeechPracticeApp(QtWidgets.QMainWindow):
@@ -410,21 +411,43 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.playhead.setPos(self.player.idx / self.sr)
 
     # ─────────────────────── scoring / storage ─────────────────────────
-    def _transcribe_and_score(self):
-        self.transcript_txt.clear()
+    # ───── inside class SpeechPracticeApp – drop-in replacements ───────────
+    def _transcribe_and_score(self) -> None:
+        """
+        Start a background transcription task and disable the button until
+        the job is finished.
+        """
+        if self.current_audio_path is None:
+            return
 
-        res = self.model.transcribe(self.current_audio_path, fp16=False)
-        hyp = res["text"].strip().lower()
+        self.btn_score.setEnabled(False)
+        self.metrics_label.setText("Scoring… please wait")
 
-        err = wer(self.current_script_text, hyp)
-        clar = 1.0 - err
-        score = round(clar * 4) + 1
+        self.worker = TranscribeWorker(
+            self.model,
+            self.current_script_text,
+            self.current_audio_path,
+            parent=self,  # same thing, keyword form is clearer
+        )
+        self.worker.completed.connect(self._on_transcription_done)
+        self.worker.start()
 
+    @QtCore.pyqtSlot(str, float, float, int)
+    def _on_transcription_done(
+            self, hyp: str, err: float, clar: float, score: int
+    ) -> None:
+        """
+        Slot called when the transcription thread finishes.
+        Updates UI and stores the session in the DB.
+        """
+        # update UI
         self.metrics_label.setText(
             f"Score: {score}/5 | WER: {err:.2%} | Clarity: {clar:.2%}"
         )
         self.transcript_txt.setText(hyp)
+        self.btn_score.setEnabled(True)
 
+        # persist to DB
         sess = db.add_session(
             self.db,
             self.current_script_name,

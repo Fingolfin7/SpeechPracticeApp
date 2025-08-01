@@ -2,11 +2,7 @@ import os
 from datetime import datetime
 
 from sqlalchemy import (
-    create_engine,
-    Column,
-    Integer,
-    String,
-    Float,
+    create_engine, Column, Integer, String, Float
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -28,33 +24,27 @@ class PracticeSession(Base):
 
 
 def get_engine(db_path: str = "sessions.db"):
-    """Return a SQLite engine, creating file if needed."""
     full = os.path.abspath(db_path)
     return create_engine(f"sqlite:///{full}", echo=False)
 
 
 def init_db(engine=None):
-    """Create tables."""
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
 
 
 def get_session(db_path: str = "sessions.db"):
-    """Return a SQLAlchemy Session, after ensuring tables exist."""
     engine = get_engine(db_path)
     init_db(engine)
-    SessionLocal = sessionmaker(bind=engine)
-    return SessionLocal()
+    return sessionmaker(bind=engine)()
 
 
 def get_all_sessions(db):
-    """Return all PracticeSession rows, ordered by ID."""
     return db.query(PracticeSession).order_by(PracticeSession.id).all()
 
 
 def get_session_by_id(db, sess_id: int):
-    """Return one PracticeSession by primary key."""
     return db.query(PracticeSession).get(sess_id)
 
 
@@ -68,7 +58,6 @@ def add_session(
     clarity: float,
     score: int,
 ):
-    """Insert a new PracticeSession and return it."""
     ts = datetime.now().isoformat(timespec="seconds")
     sess = PracticeSession(
         timestamp=ts,
@@ -84,3 +73,16 @@ def add_session(
     db.commit()
     db.refresh(sess)
     return sess
+
+
+def delete_session(db, sess_id: int):
+    sess = db.query(PracticeSession).get(sess_id)
+    if not sess:
+        return
+    # delete WAV file
+    try:
+        os.remove(sess.audio_path)
+    except Exception:
+        pass
+    db.delete(sess)
+    db.commit()

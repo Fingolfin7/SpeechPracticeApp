@@ -1,0 +1,8 @@
+PyQt5
+sounddevice
+numpy
+pyqtgraph
+openai-whisper
+jiwer
+sqlalchemy
+# ensure ffmpeg is on your PATH for whisper

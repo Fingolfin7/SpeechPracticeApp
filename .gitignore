@@ -1,0 +1,6 @@
+/.venv/
+/.idea/
+/sessions.db
+/recordings/
+/scripts/
+

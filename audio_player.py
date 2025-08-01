@@ -62,6 +62,16 @@ class AudioPlayer:
             self.stream.abort()
         self.stream.start()
 
+    def pause(self):
+        """
+        Temporarily stop the stream without rewinding. Call play(idx) or
+        play() again to resume.
+        """
+        if self.stream.active:
+            # stop() keeps the current read position, abort() would reset
+            self.stream.stop()
+
+
     def stop(self):
         """Stop playback immediately."""
         if self.stream.active:

@@ -9,7 +9,8 @@ import whisper
 from jiwer import wer
 
 from PyQt5 import QtWidgets, QtCore
-from PyQt5.QtWidgets import QAction, QMenu
+from PyQt5.QtWidgets import QAction, QMenu, QStyle
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 import pyqtgraph as pg
 
 import db
@@ -99,15 +100,28 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         # record / play / score buttons
         ctrl = QtWidgets.QHBoxLayout()
-        self.btn_record = QtWidgets.QPushButton("Record")
-        self.btn_play = QtWidgets.QPushButton("Play")
+
+        # icons
+        self.ic_play = self.style().standardIcon(QStyle.SP_MediaPlay)
+        self.ic_pause = self.style().standardIcon(QStyle.SP_MediaPause)
+        self.ic_stop = self.style().standardIcon(QStyle.SP_MediaStop)
+        self.ic_record = self._make_record_icon()
+
+        # buttons
+        self.btn_record = QtWidgets.QPushButton()
+        self.btn_record.setIcon(self.ic_record)
+        self.btn_play = QtWidgets.QPushButton()
+        self.btn_play.setIcon(self.ic_play)
         self.btn_score = QtWidgets.QPushButton("Score")
+
         self.btn_record.clicked.connect(self._toggle_record)
-        self.btn_play.clicked.connect(self._play_audio)
+        self.btn_play.clicked.connect(self._toggle_play_pause)
         self.btn_score.clicked.connect(self._transcribe_and_score)
+
         for b in (self.btn_record, self.btn_play, self.btn_score):
             b.setEnabled(False)
             ctrl.addWidget(b)
+
         rl.addLayout(ctrl)
 
         # combined metrics label
@@ -129,6 +143,17 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 3)
+
+    def _make_record_icon(self, size: int = 20) -> QIcon:
+        pix = QPixmap(size, size)
+        pix.fill(QtCore.Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setBrush(QColor("red"))
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawEllipse(0, 0, size, size)
+        p.end()
+        return QIcon(pix)
 
     # ────────────────────── history list helpers ───────────────────────
     def _load_history(self):
@@ -237,8 +262,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _toggle_record(self):
         if not self.is_recording:
             self._start_record()
+            self.btn_record.setIcon(self.ic_stop)  # recording → stop
         else:
             self._stop_record()
+            self.btn_record.setIcon(self.ic_record)  # back to record
 
     def _start_record(self):
         self.play_timer.stop()
@@ -334,13 +361,30 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.wave_line.setData(x, snippet)
 
     # ───────────────────────── playback ────────────────────────────────
-    def _play_audio(self):
+    def _toggle_play_pause(self):
+        """
+        Play, resume or pause depending on current state.
+        """
         if self.audio_data is None:
             return
+
+        if self.player.active:
+            # ⇒ pause
+            self.player.pause()
+            self.play_timer.stop()
+            self.btn_play.setIcon(self.ic_play)
+            return
+
+        # ⇒ (re-)start
+        start = (
+            self.player.idx
+            if 0 <= self.player.idx < self.audio_data.size
+            else 0
+        )
         self.player.set_data(self.audio_data)
-        self.player.play(0)
+        self.player.play(start)
         self.play_timer.start()
-        self.playhead.setPos(0)
+        self.btn_play.setIcon(self.ic_pause)
 
     def _vb_click_event(self, ev):
         if ev.button() != QtCore.Qt.LeftButton or self.audio_data is None:
@@ -361,6 +405,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _update_playhead(self):
         if not self.player.active:
             self.play_timer.stop()
+            self.btn_play.setIcon(self.ic_play)  # ← new line
             return
         self.playhead.setPos(self.player.idx / self.sr)
 

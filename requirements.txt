@@ -6,5 +6,5 @@ openai-whisper
 jiwer
 sqlalchemy # orm to avoid direct SQL queries
 pyinstaller # for packaging into an executable
-# package with pyinstaller -y --name SpeechPractice --add-data "scripts;scripts" --add-data "script_index.json;." speech_practice.py
+# package with pyinstaller -y --windowed --name SpeechPractice --add-data "scripts;scripts" --add-data "script_index.json;." SpeechPractice.py
 # ensure ffmpeg is on your PATH for whisper

@@ -41,7 +41,7 @@ def get_session(db_path: str = "sessions.db"):
 
 
 def get_all_sessions(db):
-    return db.query(PracticeSession).order_by(PracticeSession.id.desc()).all()
+    return db.query(PracticeSession).order_by(PracticeSession.timestamp.desc()).all()
 
 
 def get_session_by_id(db, sess_id: int):

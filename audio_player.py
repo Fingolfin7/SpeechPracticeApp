@@ -67,6 +67,17 @@ class AudioPlayer:
         if self.stream.active:
             self.stream.abort()
 
+    def close(self):
+        """
+        Finish with this player permanently (frees the device handle).
+        """
+        try:
+            if self.stream.active:
+                self.stream.abort()
+        except Exception:
+            pass
+        self.stream.close()
+
     @property
     def active(self) -> bool:
         """Is playback currently running?"""

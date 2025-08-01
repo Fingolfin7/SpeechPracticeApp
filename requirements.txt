@@ -4,5 +4,7 @@ numpy
 pyqtgraph
 openai-whisper
 jiwer
-sqlalchemy
+sqlalchemy # orm to avoid direct SQL queries
+pyinstaller # for packaging into an executable
+# package with pyinstaller -y --name SpeechPractice --add-data "scripts;scripts" --add-data "script_index.json;." speech_practice.py
 # ensure ffmpeg is on your PATH for whisper

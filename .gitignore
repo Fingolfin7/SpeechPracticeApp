@@ -6,3 +6,6 @@
 /recordings/
 /scripts/
 script_index.json
+/SpeechPractice.spec
+/build/
+/dist/

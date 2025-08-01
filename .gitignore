@@ -1,6 +1,8 @@
 /.venv/
 /.idea/
+/.__pycache__/
+*.pyc
 /sessions.db
 /recordings/
 /scripts/
-
+script_index.json

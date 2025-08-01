@@ -20,7 +20,7 @@ class PracticeSession(Base):
     transcript  = Column(String,  nullable=False)
     wer         = Column(Float,   nullable=False)
     clarity     = Column(Float,   nullable=False)
-    score       = Column(Integer, nullable=False)
+    score       = Column(Float, nullable=False)
 
 
 def get_engine(db_path: str = "sessions.db"):
@@ -56,7 +56,7 @@ def add_session(
     transcript: str,
     wer: float,
     clarity: float,
-    score: int,
+    score: float,
 ):
     ts = datetime.now().isoformat(timespec="seconds")
     sess = PracticeSession(

@@ -1,5 +1,9 @@
-import sys
+# speech_practice.py
+# prettier-ignore
+from __future__ import annotations
+
 import os
+import sys
 import wave
 from datetime import datetime
 
@@ -7,60 +11,73 @@ import numpy as np
 import sounddevice as sd
 import whisper
 from jiwer import wer
-
-from PyQt5 import QtWidgets, QtCore
-from PyQt5.QtWidgets import QAction, QMenu, QStyle
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
-import pyqtgraph as pg
+from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5.QtGui import QColor, QPainter, QPixmap
+from PyQt5.QtWidgets import (
+    QAction,
+    QHBoxLayout,
+    QLabel,
+    QListWidgetItem,
+    QMenu,
+    QPushButton,
+    QSplitter,
+    QStyle,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 import db
-from script_loader import pick_next_script
 from audio_player import AudioPlayer
+from script_loader import pick_next_script
 from transcribe_worker import TranscribeWorker
+
+# ───────────────────────────── main window ────────────────────────────────
 
 
 class SpeechPracticeApp(QtWidgets.QMainWindow):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Speech Clarity Practice")
 
-        # database / model / audio
+        # back-end
         self.db = db.get_session()
         self.sr = 16_000
         self.model = whisper.load_model("base")
 
-        # runtime state
-        self.audio_buffer = []
-        self.audio_data = None
-        self.current_audio_path = None
+        # state
+        self.audio_buffer: list[np.ndarray] = []
+        self.audio_data: np.ndarray | None = None
+        self.current_audio_path: str | None = None
         self.is_recording = False
 
-        self.stream = None          # recording stream
-        self.rec_timer = None       # live-view timer
+        self.stream = None
+        self.rec_timer: QtCore.QTimer | None = None
+        self.play_timer = QtCore.QTimer(self)
+        self.play_timer.setInterval(50)
+        self.play_timer.timeout.connect(self._update_playhead)
+
         self.player = AudioPlayer(self.sr)
 
         self._build_ui()
         self._load_history()
         self.load_next_script()
 
-    # ─────────────────────────────── UI ────────────────────────────────
-    def _build_ui(self):
+    # ───────────────────────────────── UI ─────────────────────────────────
+
+    def _build_ui(self) -> None:
         mb = self.menuBar()
 
-        # next-script action directly on the menubar
         act_next = mb.addAction("Next Script")
         act_next.triggered.connect(self.load_next_script)
 
-        # optional File menu stub (future actions go here)
-        mb.addMenu("File")
-
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter = QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(splitter)
 
-        # left ── session history
-        hist_w = QtWidgets.QWidget()
-        hl = QtWidgets.QVBoxLayout(hist_w)
-        hl.addWidget(QtWidgets.QLabel("Session History"))
+        # left: history
+        hist_w = QWidget()
+        hl = QVBoxLayout(hist_w)
+        hl.addWidget(QLabel("Session History"))
         self.history_list = QtWidgets.QListWidget()
         self.history_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.history_list.customContextMenuRequested.connect(
@@ -69,38 +86,69 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         hl.addWidget(self.history_list)
         splitter.addWidget(hist_w)
 
-        # middle ── current script
-        scr_w = QtWidgets.QWidget()
-        sl = QtWidgets.QVBoxLayout(scr_w)
-        sl.addWidget(QtWidgets.QLabel("Current Script"))
-        self.script_txt = QtWidgets.QTextEdit(readOnly=True)
+        # middle: current script
+        scr_w = QWidget()
+        sl = QVBoxLayout(scr_w)
+        sl.addWidget(QLabel("Current Script"))
+        self.script_txt = QTextEdit(readOnly=True)
         sl.addWidget(self.script_txt)
         splitter.addWidget(scr_w)
 
-        # right ── waveform / controls / transcript
-        right_w = QtWidgets.QWidget()
-        rl = QtWidgets.QVBoxLayout(right_w)
+        # right: waveform / controls / transcript
+        right_w = QWidget()
+        rl = QVBoxLayout(right_w)
 
-        # waveform plot (x-axis in seconds)
+        # waveform plot ----------------------------------------------------
+        import pyqtgraph as pg
+
         vb = pg.ViewBox()
         self.plot = pg.PlotWidget(viewBox=vb)
-        self.plot.setYRange(-1, 1)
-        self.plot.getPlotItem().setLabel("bottom", "Time (s)")
-        self.wave_line = self.plot.plot(pen="c")
+        self.plot.setBackground(pg.mkColor("#0e1d1d"))
+        self.plot.setMouseEnabled(y=False)
+        self.plot.setMenuEnabled(False)
+        self.plot.showAxis("left", False)
+        self.plot.showAxis("right", False)
+        self.plot.getPlotItem().setContentsMargins(0, 0, 0, 0)
+        self.plot.setFrameStyle(pg.QtWidgets.QFrame.NoFrame)
+
+        pen = pg.mkPen("#00d0ff", width=1.5)
+        brush = pg.mkBrush("#00d0ff20")
+        self.wave_line = self.plot.plot(fillLevel=0, pen=pen, brush=brush)
+
         self.playhead = pg.InfiniteLine(
             pos=0, angle=90, movable=False, pen=pg.mkPen("r", width=2)
         )
         self.plot.addItem(self.playhead)
+
         vb.mouseClickEvent = self._vb_click_event
         rl.addWidget(self.plot)
 
-        # timer to animate play-head
-        self.play_timer = QtCore.QTimer(self)
-        self.play_timer.setInterval(50)
-        self.play_timer.timeout.connect(self._update_playhead)
+        # top-axis for time -------------------------------------------------
+        self.top_axis = self.plot.getPlotItem().getAxis("top")
+        self.top_axis.setHeight(20)
+        self.plot.showAxis("bottom", False)
+        self.plot.showAxis("top", True)
 
-        # record / play / score buttons
-        ctrl = QtWidgets.QHBoxLayout()
+        # centred transport bar -------------------------------------------
+        transport = QWidget()
+        transport.setFixedHeight(48)
+        transport.setStyleSheet(
+            """
+            QWidget { 
+                background:#9c9a9a; 
+                border-radius:24px; 
+            }  
+            
+            QPushButton { 
+                border:none; 
+                color:white; 
+                padding:0 16px; 
+            }
+            """
+        )
+        tlay = QHBoxLayout(transport)
+        tlay.setContentsMargins(12, 4, 12, 4)
+        tlay.setSpacing(8)
 
         # icons
         self.ic_play = self.style().standardIcon(QStyle.SP_MediaPlay)
@@ -109,11 +157,20 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.ic_record = self._make_record_icon()
 
         # buttons
-        self.btn_record = QtWidgets.QPushButton()
+        self.btn_record = QPushButton()
         self.btn_record.setIcon(self.ic_record)
-        self.btn_play = QtWidgets.QPushButton()
+        self.btn_play = QPushButton()
         self.btn_play.setIcon(self.ic_play)
-        self.btn_score = QtWidgets.QPushButton("Score")
+        self.btn_score = QPushButton("Score")
+
+        icon_sz = 28  # <— pick any size you like (px)
+
+        # remake the record glyph at the new size
+        self.ic_record = self._make_record_icon(icon_sz)
+
+        # enlarge the icons that live on the buttons
+        self.btn_play.setIconSize(QtCore.QSize(icon_sz, icon_sz))
+        self.btn_record.setIconSize(QtCore.QSize(icon_sz, icon_sz))
 
         self.btn_record.clicked.connect(self._toggle_record)
         self.btn_play.clicked.connect(self._toggle_play_pause)
@@ -121,23 +178,21 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         for b in (self.btn_record, self.btn_play, self.btn_score):
             b.setEnabled(False)
-            ctrl.addWidget(b)
+            tlay.addWidget(b)
 
-        rl.addLayout(ctrl)
+        rl.addWidget(transport, alignment=QtCore.Qt.AlignHCenter)
 
-        # combined metrics label
-        self.metrics_label = QtWidgets.QLabel(
-            "Score: –, WER: –, Clarity: –"
-        )
+        # metrics label ----------------------------------------------------
+        self.metrics_label = QLabel("Score: –, WER: –, Clarity: –")
         f = self.metrics_label.font()
         f.setPointSize(f.pointSize() + 2)
         f.setBold(True)
         self.metrics_label.setFont(f)
         rl.addWidget(self.metrics_label)
 
-        # transcript pane
-        rl.addWidget(QtWidgets.QLabel("Transcript"))
-        self.transcript_txt = QtWidgets.QTextEdit(readOnly=True)
+        # transcript pane --------------------------------------------------
+        rl.addWidget(QLabel("Transcript"))
+        self.transcript_txt = QTextEdit(readOnly=True)
         rl.addWidget(self.transcript_txt)
 
         splitter.addWidget(right_w)
@@ -145,7 +200,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 3)
 
-    def _make_record_icon(self, size: int = 20) -> QIcon:
+    # --------------------------- helpers ---------------------------------
+
+    def _make_record_icon(self, size: int = 20) -> QtGui.QIcon:
         pix = QPixmap(size, size)
         pix.fill(QtCore.Qt.transparent)
         p = QPainter(pix)
@@ -154,23 +211,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         p.setPen(QtCore.Qt.NoPen)
         p.drawEllipse(0, 0, size, size)
         p.end()
-        return QIcon(pix)
+        return QtGui.QIcon(pix)
 
-    # ────────────────────── history list helpers ───────────────────────
-    def _load_history(self):
-        self.history_list.clear()
-        sessions = db.get_all_sessions(self.db)
-        if not sessions:
-            self.history_list.addItem("No sessions yet")
-        else:
-            for sess in sessions:
-                label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
-                item = QtWidgets.QListWidgetItem(label)
-                item.setData(QtCore.Qt.UserRole, sess.id)
-                self.history_list.addItem(item)
-        self.history_list.itemClicked.connect(self._load_session)
-
-    def _history_context_menu(self, pt):
+    def _history_context_menu(self, pt) -> None:
         item = self.history_list.itemAt(pt)
         if not item or not isinstance(item.data(QtCore.Qt.UserRole), int):
             return
@@ -180,7 +223,22 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         menu.addAction(act)
         menu.exec_(self.history_list.mapToGlobal(pt))
 
-    def _delete_session(self, item):
+    # --------------------------- data ------------------------------------
+
+    def _load_history(self) -> None:
+        self.history_list.clear()
+        sessions = db.get_all_sessions(self.db)
+        if not sessions:
+            self.history_list.addItem("No sessions yet")
+        else:
+            for sess in sessions:
+                label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+                it = QListWidgetItem(label)
+                it.setData(QtCore.Qt.UserRole, sess.id)
+                self.history_list.addItem(it)
+        self.history_list.itemClicked.connect(self._load_session)
+
+    def _delete_session(self, item) -> None:
         sid = item.data(QtCore.Qt.UserRole)
         db.delete_session(self.db, sid)
         row = self.history_list.row(item)
@@ -188,8 +246,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         if getattr(self, "current_session_id", None) == sid:
             self.load_next_script()
 
-    # ───────────────────────── script handling ─────────────────────────
-    def load_next_script(self):
+    # --------------------------- script -----------------------------------
+
+    def load_next_script(self) -> None:
         name, text = pick_next_script()
         self.current_script_name = name
         self.current_script_text = text
@@ -199,6 +258,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.play_timer.stop()
         self.wave_line.clear()
         self.playhead.setPos(0)
+        self._update_time_axis(0)
+
         self.metrics_label.setText("Score: –, WER: –, Clarity: –")
         self.transcript_txt.clear()
         self.audio_data = None
@@ -208,75 +269,22 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_play.setEnabled(False)
         self.btn_score.setEnabled(False)
 
-    def _load_session(self, item):
-        """
-        Populate the UI with the chosen history entry and prepare a *fresh*
-        AudioPlayer so that playback and seek work reliably after recording.
-        """
-        sid = item.data(QtCore.Qt.UserRole)
-        sess = db.get_session_by_id(self.db, sid)
-        self.current_session_id = sid
+    # --------------------------- recording --------------------------------
 
-        # ── 1. close any existing player / play-timer ──────────────────────
-        if hasattr(self, "player") and self.player is not None:
-            try:
-                self.player.close()
-            except Exception:
-                pass
-        self.play_timer.stop()
-
-        # ── 2. copy script and metrics to the widgets ──────────────────────
-        self.current_script_name = sess.script_name
-        self.current_script_text = sess.script_text
-        self.script_txt.setText(sess.script_text)
-
-        self.metrics_label.setText(
-            f"Score: {sess.score}/5 | "
-            f"WER: {sess.wer:.2%} | Clarity: {sess.clarity:.2%}"
-        )
-        self.transcript_txt.setText(sess.transcript)
-
-        # ── 3. read the WAV file and plot it (x-axis = seconds) ────────────
-        with wave.open(sess.audio_path, "rb") as wf:
-            frames = wf.readframes(wf.getnframes())
-            data = (
-                    np.frombuffer(frames, np.int16).astype(np.float32) / 32767.0
-            )
-
-        self.audio_data = data
-        self.current_audio_path = sess.audio_path
-
-        x = np.arange(data.size) / self.sr
-        self.wave_line.setData(x, data)
-        self.playhead.setPos(0)
-
-        # ── 4. create a *new* AudioPlayer and load the clip ────────────────
-        self.player = AudioPlayer(self.sr)
-        self.player.set_data(data)
-
-        # ── 5. enable the appropriate buttons ──────────────────────────────
-        self.btn_record.setEnabled(True)
-        self.btn_play.setEnabled(True)
-        self.btn_score.setEnabled(False)
-
-    # ────────────────────────── recording ──────────────────────────────
-    def _toggle_record(self):
+    def _toggle_record(self) -> None:
         if not self.is_recording:
             self._start_record()
-            self.btn_record.setIcon(self.ic_stop)  # recording → stop
+            self.btn_record.setIcon(self.ic_stop)
         else:
             self._stop_record()
-            self.btn_record.setIcon(self.ic_record)  # back to record
+            self.btn_record.setIcon(self.ic_record)
 
-    def _start_record(self):
+    def _start_record(self) -> None:
+        self.player.pause()
         self.play_timer.stop()
-        self.player.close()
 
-        self.audio_buffer = []
+        self.audio_buffer.clear()
         self.is_recording = True
-        self.btn_record.setText("Stop")
-        self.btn_play.setEnabled(False)
-        self.btn_score.setEnabled(False)
 
         self.stream = sd.InputStream(
             samplerate=self.sr,
@@ -292,36 +300,29 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.rec_timer.timeout.connect(self._update_waveform)
         self.rec_timer.start()
 
-    def _stop_record(self):
-        """
-        Finish the current recording, save the clip, update the UI and
-        create a fresh AudioPlayer so that playback continues to work.
-        """
-        # ── 1. stop / close the input stream and live-view timer ─────────────────
+        self.btn_play.setEnabled(False)
+        self.btn_score.setEnabled(False)
+
+    def _stop_record(self) -> None:
         if self.stream is not None:
             self.stream.stop()
             self.stream.close()
             self.stream = None
-
         if self.rec_timer is not None:
             self.rec_timer.stop()
             self.rec_timer = None
 
         self.is_recording = False
-        self.btn_record.setText("Record")
 
-        # ── 2. concatenate the buffered blocks and trim leading / trailing silence
         if not self.audio_buffer:
-            return  # nothing was recorded
+            return
 
         raw = np.concatenate(self.audio_buffer, axis=0).flatten()
         trimmed = self._trim_silence(raw)
         if trimmed.size < self.sr // 10:
-            trimmed = raw  # clip is too short after trimming
-
+            trimmed = raw
         self.audio_data = trimmed
 
-        # ── 3. write the WAV file to recordings/ ─────────────────────────────────
         os.makedirs("recordings", exist_ok=True)
         fname = datetime.now().strftime("%Y%m%d_%H%M%S") + ".wav"
         path = os.path.join("recordings", fname)
@@ -332,16 +333,15 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             wf.writeframes((trimmed * 32767).astype(np.int16))
         self.current_audio_path = path
 
-        # ── 4. update waveform plot (x-axis in seconds) ──────────────────────────
-        x = np.arange(trimmed.size) / self.sr
-        self.wave_line.setData(x, trimmed)
-        self.playhead.setPos(0)
-
-        # ── 5. create a brand-new AudioPlayer and load the clip ─────────────────
         self.player = AudioPlayer(self.sr)
         self.player.set_data(trimmed)
 
-        # ── 6. re-enable the play / score buttons ───────────────────────────────
+        x_env, y_env = self._envelope(trimmed)
+        self.wave_line.setData(x_env, y_env)
+
+        self.playhead.setPos(0)
+        self._update_time_axis(trimmed.size)
+
         self.btn_play.setEnabled(True)
         self.btn_score.setEnabled(True)
 
@@ -353,30 +353,38 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         i2 = len(mask) - np.argmax(mask[::-1])
         return data[i1:i2]
 
-    def _update_waveform(self):
+    def _decimate(self, y: np.ndarray, xmax: int = 4000) -> np.ndarray:
+        """
+        Return a view of y with at most xmax samples – cheap decimation for
+        plotting only (audio playback still uses the full array).
+        """
+        n = y.size
+        if n <= xmax:
+            return y
+        step = max(1, n // xmax)
+        return y[::step]
+
+    def _update_waveform(self) -> None:
         if not self.audio_buffer:
             return
         snippet = np.concatenate(self.audio_buffer, axis=0).flatten()
         snippet = snippet[-self.sr :]
         x = np.arange(snippet.size) / self.sr
-        self.wave_line.setData(x, snippet)
+        x_env, y_env = self._envelope(snippet)
+        self.wave_line.setData(x_env, y_env)
+        self.playhead.setPos(x_env[-1])
+        self._update_time_axis(snippet.size)
 
-    # ───────────────────────── playback ────────────────────────────────
-    def _toggle_play_pause(self):
-        """
-        Play, resume or pause depending on current state.
-        """
+    # --------------------------- playback ---------------------------------
+
+    def _toggle_play_pause(self) -> None:
         if self.audio_data is None:
             return
-
         if self.player.active:
-            # ⇒ pause
             self.player.pause()
             self.play_timer.stop()
             self.btn_play.setIcon(self.ic_play)
             return
-
-        # ⇒ (re-)start
         start = (
             self.player.idx
             if 0 <= self.player.idx < self.audio_data.size
@@ -387,67 +395,59 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.play_timer.start()
         self.btn_play.setIcon(self.ic_pause)
 
-    def _vb_click_event(self, ev):
-        if ev.button() != QtCore.Qt.LeftButton or self.audio_data is None:
+    def _vb_click_event(self, ev) -> None:
+        if (
+            ev.button() != QtCore.Qt.LeftButton
+            or self.audio_data is None
+        ):
             ev.ignore()
             return
         pos = ev.scenePos()
         vb = self.plot.getPlotItem().getViewBox()
-        t = vb.mapSceneToView(pos).x()            # seconds
-        t = max(0.0, min(t, len(self.audio_data) / self.sr))
+        t = vb.mapSceneToView(pos).x()
+        t = max(0.0, min(t, self.audio_data.size / self.sr))
         idx = int(t * self.sr)
 
         self.playhead.setPos(t)
         self.player.set_data(self.audio_data)
         self.player.play(idx)
         self.play_timer.start()
+        self.btn_play.setIcon(self.ic_pause)
         ev.accept()
 
-    def _update_playhead(self):
+    def _update_playhead(self) -> None:
         if not self.player.active:
             self.play_timer.stop()
-            self.btn_play.setIcon(self.ic_play)  # ← new line
+            self.btn_play.setIcon(self.ic_play)
             return
         self.playhead.setPos(self.player.idx / self.sr)
 
-    # ─────────────────────── scoring / storage ─────────────────────────
-    # ───── inside class SpeechPracticeApp – drop-in replacements ───────────
+    # --------------------------- scoring ----------------------------------
+
     def _transcribe_and_score(self) -> None:
-        """
-        Start a background transcription task and disable the button until
-        the job is finished.
-        """
         if self.current_audio_path is None:
             return
-
         self.btn_score.setEnabled(False)
         self.metrics_label.setText("Scoring… please wait")
-
         self.worker = TranscribeWorker(
             self.model,
             self.current_script_text,
             self.current_audio_path,
-            parent=self,  # same thing, keyword form is clearer
+            self,
         )
         self.worker.completed.connect(self._on_transcription_done)
         self.worker.start()
 
-    @QtCore.pyqtSlot(str, float, float, int)
+    @QtCore.pyqtSlot(str, float, float, float)
     def _on_transcription_done(
-            self, hyp: str, err: float, clar: float, score: int
+        self, hyp: str, err: float, clar: float, score: float
     ) -> None:
-        """
-        Slot called when the transcription thread finishes.
-        Updates UI and stores the session in the DB.
-        """
-        # update UI
         self.metrics_label.setText(
-            f"Score: {score}/5 | WER: {err:.2%} | Clarity: {clar:.2%}"
+            f"Score: {score:.2f}/5 | WER: {err:.2%} | Clarity: {clar:.2%}"
         )
         self.transcript_txt.setText(hyp)
         self.btn_score.setEnabled(True)
 
-        # persist to DB
         sess = db.add_session(
             self.db,
             self.current_script_name,
@@ -459,16 +459,109 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             score,
         )
         label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
-        item = QtWidgets.QListWidgetItem(label)
-        item.setData(QtCore.Qt.UserRole, sess.id)
-        self.history_list.addItem(item)
+        it = QListWidgetItem(label)
+        it.setData(QtCore.Qt.UserRole, sess.id)
+        self.history_list.addItem(it)
+
+    # ----------------------- axis helper ----------------------------------
+
+    def _update_time_axis(self, n_samples: int) -> None:
+        dur = n_samples / self.sr if n_samples else 15
+        step = 1.0 if dur <= 60 else 5.0
+        ticks = [(t, f"{int(t)}") for t in np.arange(0, dur + 0.1, step)]
+        self.top_axis.setTicks([ticks, []])
+        self.plot.setLimits(xMin=0, xMax=max(1, dur))
+
+    def _envelope(
+            self,
+            y: np.ndarray,
+            max_points: int = 4_000,
+            silence_eps: float = 0.02,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Down-sample y to ≤ max_points vertices while preserving peaks.
+        Windows whose (max-min) < silence_eps are treated as silence
+        and collapsed to a single y = 0 value so the plot stays flat.
+        Returns (x, y) ready for setData().
+        """
+        n = y.size
+        if n == 0:
+            return np.array([], dtype=float), np.array([], dtype=float)
+
+        if n <= max_points:
+            x = np.arange(n) / self.sr
+            return x, y
+
+        step = int(np.ceil(n / max_points))  # samples / bucket
+        win = y[: (n // step) * step].reshape(-1, step)
+        y_min = win.min(axis=1)
+        y_max = win.max(axis=1)
+        dyn = y_max - y_min  # window range
+
+        # flatten windows that are essentially silent
+        quiet = dyn < silence_eps
+        y_min[quiet] = 0.0
+        y_max[quiet] = 0.0
+
+        # interleave [min, max] so the poly goes min→max→min→max→…
+        y_env = np.empty(y_min.size * 2, dtype=y.dtype)
+        y_env[0::2] = y_min
+        y_env[1::2] = y_max
+
+        centres = (np.arange(y_min.size) * step + step // 2) / self.sr
+        x_env = np.repeat(centres, 2)
+
+        return x_env, y_env
+
+    # ----------------------- load session ---------------------------------
+
+    def _load_session(self, item) -> None:
+        sid = item.data(QtCore.Qt.UserRole)
+        sess = db.get_session_by_id(self.db, sid)
+        self.current_session_id = sid
+
+        if hasattr(self, "player"):
+            self.player.pause()
+        self.play_timer.stop()
+
+        self.current_script_name = sess.script_name
+        self.current_script_text = sess.script_text
+        self.script_txt.setText(sess.script_text)
+        self.metrics_label.setText(
+            f"Score: {sess.score:.2f}/5 | WER: {sess.wer:.2%} | "
+            f"Clarity: {sess.clarity:.2%}"
+        )
+        self.transcript_txt.setText(sess.transcript)
+
+        with wave.open(sess.audio_path, "rb") as wf:
+            frames = wf.readframes(wf.getnframes())
+            data = (
+                np.frombuffer(frames, np.int16).astype(np.float32) / 32767.0
+            )
+        self.audio_data = data
+        self.current_audio_path = sess.audio_path
+
+        x_env, y_env = self._envelope(data)
+        self.wave_line.setData(x_env, y_env)
+
+        self.playhead.setPos(0)
+        self._update_time_axis(data.size)
+
+        self.player = AudioPlayer(self.sr)
+        self.player.set_data(data)
+
+        self.btn_record.setEnabled(True)
+        self.btn_play.setEnabled(True)
+        self.btn_score.setEnabled(True)
 
 
-# ────────────────────────── main entry ────────────────────────────────
-def main():
+# ────────────────────────────── main ///////////////////////////////////////
+
+
+def main() -> None:
     app = QtWidgets.QApplication(sys.argv)
     win = SpeechPracticeApp()
-    win.resize(1000, 600)
+    win.resize(1100, 640)
     win.show()
     sys.exit(app.exec_())
 

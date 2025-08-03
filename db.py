@@ -79,10 +79,15 @@ def delete_session(db, sess_id: int):
     sess = db.query(PracticeSession).get(sess_id)
     if not sess:
         return
-    # delete WAV file
-    try:
-        os.remove(sess.audio_path)
-    except Exception:
-        pass
+    # delete WAV file if no other session references it
+    exists = db.query(PracticeSession).filter(
+        PracticeSession.audio_path == sess.audio_path,
+        PracticeSession.id != sess.id
+    ).first()
+    if not exists:
+        try:
+            os.remove(sess.audio_path)
+        except Exception:
+            pass
     db.delete(sess)
     db.commit()

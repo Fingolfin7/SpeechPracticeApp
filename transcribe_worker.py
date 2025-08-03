@@ -4,20 +4,14 @@ from jiwer import wer
 import math
 
 
-def _scale_score(clar: float) -> float:
+def _scale_score(clarity: float) -> float:
     # in `transcribe_worker.py`, replace the existing score calculation with:
 
-    if clar < 0.5:
-        # clarity 0–50 % → score 1–2
-        score = max(1, round(clar / 0.5 * 2))
-    elif clar < 0.8:
-        # clarity 50 %–80 % → score 2–4
-        score = round((clar - 0.5) / 0.3 * 2 + 2)
-    else:
-        # clarity 80 %–100 % → score 4–100
-        score = round((clar - 0.8) / 0.2 * 96 + 4)
-
-    return score
+    # Clamp clarity between 0 and 1
+    clarity = max(0.0, min(clarity, 1.0))
+    # Sigmoid centered at 0.75, steepness 20
+    score = 1 + 4 / (1 + math.exp(-20 * (clarity - 0.75)))
+    return min(5, max(1, score))
 
 
 class TranscribeWorker(QtCore.QThread):

@@ -1080,6 +1080,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             "timestamps": False,
             "beam_size": 1,
             "temperature": 0.0,
+            # advanced decoding controls
+            "no_speech_threshold": 0.45,              # lower than default 0.6 to reduce missed quiet speech
+            "condition_on_previous_text": True,        # improve continuity on longer audio
         }
 
     def _settings_path(self) -> str:
@@ -1157,7 +1160,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         # Preset
         preset_cb = QComboBox(dlg)
-        preset_cb.addItems(["fast_cpu", "balanced_cpu", "balanced_gpu", "accurate_gpu"])
+        preset_cb.addItems(["---", "fast_cpu", "balanced_cpu", "balanced_gpu", "accurate_gpu"])
         preset_cb.setCurrentText(self.settings.get("preset", "balanced_cpu"))
         form.addRow("Preset", preset_cb)
 
@@ -1175,10 +1178,43 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         temp_sb.setValue(float(self.settings.get("temperature", 0.0)))
         form.addRow("Temperature", temp_sb)
 
+        # When a preset is selected, reflect forced values in the UI controls
+        def _apply_preset_visual(preset_text: str) -> None:
+            # Enable by default; disable when a preset is active
+            force = preset_text != "---"
+            if preset_text == "fast_cpu":
+                beam_sb.setValue(1)
+                temp_sb.setValue(0.0)
+            elif preset_text == "balanced_cpu":
+                beam_sb.setValue(2)
+                temp_sb.setValue(0.0)
+            elif preset_text == "balanced_gpu":
+                beam_sb.setValue(3)
+                temp_sb.setValue(0.0)
+            elif preset_text == "accurate_gpu":
+                beam_sb.setValue(5)
+                temp_sb.setValue(0.0)
+            # Only disable when a preset (not ---) is chosen
+            beam_sb.setEnabled(not force)
+            temp_sb.setEnabled(not force)
+
+        # Condition on previous text
+        cot_ck = QCheckBox("Use previous text context for continuity", dlg)
+        cot_ck.setChecked(bool(self.settings.get("condition_on_previous_text", True)))
+        form.addRow("Conditioning", cot_ck)
+
         # Timestamps
         ts_ck = QCheckBox("Generate timestamps", dlg)
         ts_ck.setChecked(bool(self.settings.get("timestamps", False)))
         form.addRow("Timestamps", ts_ck)
+
+        # No-speech threshold
+        ns_sb = QDoubleSpinBox(dlg)
+        ns_sb.setRange(0.0, 1.0)
+        ns_sb.setSingleStep(0.05)
+        ns_sb.setDecimals(2)
+        ns_sb.setValue(float(self.settings.get("no_speech_threshold", 0.45)))
+        form.addRow("No-speech threshold", ns_sb)
 
         # Language
         lang_cb = QComboBox(dlg)
@@ -1198,6 +1234,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
 
+        # Hook up preset change to update beam/temperature controls live
+        preset_cb.currentTextChanged.connect(_apply_preset_visual)
+        # Also apply once on open so the dialog accurately reflects forced behavior
+        _apply_preset_visual(preset_cb.currentText())
+
         if dlg.exec_() == QDialog.Accepted:
             self.settings["device"] = device_cb.currentText()
             # Save underlying model id, not the descriptive label
@@ -1206,7 +1247,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.settings["preset"] = preset_cb.currentText()
             self.settings["beam_size"] = int(beam_sb.value())
             self.settings["temperature"] = float(temp_sb.value())
+            self.settings["condition_on_previous_text"] = bool(cot_ck.isChecked())
             self.settings["timestamps"] = bool(ts_ck.isChecked())
+            self.settings["no_speech_threshold"] = float(ns_sb.value())
             self.settings["language"] = lang_cb.currentText()
             # Reset model so it will be recreated with new settings
             self.model = None
@@ -1225,10 +1268,14 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             temperature=temperature,
             beam_size=beam_size,
             without_timestamps=without_ts,
-            condition_on_previous_text=False,
+            condition_on_previous_text=bool(
+                self.settings.get("condition_on_previous_text", True)
+            ),
             compression_ratio_threshold=2.4,
             logprob_threshold=-1.0,
-            no_speech_threshold=0.6,
+            no_speech_threshold=float(
+                self.settings.get("no_speech_threshold", 0.45)
+            ),
         )
 
         # Device/precision hints: whisper python uses internal detection; we control fp16
@@ -1246,13 +1293,20 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         opts["fp16"] = bool(use_fp16)
 
         if preset == "fast_cpu":
+            # Force fast decode
             opts.update(dict(beam_size=1, temperature=0.0))
         elif preset == "balanced_cpu":
-            opts.update(dict(beam_size=max(1, beam_size or 1), temperature=0.0))
+            # Force balanced CPU settings
+            opts.update(dict(beam_size=2, temperature=0.0))
         elif preset == "balanced_gpu":
-            opts.update(dict(beam_size=max(3, beam_size or 3), temperature=0.0, fp16=True))
+            # Force balanced GPU settings
+            opts.update(dict(beam_size=3, temperature=0.0, fp16=True))
         elif preset == "accurate_gpu":
-            opts.update(dict(beam_size=max(5, beam_size or 5), temperature=0.0, fp16=True))
+            # Force higher accuracy on GPU
+            opts.update(dict(beam_size=5, temperature=0.0, fp16=True))
+        elif preset == "---":
+            # No preset: keep manual beam_size and temperature as-is
+            pass
 
         return opts
 

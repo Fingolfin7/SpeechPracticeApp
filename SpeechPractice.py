@@ -38,66 +38,21 @@ import db
 from audio_player import AudioPlayer
 from script_loader import pick_next_script
 from transcribe_worker import TranscribeWorker, FreeTranscribeWorker
+from theme import apply_modern_theme
+from icons import (
+    make_play_icon,
+    make_pause_icon,
+    make_stop_icon,
+    make_record_icon,
+)
+from audio_utils import trim_silence, envelope
+from transcript_utils import (
+    build_transcript_from_segments,
+    highlight_transcript_at_time,
+)
 import json
 
 # ───────────────────────────── theming ───────────────────────────────────
-
-def apply_modern_theme(app: QtWidgets.QApplication) -> None:
-    """Apply a clean, modern dark theme with a cyan accent."""
-    app.setStyle("Fusion")
-
-    # Base font
-    try:
-        app.setFont(QtGui.QFont("Segoe UI", 10))
-    except Exception:
-        pass
-
-    # Dark palette
-    bg = QtGui.QColor("#0f141a")
-    panel = QtGui.QColor("#151b22")
-    text = QtGui.QColor("#e6eaf0")
-    accent = QtGui.QColor("#00d0ff")
-
-    pal = QtGui.QPalette()
-    pal.setColor(QtGui.QPalette.Window, bg)
-    pal.setColor(QtGui.QPalette.WindowText, text)
-    pal.setColor(QtGui.QPalette.Base, panel)
-    pal.setColor(QtGui.QPalette.AlternateBase, bg)
-    pal.setColor(QtGui.QPalette.Text, text)
-    pal.setColor(QtGui.QPalette.Button, panel)
-    pal.setColor(QtGui.QPalette.ButtonText, text)
-    pal.setColor(QtGui.QPalette.ToolTipBase, panel)
-    pal.setColor(QtGui.QPalette.ToolTipText, text)
-    pal.setColor(QtGui.QPalette.Highlight, accent)
-    pal.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor("#0f141a"))
-    app.setPalette(pal)
-
-    # App-wide stylesheet (widgets keep subtle borders/padding)
-    app.setStyleSheet(
-        """
-QMainWindow{background:#0f141a;}
-QMenuBar{background:#0f141a;color:#e6eaf0;}
-QMenuBar::item:selected{background:#151b22;}
-QMenu{background:#151b22;color:#e6eaf0;border:1px solid #202833;}
-QMenu::item:selected{background:#1f2a36;}
-QSplitter::handle{background:#0f141a;width:6px;margin:0 4px;}
-QSplitter::handle:hover{background:#1a2230;}
-QLabel{color:#e6eaf0;}
-QListWidget{background:#151b22;color:#e6eaf0;border:1px solid #202833;border-radius:6px;}
-QListWidget::item:selected{background:#0e639c;}
-QTextEdit{background:#151b22;color:#e6eaf0;border:1px solid #202833;border-radius:6px;}
-QPushButton{background:#1d2633;color:#e6eaf0;border:1px solid #263241;border-radius:8px;padding:8px 14px;}
-QPushButton:hover{background:#223043;}
-QPushButton:disabled{color:#6f7c91;border-color:#2b3747;}
-QPushButton#PrimaryButton{background:#00d0ff;color:#0f141a;font-weight:600;border:0;padding:8px 18px;border-radius:18px;}
-QPushButton#PrimaryButton:hover{background:#5ee0ff;}
-QPushButton#RecordBtn{background:#e5484d;border:0;width:44px;height:44px;border-radius:22px;color:#0f141a;}
-QPushButton#RecordBtn:pressed{background:#ff5b61;}
-QPushButton#CircleBtn{background:#1d2633;width:44px;height:44px;border-radius:22px;}
-QWidget#Transport{background:#151b22;border:1px solid #263241;border-radius:28px;}
-QToolTip{background-color:#151b22;color:#e6eaf0;border:1px solid #202833;}
-        """
-    )
 
 # ───────────────────────────── main window ────────────────────────────────
 
@@ -237,10 +192,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         tlay.setSpacing(10)
 
         # icons (high-contrast glyphs)
-        self.ic_play = self._make_play_icon()
-        self.ic_pause = self._make_pause_icon()
-        self.ic_stop = self._make_stop_icon()
-        self.ic_record = self._make_record_icon()
+        self.ic_play = make_play_icon()
+        self.ic_pause = make_pause_icon()
+        self.ic_stop = make_stop_icon()
+        self.ic_record = make_record_icon()
 
         # buttons
         self.btn_record = QPushButton(objectName="RecordBtn")
@@ -263,10 +218,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         icon_sz = 28  # <— pick any size you like (px)
 
         # remake glyphs at the chosen size
-        self.ic_record = self._make_record_icon(icon_sz)
-        self.ic_play = self._make_play_icon(icon_sz)
-        self.ic_pause = self._make_pause_icon(icon_sz)
-        self.ic_stop = self._make_stop_icon(icon_sz)
+        self.ic_record = make_record_icon(icon_sz)
+        self.ic_play = make_play_icon(icon_sz)
+        self.ic_pause = make_pause_icon(icon_sz)
+        self.ic_stop = make_stop_icon(icon_sz)
 
         # enlarge the icons that live on the buttons
         self.btn_play.setIconSize(QtCore.QSize(icon_sz, icon_sz))
@@ -325,81 +280,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             pass
         self.player = new_player
 
-    def _make_record_icon(self, size: int = 20) -> QtGui.QIcon:
-        pix = QPixmap(size, size)
-        pix.fill(QtCore.Qt.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
-        # High-contrast red circle with a dark outline
-        p.setBrush(QColor("#ff4d57"))
-        p.setPen(QColor("#0f141a"))
-        p.drawEllipse(0, 0, size, size)
-        p.end()
-        return QtGui.QIcon(pix)
-
-    def _make_play_icon(self, size: int = 20) -> QtGui.QIcon:
-        w = h = size
-        pix = QPixmap(w, h)
-        pix.fill(QtCore.Qt.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
-        # circular dark background + cyan triangle for contrast
-        p.setBrush(QColor("#1d2633"))
-        p.setPen(QColor("#0f141a"))
-        p.drawEllipse(0, 0, w, h)
-        p.setBrush(QColor("#e6eaf0"))
-        p.setPen(QtCore.Qt.NoPen)
-        # triangle
-        margin = int(size * 0.28)
-        points = [
-            QtCore.QPoint(margin, margin),
-            QtCore.QPoint(w - margin, h // 2),
-            QtCore.QPoint(margin, h - margin),
-        ]
-        p.drawPolygon(QtGui.QPolygon(points))
-        p.end()
-        return QtGui.QIcon(pix)
-
-    def _make_pause_icon(self, size: int = 20) -> QtGui.QIcon:
-        w = h = size
-        pix = QPixmap(w, h)
-        pix.fill(QtCore.Qt.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setBrush(QColor("#1d2633"))
-        p.setPen(QColor("#0f141a"))
-        p.drawEllipse(0, 0, w, h)
-        # pause bars
-        bar_w = max(2, int(size * 0.18))
-        gap = int(size * 0.14)
-        x1 = w // 2 - gap - bar_w
-        x2 = w // 2 + gap
-        y = int(size * 0.24)
-        bar_h = h - 2 * y
-        p.setBrush(QColor("#e6eaf0"))
-        p.setPen(QtCore.Qt.NoPen)
-        p.drawRoundedRect(x1, y, bar_w, bar_h, 2, 2)
-        p.drawRoundedRect(x2, y, bar_w, bar_h, 2, 2)
-        p.end()
-        return QtGui.QIcon(pix)
-
-    def _make_stop_icon(self, size: int = 20) -> QtGui.QIcon:
-        w = h = size
-        pix = QPixmap(w, h)
-        pix.fill(QtCore.Qt.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setBrush(QColor("#1d2633"))
-        p.setPen(QColor("#0f141a"))
-        p.drawEllipse(0, 0, w, h)
-        p.setBrush(QColor("#e6eaf0"))
-        p.setPen(QtCore.Qt.NoPen)
-        s = int(size * 0.42)
-        x = (w - s) // 2
-        y = (h - s) // 2
-        p.drawRoundedRect(x, y, s, s, 2, 2)
-        p.end()
-        return QtGui.QIcon(pix)
+    
 
     # -------------------------- input hooks ------------------------------
     def keyPressEvent(self, ev: QtGui.QKeyEvent) -> None:
@@ -603,7 +484,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             trimmed = np.zeros(int(self.sr * 0.5), dtype=np.float32)
         else:
             raw = np.concatenate(self.audio_buffer, axis=0).flatten()
-            trimmed = self._trim_silence(raw)
+            trimmed = trim_silence(raw, self.sr)
             if trimmed.size < self.sr // 10:
                 trimmed = raw
         self.audio_data = trimmed
@@ -645,7 +526,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self._replace_player(AudioPlayer(self.sr))
         self.player.set_data(trimmed)
 
-        x_env, y_env = self._envelope(trimmed)
+        x_env, y_env = envelope(trimmed, self.sr)
         self.wave_line.setData(x_env, y_env)
 
         self.playhead.setPos(0)
@@ -726,71 +607,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     except Exception:
                         pass
 
-    def _trim_silence(
-        self,
-        data: np.ndarray,
-        threshold_db: float = -50.0,
-        window_ms: float = 20.0,
-        hop_ms: float = 10.0,
-        pre_pad_ms: float = 120.0,
-        post_pad_ms: float = 280.0,
-    ) -> np.ndarray:
-        """
-        Trim leading/trailing silence using smoothed RMS in dB with generous padding
-        to avoid cutting mid-word.
-
-        - RMS computed over window_ms with hop_ms steps, then box-smoothed
-        - threshold in dBFS; frames above threshold are considered active
-        - Adds pre/post padding around the detected active region
-        """
-        y = data.astype(np.float32, copy=False)
-        n = y.size
-        if n == 0:
-            return y
-
-        # Frameing parameters
-        frame_len = max(1, int(self.sr * (window_ms / 1000.0)))
-        hop = max(1, int(self.sr * (hop_ms / 1000.0)))
-        if frame_len <= 2:
-            frame_len = 3
-
-        # Compute frame RMS
-        # Pad to fit complete frames
-        pad = (-(n - frame_len) % hop) if n >= frame_len else (frame_len - n)
-        y_pad = np.pad(y, (0, pad), mode="constant", constant_values=0.0)
-        num_frames = 1 + max(0, (y_pad.size - frame_len) // hop)
-        if num_frames <= 0:
-            return y
-        # Efficient RMS via stride trick
-        strided = np.lib.stride_tricks.as_strided(
-            y_pad,
-            shape=(num_frames, frame_len),
-            strides=(y_pad.strides[0] * hop, y_pad.strides[0]),
-            writeable=False,
-        )
-        rms = np.sqrt(np.maximum(1e-12, (strided * strided).mean(axis=1)))
-
-        # Smooth with a small box filter to avoid flicker mid-phoneme
-        smooth_win = max(1, int(20.0 / hop_ms))  # ~200 ms smoothing by default
-        kernel = np.ones(smooth_win, dtype=np.float32) / float(smooth_win)
-        rms_smooth = np.convolve(rms, kernel, mode="same")
-
-        # Convert to dBFS
-        rms_db = 20.0 * np.log10(np.maximum(rms_smooth, 1e-8))
-        active = rms_db > float(threshold_db)
-        if not np.any(active):
-            return y
-        first_f = int(np.argmax(active))
-        last_f = int(len(active) - np.argmax(active[::-1]) - 1)
-
-        # Map frame indices back to sample indices and add padding
-        pre = int(self.sr * (pre_pad_ms / 1000.0))
-        post = int(self.sr * (post_pad_ms / 1000.0))
-        i1 = max(0, first_f * hop - pre)
-        i2 = min(n, last_f * hop + frame_len + post)
-        if i2 <= i1:
-            return y
-        return y[i1:i2]
+    
 
     def _update_waveform(self) -> None:
         if not self.audio_buffer:
@@ -810,7 +627,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             else np.zeros(0, dtype=np.float32)
         )
         snippet = snippet[-needed:]
-        x_env, y_env = self._envelope(snippet)
+        x_env, y_env = envelope(snippet, self.sr)
         self.wave_line.setData(x_env, y_env)
         if x_env.size:
             self.playhead.setPos(x_env[-1])
@@ -872,7 +689,15 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # update transcript highlighting if we have timestamped segments
         try:
             if self.transcript_segment_ranges:
-                self._highlight_transcript_at_time(cur_t)
+                try:
+                    self.transcript_active_index = highlight_transcript_at_time(
+                        self.transcript_txt,
+                        self.transcript_segment_ranges,
+                        cur_t,
+                        self.transcript_active_index,
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -999,13 +824,18 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _on_transcription_done_with_segments(self, hyp: str, err: float, clar: float, score: float, segments: object) -> None:
         try:
             self._received_segments_this_run = True
-            txt = self._build_transcript_from_segments(segments)
+            txt, segs, ranges, active_idx = build_transcript_from_segments(segments)
+            self.transcript_segments = segs
+            self.transcript_segment_ranges = ranges
+            self.transcript_active_index = active_idx
             self.transcript_txt.setPlainText(txt)
             self.metrics_label.setText(
                 f"Score: {score:.2f}/5 | WER: {err:.2%} | Clarity: {clar:.2%}"
             )
             self.transcript_active_index = -1
-            self._highlight_transcript_at_time(0.0)
+            self.transcript_active_index = highlight_transcript_at_time(
+                self.transcript_txt, self.transcript_segment_ranges, 0.0, self.transcript_active_index
+            )
             # Persist on-the-fly if we already have a session id
             if getattr(self, "current_session_id", None) is not None:
                 try:
@@ -1032,11 +862,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         try:
             self._received_segments_this_run = True
             self.last_transcript_text = hyp
-            txt = self._build_transcript_from_segments(segments)
+            txt, segs, ranges, active_idx = build_transcript_from_segments(segments)
+            self.transcript_segments = segs
+            self.transcript_segment_ranges = ranges
+            self.transcript_active_index = active_idx
             self.transcript_txt.setPlainText(txt)
             self.metrics_label.setText("Transcript ready (Free Speak)")
             self.transcript_active_index = -1
-            self._highlight_transcript_at_time(0.0)
+            self.transcript_active_index = highlight_transcript_at_time(
+                self.transcript_txt, self.transcript_segment_ranges, 0.0, self.transcript_active_index
+            )
             # In free speak, we don't have a session yet; persistence happens on Save
         except Exception:
             self.transcript_txt.setText(hyp)
@@ -1055,68 +890,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         except Exception:
             pass
 
-    def _build_transcript_from_segments(self, segments_obj: object) -> str:
-        self.transcript_segments = []
-        self.transcript_segment_ranges = []
-        self.transcript_active_index = -1
-        text_parts: list[str] = []
-        cursor_index = 0
-        for seg in list(segments_obj):
-            if not isinstance(seg, dict):
-                continue
-            seg_text = str(seg.get("text", ""))
-            if seg_text == "":
-                continue
-            start_char = cursor_index
-            text_parts.append(seg_text)
-            cursor_index += len(seg_text)
-            end_char = cursor_index
-            try:
-                t0 = float(seg.get("start", 0.0))
-                t1 = float(seg.get("end", t0))
-            except Exception:
-                t0, t1 = 0.0, 0.0
-            self.transcript_segments.append(seg)
-            self.transcript_segment_ranges.append((start_char, end_char, t0, t1))
-        return "".join(text_parts)
+    
 
-    def _highlight_transcript_at_time(self, t_seconds: float) -> None:
-        if not self.transcript_segment_ranges:
-            return
-        idx = self.transcript_active_index
-        if 0 <= idx < len(self.transcript_segment_ranges):
-            s_char, e_char, t0, t1 = self.transcript_segment_ranges[idx]
-            if t0 - 0.05 <= t_seconds <= t1 + 0.05:
-                pass
-            else:
-                idx = -1
-        if idx == -1:
-            for i, (_s, _e, t0, t1) in enumerate(self.transcript_segment_ranges):
-                if t0 - 0.05 <= t_seconds <= t1 + 0.05:
-                    idx = i
-                    break
-        if idx == -1 or idx == self.transcript_active_index:
-            return
-        self.transcript_active_index = idx
-        s_char, e_char, _t0, _t1 = self.transcript_segment_ranges[idx]
-        cursor = self.transcript_txt.textCursor()
-        cursor.setPosition(max(0, int(s_char)))
-        cursor.setPosition(max(0, int(e_char)), QtGui.QTextCursor.KeepAnchor)
-        sel = QtWidgets.QTextEdit.ExtraSelection()
-        sel.cursor = cursor
-        fmt = QtGui.QTextCharFormat()
-        fmt.setBackground(QColor("#3355ff55"))
-        fmt.setProperty(QtGui.QTextFormat.FullWidthSelection, False)
-        sel.format = fmt
-        try:
-            self.transcript_txt.setExtraSelections([sel])
-            prev = self.transcript_txt.hasFocus()
-            self.transcript_txt.setTextCursor(cursor)
-            self.transcript_txt.ensureCursorVisible()
-            if not prev:
-                self.transcript_txt.clearFocus()
-        except Exception:
-            pass
+    
 
     def _save_free_speak_session(self) -> None:
         if not self.free_speak_mode:
@@ -1219,46 +995,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.top_axis.setTicks([ticks, []])
         self.plot.setLimits(xMin=0, xMax=max(1, dur))
 
-    def _envelope(
-            self,
-            y: np.ndarray,
-            max_points: int = 4_000,
-            silence_eps: float = 0.02,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Down-sample y to ≤ max_points vertices while preserving peaks.
-        Windows whose (max-min) < silence_eps are treated as silence
-        and collapsed to a single y = 0 value so the plot stays flat.
-        Returns (x, y) ready for setData().
-        """
-        n = y.size
-        if n == 0:
-            return np.array([], dtype=float), np.array([], dtype=float)
-
-        if n <= max_points:
-            x = np.arange(n) / self.sr
-            return x, y
-
-        step = int(np.ceil(n / max_points))  # samples / bucket
-        win = y[: (n // step) * step].reshape(-1, step)
-        y_min = win.min(axis=1)
-        y_max = win.max(axis=1)
-        dyn = y_max - y_min  # window range
-
-        # flatten windows that are essentially silent
-        quiet = dyn < silence_eps
-        y_min[quiet] = 0.0
-        y_max[quiet] = 0.0
-
-        # interleave [min, max] so the poly goes min→max→min→max→…
-        y_env = np.empty(y_min.size * 2, dtype=y.dtype)
-        y_env[0::2] = y_min
-        y_env[1::2] = y_max
-
-        centres = (np.arange(y_min.size) * step + step // 2) / self.sr
-        x_env = np.repeat(centres, 2)
-
-        return x_env, y_env
+    
 
     # ----------------------- load session ---------------------------------
 
@@ -1296,17 +1033,14 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Restore segments if present in DB to enable synced highlighting
         try:
             if getattr(sess, "segments", None):
-                segs = json.loads(sess.segments)
-                # Build mapping and text from segments; prefer DB transcript text if present
-                self.transcript_segments = list(segs) if isinstance(segs, list) else []
-                # Rebuild ranges from segments and currently set text to ensure indices match
-                self._build_transcript_from_segments(self.transcript_segments)
-                if sess.transcript:
-                    # Keep stored transcript text if it matches concatenated segments length
-                    self.transcript_txt.setPlainText(sess.transcript)
-                    # Recalculate ranges to match this text length if needed
-                    # Note: assumes segment texts concatenated equal stored transcript
-                    self._build_transcript_from_segments(self.transcript_segments)
+                segs_from_db = json.loads(sess.segments)
+                seg_list = list(segs_from_db) if isinstance(segs_from_db, list) else []
+                txt, segs, ranges, active_idx = build_transcript_from_segments(seg_list)
+                self.transcript_segments = segs
+                self.transcript_segment_ranges = ranges
+                self.transcript_active_index = -1
+                if not sess.transcript:
+                    self.transcript_txt.setPlainText(txt)
         except Exception:
             self.transcript_segments = None
             self.transcript_segment_ranges = []
@@ -1325,7 +1059,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.audio_data = data
         self.current_audio_path = sess.audio_path
 
-        x_env, y_env = self._envelope(data)
+        x_env, y_env = envelope(data, self.sr)
         self.wave_line.setData(x_env, y_env)
 
         self.playhead.setPos(0)

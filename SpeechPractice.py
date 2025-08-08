@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
-import wave
 from datetime import datetime
+import soundfile as sf
 
 import numpy as np
 import sounddevice as sd
@@ -41,6 +41,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.setWindowTitle("Speech Clarity Practice")
 
         # back-end
+        changed, msg = (False, None)
+        try:
+            changed, msg = db.ensure_db_writable("sessions.db")
+        except Exception:
+            pass
         self.db = db.get_session()
         self.sr = 16_000
         self.model = whisper.load_model("base")
@@ -62,6 +67,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self._build_ui()
         self._load_history()
         self.load_next_script()
+
+        # Show a one-time notice if we fixed DB permissions
+        if msg:
+            self.statusBar().showMessage(msg, 8000)
 
     # ───────────────────────────────── UI ─────────────────────────────────
 
@@ -184,6 +193,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         # metrics label ----------------------------------------------------
         self.metrics_label = QLabel("Score: –, WER: –, Clarity: –")
+        self.metrics_label.setTextInteractionFlags( # enable copy-paste
+            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+        )
         f = self.metrics_label.font()
         f.setPointSize(f.pointSize() + 2)
         f.setBold(True)
@@ -252,6 +264,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         name, text = pick_next_script()
         self.current_script_name = name
         self.current_script_text = text
+        # clear any active session id when switching scripts
+        self.current_session_id = None
         self.script_txt.setText(f"{name}\n\n{text}")
 
         self.player.stop()
@@ -314,24 +328,46 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.is_recording = False
 
+        # Ensure we have something to save even if recording was too short to capture
         if not self.audio_buffer:
-            return
-
-        raw = np.concatenate(self.audio_buffer, axis=0).flatten()
-        trimmed = self._trim_silence(raw)
-        if trimmed.size < self.sr // 10:
-            trimmed = raw
+            # create a brief silent clip (0.5s) so a session can still be saved
+            trimmed = np.zeros(int(self.sr * 0.5), dtype=np.float32)
+        else:
+            raw = np.concatenate(self.audio_buffer, axis=0).flatten()
+            trimmed = self._trim_silence(raw)
+            if trimmed.size < self.sr // 10:
+                trimmed = raw
         self.audio_data = trimmed
 
         os.makedirs("recordings", exist_ok=True)
-        fname = datetime.now().strftime("%Y%m%d_%H%M%S") + ".wav"
-        path = os.path.join("recordings", fname)
-        with wave.open(path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(self.sr)
-            wf.writeframes((trimmed * 32767).astype(np.int16))
-        self.current_audio_path = path
+        base = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Prefer FLAC to save disk; fallback to WAV for broader codec support
+        flac_path = os.path.join("recordings", base + ".flac")
+        wav_path = os.path.join("recordings", base + ".wav")
+        wrote = False
+        try:
+            sf.write(
+                flac_path,
+                trimmed.astype(np.float32),
+                self.sr,
+                format="FLAC",
+                subtype="PCM_16",
+            )
+            self.current_audio_path = flac_path
+            wrote = True
+        except Exception:
+            try:
+                sf.write(
+                    wav_path,
+                    trimmed.astype(np.float32),
+                    self.sr,
+                    format="WAV",
+                    subtype="PCM_16",
+                )
+                self.current_audio_path = wav_path
+                wrote = True
+            except Exception:
+                self.current_audio_path = None
 
         self.player = AudioPlayer(self.sr)
         self.player.set_data(trimmed)
@@ -345,6 +381,68 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_play.setEnabled(True)
         self.btn_score.setEnabled(True)
 
+        # Create a DB entry immediately after stopping, with empty scores
+        try:
+            sess = db.add_session(
+                self.db,
+                self.current_script_name,
+                self.current_script_text,
+                self.current_audio_path or "",
+                transcript=None,
+                wer=None,
+                clarity=None,
+                score=None,
+            )
+            self.current_session_id = sess.id
+            label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+            it = QListWidgetItem(label)
+            it.setData(QtCore.Qt.UserRole, sess.id)
+            # remove placeholder if present
+            if self.history_list.count() == 1 and not isinstance(
+                self.history_list.item(0).data(QtCore.Qt.UserRole), int
+            ):
+                self.history_list.takeItem(0)
+            self.history_list.addItem(it)
+            self.metrics_label.setText("Saved session; scores pending. Run Score when ready.")
+        except Exception as e:
+            # Fallback for legacy DBs with NOT NULL constraints: store placeholders
+            try:
+                # reset the transaction after the failed flush/commit
+                try:
+                    self.db.rollback()
+                except Exception:
+                    pass
+                sess = db.add_session(
+                    self.db,
+                    self.current_script_name,
+                    self.current_script_text,
+                    self.current_audio_path,
+                    transcript="",
+                    wer=0.0,
+                    clarity=0.0,
+                    score=0.0,
+                )
+                self.current_session_id = sess.id
+                label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+                it = QListWidgetItem(label)
+                it.setData(QtCore.Qt.UserRole, sess.id)
+                if self.history_list.count() == 1 and not isinstance(
+                    self.history_list.item(0).data(QtCore.Qt.UserRole), int
+                ):
+                    self.history_list.takeItem(0)
+                self.history_list.addItem(it)
+                self.metrics_label.setText("Saved session (legacy DB); scores pending.")
+            except Exception as e2:
+                # Surface the specific error for troubleshooting
+                self.metrics_label.setText(
+                    f"Could not save session. DB error: {e2}"
+                )
+                try:
+                    print("DB save error (first):", repr(e))
+                    print("DB save error (fallback):", repr(e2))
+                except Exception:
+                    pass
+
     def _trim_silence(self, data, thresh=0.02):
         mask = np.abs(data) > thresh
         if not mask.any():
@@ -352,17 +450,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         i1 = np.argmax(mask)
         i2 = len(mask) - np.argmax(mask[::-1])
         return data[i1:i2]
-
-    def _decimate(self, y: np.ndarray, xmax: int = 4000) -> np.ndarray:
-        """
-        Return a view of y with at most xmax samples – cheap decimation for
-        plotting only (audio playback still uses the full array).
-        """
-        n = y.size
-        if n <= xmax:
-            return y
-        step = max(1, n // xmax)
-        return y[::step]
 
     def _update_waveform(self) -> None:
         if not self.audio_buffer:
@@ -448,20 +535,36 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.transcript_txt.setText(hyp)
         self.btn_score.setEnabled(True)
 
-        sess = db.add_session(
-            self.db,
-            self.current_script_name,
-            self.current_script_text,
-            self.current_audio_path,
-            hyp,
-            err,
-            clar,
-            score,
-        )
-        label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
-        it = QListWidgetItem(label)
-        it.setData(QtCore.Qt.UserRole, sess.id)
-        self.history_list.addItem(it)
+        # Update existing session if it was created at stop; otherwise create
+        if getattr(self, "current_session_id", None) is not None:
+            sess = db.update_session_scores(
+                self.db,
+                self.current_session_id,
+                hyp,
+                err,
+                clar,
+                score,
+            )
+        else:
+            sess = db.add_session(
+                self.db,
+                self.current_script_name,
+                self.current_script_text,
+                self.current_audio_path,
+                hyp,
+                err,
+                clar,
+                score,
+            )
+            self.current_session_id = sess.id
+            label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+            it = QListWidgetItem(label)
+            it.setData(QtCore.Qt.UserRole, sess.id)
+            if self.history_list.count() == 1 and not isinstance(
+                self.history_list.item(0).data(QtCore.Qt.UserRole), int
+            ):
+                self.history_list.takeItem(0)
+            self.history_list.addItem(it)
 
     # ----------------------- axis helper ----------------------------------
 
@@ -527,17 +630,32 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.current_script_name = sess.script_name
         self.current_script_text = sess.script_text
         self.script_txt.setText(sess.script_text)
-        self.metrics_label.setText(
-            f"Score: {sess.score:.2f}/5 | WER: {sess.wer:.2%} | "
-            f"Clarity: {sess.clarity:.2%}"
+        # Handle sessions that may not yet have scores/transcript
+        no_scores = (sess.transcript is None) or (sess.transcript == "")
+        score_txt = (
+            f"{sess.score:.2f}" if (sess.score is not None and not no_scores) else "–"
         )
-        self.transcript_txt.setText(sess.transcript)
+        wer_txt = (
+            f"{sess.wer:.2%}" if (sess.wer is not None and not no_scores) else "–"
+        )
+        clar_txt = (
+            f"{sess.clarity:.2%}" if (sess.clarity is not None and not no_scores) else "–"
+        )
+        self.metrics_label.setText(
+            f"Score: {score_txt}/5 | WER: {wer_txt} | Clarity: {clar_txt}"
+        )
+        self.transcript_txt.setText(sess.transcript or "")
 
-        with wave.open(sess.audio_path, "rb") as wf:
-            frames = wf.readframes(wf.getnframes())
-            data = (
-                np.frombuffer(frames, np.int16).astype(np.float32) / 32767.0
-            )
+        # Load audio (WAV/FLAC/OGG/MP3...) and convert to mono float32 at app samplerate
+        data, file_sr = sf.read(sess.audio_path, dtype="float32")
+        if hasattr(data, "ndim") and data.ndim > 1:
+            data = data[:, 0]
+        if file_sr != self.sr and data.size > 0:
+            duration = data.size / float(file_sr)
+            new_len = int(round(duration * self.sr))
+            x_old = np.linspace(0.0, duration, num=data.size, endpoint=False)
+            x_new = np.linspace(0.0, duration, num=new_len, endpoint=False)
+            data = np.interp(x_new, x_old, data).astype(np.float32)
         self.audio_data = data
         self.current_audio_path = sess.audio_path
 

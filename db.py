@@ -17,10 +17,11 @@ class PracticeSession(Base):
     script_name = Column(String,  nullable=False)
     script_text = Column(String,  nullable=False)
     audio_path  = Column(String,  nullable=False)
-    transcript  = Column(String,  nullable=False)
-    wer         = Column(Float,   nullable=False)
-    clarity     = Column(Float,   nullable=False)
-    score       = Column(Float, nullable=False)
+    # Allow empty values until scoring is run
+    transcript  = Column(String,  nullable=True)
+    wer         = Column(Float,   nullable=True)
+    clarity     = Column(Float,   nullable=True)
+    score       = Column(Float,   nullable=True)
 
 
 def get_engine(db_path: str = "sessions.db"):
@@ -53,10 +54,10 @@ def add_session(
     script_name: str,
     script_text: str,
     audio_path: str,
-    transcript: str,
-    wer: float,
-    clarity: float,
-    score: float,
+    transcript: str | None = None,
+    wer: float | None = None,
+    clarity: float | None = None,
+    score: float | None = None,
 ):
     ts = datetime.now().isoformat(timespec="seconds")
     sess = PracticeSession(
@@ -70,6 +71,26 @@ def add_session(
         score=score,
     )
     db.add(sess)
+    db.commit()
+    db.refresh(sess)
+    return sess
+
+
+def update_session_scores(
+    db,
+    sess_id: int,
+    transcript: str,
+    wer: float,
+    clarity: float,
+    score: float,
+):
+    sess = db.query(PracticeSession).get(sess_id)
+    if not sess:
+        return None
+    sess.transcript = transcript
+    sess.wer = wer
+    sess.clarity = clarity
+    sess.score = score
     db.commit()
     db.refresh(sess)
     return sess

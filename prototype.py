@@ -1,7 +1,7 @@
 import sys
 import os
-import wave
 from datetime import datetime
+import soundfile as sf
 
 import numpy as np
 import sounddevice as sd
@@ -236,12 +236,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         )
         self.transcript_txt.setText(sess.transcript)
 
-        # ── 3. read the WAV file and plot it (x-axis = seconds) ────────────
-        with wave.open(sess.audio_path, "rb") as wf:
-            frames = wf.readframes(wf.getnframes())
-            data = (
-                    np.frombuffer(frames, np.int16).astype(np.float32) / 32767.0
-            )
+        # ── 3. read the audio file and plot it (x-axis = seconds) ──────────
+        data, file_sr = sf.read(sess.audio_path, dtype="float32")
+        if hasattr(data, "ndim") and data.ndim > 1:
+            data = data[:, 0]
+        if file_sr != self.sr and data.size > 0:
+            dur = data.size / float(file_sr)
+            new_len = int(round(dur * self.sr))
+            x_old = np.linspace(0.0, dur, num=data.size, endpoint=False)
+            x_new = np.linspace(0.0, dur, num=new_len, endpoint=False)
+            data = np.interp(x_new, x_old, data).astype(np.float32)
 
         self.audio_data = data
         self.current_audio_path = sess.audio_path
@@ -321,27 +325,23 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.audio_data = trimmed
 
-        # ── 3. write the WAV file to recordings/ ─────────────────────────────────
+        # ── 3. write the FLAC file to recordings/ ──────────────────────────
         os.makedirs("recordings", exist_ok=True)
-        fname = datetime.now().strftime("%Y%m%d_%H%M%S") + ".wav"
+        fname = datetime.now().strftime("%Y%m%d_%H%M%S") + ".flac"
         path = os.path.join("recordings", fname)
-        with wave.open(path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(self.sr)
-            wf.writeframes((trimmed * 32767).astype(np.int16))
+        sf.write(path, trimmed.astype(np.float32), self.sr, format="FLAC", subtype="PCM_16")
         self.current_audio_path = path
 
-        # ── 4. update waveform plot (x-axis in seconds) ──────────────────────────
+        # ── 4. update waveform plot (x-axis in seconds) ────────────────────
         x = np.arange(trimmed.size) / self.sr
         self.wave_line.setData(x, trimmed)
         self.playhead.setPos(0)
 
-        # ── 5. create a brand-new AudioPlayer and load the clip ─────────────────
+        # ── 5. create a brand-new AudioPlayer and load the clip ────────────
         self.player = AudioPlayer(self.sr)
         self.player.set_data(trimmed)
 
-        # ── 6. re-enable the play / score buttons ───────────────────────────────
+        # ── 6. re-enable the play / score buttons ──────────────────────────
         self.btn_play.setEnabled(True)
         self.btn_score.setEnabled(True)
 

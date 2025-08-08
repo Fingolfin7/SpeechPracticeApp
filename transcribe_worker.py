@@ -1,4 +1,3 @@
-# ───── insert somewhere near the top of speech_practice.py ─────────────
 from PyQt5 import QtCore
 from jiwer import wer
 import math
@@ -24,16 +23,16 @@ class TranscribeWorker(QtCore.QThread):
     completed = QtCore.pyqtSignal(str, float, float, float)
 
     def __init__(
-        self, model, ref_text: str, wav_path: str, parent=None
+        self, model, ref_text: str, audio_path: str, parent=None
     ):
         super().__init__(parent)
         self._model = model
         self._ref = ref_text
-        self._wav = wav_path
+        self._audio_path = audio_path
 
     def run(self) -> None:
         hyp = (
-            self._model.transcribe(self._wav, fp16=False)["text"]
+            self._model.transcribe(self._audio_path, fp16=False)["text"]
             .strip()
             .lower()
         )

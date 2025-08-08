@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime
+import subprocess
 import soundfile as sf
 
 import numpy as np
@@ -29,7 +30,7 @@ from PyQt5.QtWidgets import (
 import db
 from audio_player import AudioPlayer
 from script_loader import pick_next_script
-from transcribe_worker import TranscribeWorker
+from transcribe_worker import TranscribeWorker, FreeTranscribeWorker
 
 # ───────────────────────────── theming ───────────────────────────────────
 
@@ -117,7 +118,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.player = AudioPlayer(self.sr)
 
+        # modes/state
+        self.free_speak_mode: bool = False
+        self.last_transcript_text: str = ""
+
         self._build_ui()
+        # housekeeping: remove any recording files not referenced by the DB
+        try:
+            self._cleanup_orphan_recordings()
+        except Exception:
+            pass
         self._load_history()
         self.load_next_script()
 
@@ -128,8 +138,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         act_next = mb.addAction("Next Script")
         act_next.triggered.connect(self.load_next_script)
-        # simple View menu for toggles
-        view_menu = mb.addMenu("View")
+        # Free Speak mode toggle directly on the menubar
+        self.act_free_mode = QAction("Free Speak Mode", self, checkable=True)
+        self.act_free_mode.setStatusTip("Transcribe without scoring or auto-saving")
+        self.act_free_mode.toggled.connect(self._on_toggle_free_mode)
+        mb.addAction(self.act_free_mode)
 
         splitter = QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -215,6 +228,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_play.setIcon(self.ic_play)
         self.btn_score = QPushButton("Score")
         self.btn_score.setObjectName("PrimaryButton")
+        # Save button (for Free Speak optional saving)
+        self.btn_save = QPushButton("Save")
+        self.btn_save.setObjectName("PrimaryButton")
         # volume slider
         self.vol_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         # 0..120 maps to ~0%..200% with perceptual curve
@@ -238,9 +254,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_record.clicked.connect(self._toggle_record)
         self.btn_play.clicked.connect(self._toggle_play_pause)
         self.btn_score.clicked.connect(self._transcribe_and_score)
+        self.btn_save.clicked.connect(self._save_free_speak_session)
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
 
-        for b in (self.btn_record, self.btn_play, self.btn_score):
+        for b in (self.btn_record, self.btn_play, self.btn_score, self.btn_save):
             b.setEnabled(False)
             tlay.addWidget(b)
         tlay.addWidget(self.vol_slider)
@@ -376,10 +393,69 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         if not item or not isinstance(item.data(QtCore.Qt.UserRole), int):
             return
         menu = QMenu()
-        act = QAction("Delete Session", self)
-        act.triggered.connect(lambda: self._delete_session(item))
-        menu.addAction(act)
+        sid = item.data(QtCore.Qt.UserRole)
+        act_open = QAction("Open In Explorer", self)
+        act_open.triggered.connect(lambda: self._open_in_explorer(sid))
+        menu.addAction(act_open)
+        act_del = QAction("Delete Session", self)
+        act_del.triggered.connect(lambda: self._delete_session(item))
+        menu.addAction(act_del)
         menu.exec_(self.history_list.mapToGlobal(pt))
+
+    def _open_in_explorer(self, sess_id: int) -> None:
+        try:
+            sess = db.get_session_by_id(self.db, sess_id)
+            if not sess:
+                return
+            path = os.path.abspath(sess.audio_path)
+            if not os.path.exists(path):
+                self.metrics_label.setText(f"File not found: {path}")
+                return
+            if sys.platform.startswith("win"):
+                # Use Explorer to select the file
+                subprocess.run(["explorer", "/select,", path.replace("/", "\\")])
+            elif sys.platform == "darwin":
+                subprocess.run(["open", "-R", path])
+            else:
+                subprocess.run(["xdg-open", os.path.dirname(path)])
+        except Exception as e:
+            self.metrics_label.setText(f"Could not open in Explorer: {e}")
+
+    # --------------------------- housekeeping ------------------------------
+    def _cleanup_orphan_recordings(self) -> None:
+        rec_dir = "recordings"
+        if not os.path.isdir(rec_dir):
+            return
+        # Collect referenced absolute paths from DB
+        try:
+            sessions = db.get_all_sessions(self.db)
+        except Exception:
+            sessions = []
+        referenced: set[str] = set()
+        for sess in sessions or []:
+            try:
+                if getattr(sess, "audio_path", None):
+                    referenced.add(os.path.abspath(sess.audio_path))
+            except Exception:
+                continue
+        # Delete files in recordings/ not in referenced
+        deleted = 0
+        for fname in os.listdir(rec_dir):
+            fpath = os.path.abspath(os.path.join(rec_dir, fname))
+            # Only consider typical audio files
+            if not fname.lower().endswith((".flac", ".wav", ".mp3", ".ogg", ".m4a", ".aac", ".wma")):
+                continue
+            if fpath not in referenced:
+                try:
+                    os.remove(fpath)
+                    deleted += 1
+                except Exception:
+                    pass
+        if deleted:
+            try:
+                print(f"Cleaned {deleted} orphan recording(s) from '{rec_dir}'.")
+            except Exception:
+                pass
 
     # --------------------------- data ------------------------------------
 
@@ -428,6 +504,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_record.setEnabled(True)
         self.btn_play.setEnabled(False)
         self.btn_score.setEnabled(False)
+        self.btn_save.setEnabled(False)
+        self.btn_save.setVisible(self.free_speak_mode)
 
     # --------------------------- recording --------------------------------
 
@@ -485,35 +563,39 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 trimmed = raw
         self.audio_data = trimmed
 
-        os.makedirs("recordings", exist_ok=True)
-        base = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Prefer FLAC to save disk; fallback to WAV for broader codec support
-        flac_path = os.path.join("recordings", base + ".flac")
-        wav_path = os.path.join("recordings", base + ".wav")
-        wrote = False
-        try:
-            sf.write(
-                flac_path,
-                trimmed.astype(np.float32),
-                self.sr,
-                format="FLAC",
-                subtype="PCM_16",
-            )
-            self.current_audio_path = flac_path
-            wrote = True
-        except Exception:
+        # In Free Speak mode, do not write to disk unless the user chooses Save later
+        if not self.free_speak_mode:
+            os.makedirs("recordings", exist_ok=True)
+            base = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Prefer FLAC to save disk; fallback to WAV for broader codec support
+            flac_path = os.path.join("recordings", base + ".flac")
+            wav_path = os.path.join("recordings", base + ".wav")
+            wrote = False
             try:
                 sf.write(
-                    wav_path,
+                    flac_path,
                     trimmed.astype(np.float32),
                     self.sr,
-                    format="WAV",
+                    format="FLAC",
                     subtype="PCM_16",
                 )
-                self.current_audio_path = wav_path
+                self.current_audio_path = flac_path
                 wrote = True
             except Exception:
-                self.current_audio_path = None
+                try:
+                    sf.write(
+                        wav_path,
+                        trimmed.astype(np.float32),
+                        self.sr,
+                        format="WAV",
+                        subtype="PCM_16",
+                    )
+                    self.current_audio_path = wav_path
+                    wrote = True
+                except Exception:
+                    self.current_audio_path = None
+        else:
+            self.current_audio_path = None
 
         self.player = AudioPlayer(self.sr)
         self.player.set_data(trimmed)
@@ -526,68 +608,78 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.btn_play.setEnabled(True)
         self.btn_score.setEnabled(True)
+        if self.free_speak_mode:
+            # In Free Speak, do not auto-save; auto-transcribe instead
+            self.btn_score.setText("Transcribe")
+            self.btn_save.setVisible(True)
+            self.btn_save.setEnabled(False)
+            self.metrics_label.setText("Free Speak: ready to transcribe")
+            # Auto-start transcription for convenience
+            QtCore.QTimer.singleShot(100, self._transcribe_free)
+            return
 
-        # Create a DB entry immediately after stopping, with empty scores
-        try:
-            sess = db.add_session(
-                self.db,
-                self.current_script_name,
-                self.current_script_text,
-                self.current_audio_path or "",
-                transcript=None,
-                wer=None,
-                clarity=None,
-                score=None,
-            )
-            self.current_session_id = sess.id
-            label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
-            it = QListWidgetItem(label)
-            it.setData(QtCore.Qt.UserRole, sess.id)
-            # remove placeholder if present
-            if self.history_list.count() == 1 and not isinstance(
-                self.history_list.item(0).data(QtCore.Qt.UserRole), int
-            ):
-                self.history_list.takeItem(0)
-            self.history_list.addItem(it)
-            self.metrics_label.setText("Saved session; scores pending. Run Score when ready.")
-        except Exception as e:
-            # Fallback for legacy DBs with NOT NULL constraints: store placeholders
+        if not self.free_speak_mode:
+            # Create a DB entry immediately after stopping, with empty scores
             try:
-                # reset the transaction after the failed flush/commit
-                try:
-                    self.db.rollback()
-                except Exception:
-                    pass
                 sess = db.add_session(
                     self.db,
                     self.current_script_name,
                     self.current_script_text,
-                    self.current_audio_path,
-                    transcript="",
-                    wer=0.0,
-                    clarity=0.0,
-                    score=0.0,
+                    self.current_audio_path or "",
+                    transcript=None,
+                    wer=None,
+                    clarity=None,
+                    score=None,
                 )
                 self.current_session_id = sess.id
                 label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
+                # remove placeholder if present
                 if self.history_list.count() == 1 and not isinstance(
                     self.history_list.item(0).data(QtCore.Qt.UserRole), int
                 ):
                     self.history_list.takeItem(0)
                 self.history_list.addItem(it)
-                self.metrics_label.setText("Saved session (legacy DB); scores pending.")
-            except Exception as e2:
-                # Surface the specific error for troubleshooting
-                self.metrics_label.setText(
-                    f"Could not save session. DB error: {e2}"
-                )
+                self.metrics_label.setText("Saved session; scores pending. Run Score when ready.")
+            except Exception as e:
+                # Fallback for legacy DBs with NOT NULL constraints: store placeholders
                 try:
-                    print("DB save error (first):", repr(e))
-                    print("DB save error (fallback):", repr(e2))
-                except Exception:
-                    pass
+                    # reset the transaction after the failed flush/commit
+                    try:
+                        self.db.rollback()
+                    except Exception:
+                        pass
+                    sess = db.add_session(
+                        self.db,
+                        self.current_script_name,
+                        self.current_script_text,
+                        self.current_audio_path,
+                        transcript="",
+                        wer=0.0,
+                        clarity=0.0,
+                        score=0.0,
+                    )
+                    self.current_session_id = sess.id
+                    label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+                    it = QListWidgetItem(label)
+                    it.setData(QtCore.Qt.UserRole, sess.id)
+                    if self.history_list.count() == 1 and not isinstance(
+                        self.history_list.item(0).data(QtCore.Qt.UserRole), int
+                    ):
+                        self.history_list.takeItem(0)
+                    self.history_list.addItem(it)
+                    self.metrics_label.setText("Saved session (legacy DB); scores pending.")
+                except Exception as e2:
+                    # Surface the specific error for troubleshooting
+                    self.metrics_label.setText(
+                        f"Could not save session. DB error: {e2}"
+                    )
+                    try:
+                        print("DB save error (first):", repr(e))
+                        print("DB save error (fallback):", repr(e2))
+                    except Exception:
+                        pass
 
     def _trim_silence(self, data, thresh=0.02):
         mask = np.abs(data) > thresh
@@ -666,6 +758,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _transcribe_and_score(self) -> None:
         if self.current_audio_path is None:
             return
+        if self.free_speak_mode:
+            self._transcribe_free()
+            return
         self.btn_score.setEnabled(False)
         self.metrics_label.setText("Scoring… please wait")
         self.worker = TranscribeWorker(
@@ -676,6 +771,21 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         )
         self.worker.completed.connect(self._on_transcription_done)
         self.worker.start()
+
+    def _transcribe_free(self) -> None:
+        if self.current_audio_path is None:
+            return
+        self.btn_score.setEnabled(False)
+        self.metrics_label.setText("Transcribing… (Free Speak)")
+        # Pass in-memory audio to avoid creating files
+        audio_input = self.audio_data if self.audio_data is not None else self.current_audio_path
+        self.free_worker = FreeTranscribeWorker(
+            self.model,
+            audio_input,
+            self,
+        )
+        self.free_worker.completed.connect(self._on_free_transcription_done)
+        self.free_worker.start()
 
     @QtCore.pyqtSlot(str, float, float, float)
     def _on_transcription_done(
@@ -717,6 +827,89 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             ):
                 self.history_list.takeItem(0)
             self.history_list.addItem(it)
+
+    @QtCore.pyqtSlot(str)
+    def _on_free_transcription_done(self, hyp: str) -> None:
+        self.last_transcript_text = hyp
+        self.transcript_txt.setText(hyp)
+        self.metrics_label.setText("Transcript ready (Free Speak)")
+        self.btn_score.setEnabled(True)
+        self.btn_save.setEnabled(True)
+
+    def _save_free_speak_session(self) -> None:
+        if not self.free_speak_mode:
+            return
+        transcript = self.transcript_txt.toPlainText().strip()
+        # Ensure we have a file path to save; if none, write it now
+        if self.current_audio_path is None:
+            base = datetime.now().strftime("%Y%m%d_%H%M%S")
+            os.makedirs("recordings", exist_ok=True)
+            try:
+                flac_path = os.path.join("recordings", base + ".flac")
+                sf.write(
+                    flac_path,
+                    (self.audio_data or np.zeros(0, dtype=np.float32)).astype(np.float32),
+                    self.sr,
+                    format="FLAC",
+                    subtype="PCM_16",
+                )
+                self.current_audio_path = flac_path
+            except Exception:
+                # Fallback to WAV
+                try:
+                    wav_path = os.path.join("recordings", base + ".wav")
+                    sf.write(
+                        wav_path,
+                        (self.audio_data or np.zeros(0, dtype=np.float32)).astype(np.float32),
+                        self.sr,
+                        format="WAV",
+                        subtype="PCM_16",
+                    )
+                    self.current_audio_path = wav_path
+                except Exception as e:
+                    self.metrics_label.setText(f"Could not save recording file: {e}")
+                    return
+        try:
+            sess = db.add_session(
+                self.db,
+                "Free Speak",
+                "",
+                self.current_audio_path,
+                transcript=transcript if transcript else None,
+                wer=None,
+                clarity=None,
+                score=None,
+            )
+            self.current_session_id = sess.id
+            label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+            it = QListWidgetItem(label)
+            it.setData(QtCore.Qt.UserRole, sess.id)
+            if self.history_list.count() == 1 and not isinstance(
+                self.history_list.item(0).data(QtCore.Qt.UserRole), int
+            ):
+                self.history_list.takeItem(0)
+            self.history_list.addItem(it)
+            self.metrics_label.setText("Saved Free Speak session")
+            # keep in Free Speak mode, allow further recordings
+        except Exception as e:
+            self.metrics_label.setText(f"Could not save Free Speak session: {e}")
+
+    def _on_toggle_free_mode(self, checked: bool) -> None:
+        self.free_speak_mode = bool(checked)
+        if self.free_speak_mode:
+            # Switch UI cues
+            self.btn_score.setText("Transcribe")
+            self.btn_save.setVisible(True)
+            self.btn_save.setEnabled(False)
+            self.metrics_label.setText("Free Speak: not scoring")
+            self.script_txt.setText("Free Speak Mode — Talk, then Transcribe.")
+            # clear any pending session id to avoid unintended updates
+            self.current_session_id = None
+        else:
+            self.btn_score.setText("Score")
+            self.btn_save.setVisible(False)
+            # return to normal script flow
+            self.load_next_script()
 
     # ----------------------- axis helper ----------------------------------
 

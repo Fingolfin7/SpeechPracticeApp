@@ -42,3 +42,25 @@ class TranscribeWorker(QtCore.QThread):
         score = _scale_score(clar)
 
         self.completed.emit(hyp, err, clar, score)
+
+
+class FreeTranscribeWorker(QtCore.QThread):
+    """
+    Runs Whisper in a background thread and emits only the transcript text.
+    Emits:
+      completed(hyp: str)
+    """
+
+    completed = QtCore.pyqtSignal(str)
+
+    def __init__(self, model, audio_path: str, parent=None):
+        super().__init__(parent)
+        self._model = model
+        self._audio_path = audio_path
+
+    def run(self) -> None:
+        hyp = (
+            self._model.transcribe(self._audio_path, fp16=False)["text"]
+            .strip()
+        )
+        self.completed.emit(hyp)

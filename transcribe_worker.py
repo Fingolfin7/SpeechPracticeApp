@@ -23,9 +23,12 @@ class TranscribeWorker(QtCore.QThread):
     Runs Whisper in a background thread so the GUI stays responsive.
     Emits:
       completed(hyp: str, err: float, clar: float, score: float)
+      completed_with_segments(hyp: str, err: float, clar: float, score: float, segments: object)
     """
 
     completed = QtCore.pyqtSignal(str, float, float, float)
+    # segments is a Python list of dicts from Whisper; use object to pass through
+    completed_with_segments = QtCore.pyqtSignal(str, float, float, float, object)
 
     def __init__(
         self,
@@ -49,6 +52,13 @@ class TranscribeWorker(QtCore.QThread):
 
         score = _scale_score(clar)
 
+        # If timestamps were requested, Whisper returns segments with start/end
+        segments = result.get("segments") if isinstance(result, dict) else None
+        if segments is not None:
+            try:
+                self.completed_with_segments.emit(hyp, err, clar, score, segments)
+            except Exception:
+                pass
         self.completed.emit(hyp, err, clar, score)
 
 
@@ -57,9 +67,11 @@ class FreeTranscribeWorker(QtCore.QThread):
     Runs Whisper in a background thread and emits only the transcript text.
     Emits:
       completed(hyp: str)
+      completed_with_segments(hyp: str, segments: object)
     """
 
     completed = QtCore.pyqtSignal(str)
+    completed_with_segments = QtCore.pyqtSignal(str, object)
 
     def __init__(self, model, audio_source: Union[str, np.ndarray], parent=None, options: Optional[Dict] = None):
         super().__init__(parent)
@@ -71,4 +83,10 @@ class FreeTranscribeWorker(QtCore.QThread):
     def run(self) -> None:
         result = self._model.transcribe(self._audio_source, **self._options)
         hyp = str(result["text"]).strip()
+        segments = result.get("segments") if isinstance(result, dict) else None
+        if segments is not None:
+            try:
+                self.completed_with_segments.emit(hyp, segments)
+            except Exception:
+                pass
         self.completed.emit(hyp)

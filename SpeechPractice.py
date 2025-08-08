@@ -38,6 +38,7 @@ import db
 from audio_player import AudioPlayer
 from script_loader import pick_next_script
 from transcribe_worker import TranscribeWorker, FreeTranscribeWorker
+import json
 
 # ───────────────────────────── theming ───────────────────────────────────
 
@@ -131,6 +132,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # modes/state
         self.free_speak_mode: bool = False
         self.last_transcript_text: str = ""
+        # transcript timestamp sync state
+        self.transcript_segments: list[dict] | None = None
+        self.transcript_segment_ranges: list[tuple[int, int, float, float]] = []  # (start_char, end_char, t0, t1)
+        self.transcript_active_index: int = -1
+        self._received_segments_this_run: bool = False
 
         self._build_ui()
         # housekeeping: remove any recording files not referenced by the DB
@@ -530,6 +536,13 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.metrics_label.setText("Score: –, WER: –, Clarity: –")
         self.transcript_txt.clear()
+        try:
+            self.transcript_txt.setExtraSelections([])
+        except Exception:
+            pass
+        self.transcript_segments = None
+        self.transcript_segment_ranges = []
+        self.transcript_active_index = -1
         self.audio_data = None
         self.current_audio_path = None
 
@@ -713,13 +726,71 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     except Exception:
                         pass
 
-    def _trim_silence(self, data, thresh=0.02):
-        mask = np.abs(data) > thresh
-        if not mask.any():
-            return data
-        i1 = np.argmax(mask)
-        i2 = len(mask) - np.argmax(mask[::-1])
-        return data[i1:i2]
+    def _trim_silence(
+        self,
+        data: np.ndarray,
+        threshold_db: float = -50.0,
+        window_ms: float = 20.0,
+        hop_ms: float = 10.0,
+        pre_pad_ms: float = 120.0,
+        post_pad_ms: float = 280.0,
+    ) -> np.ndarray:
+        """
+        Trim leading/trailing silence using smoothed RMS in dB with generous padding
+        to avoid cutting mid-word.
+
+        - RMS computed over window_ms with hop_ms steps, then box-smoothed
+        - threshold in dBFS; frames above threshold are considered active
+        - Adds pre/post padding around the detected active region
+        """
+        y = data.astype(np.float32, copy=False)
+        n = y.size
+        if n == 0:
+            return y
+
+        # Frameing parameters
+        frame_len = max(1, int(self.sr * (window_ms / 1000.0)))
+        hop = max(1, int(self.sr * (hop_ms / 1000.0)))
+        if frame_len <= 2:
+            frame_len = 3
+
+        # Compute frame RMS
+        # Pad to fit complete frames
+        pad = (-(n - frame_len) % hop) if n >= frame_len else (frame_len - n)
+        y_pad = np.pad(y, (0, pad), mode="constant", constant_values=0.0)
+        num_frames = 1 + max(0, (y_pad.size - frame_len) // hop)
+        if num_frames <= 0:
+            return y
+        # Efficient RMS via stride trick
+        strided = np.lib.stride_tricks.as_strided(
+            y_pad,
+            shape=(num_frames, frame_len),
+            strides=(y_pad.strides[0] * hop, y_pad.strides[0]),
+            writeable=False,
+        )
+        rms = np.sqrt(np.maximum(1e-12, (strided * strided).mean(axis=1)))
+
+        # Smooth with a small box filter to avoid flicker mid-phoneme
+        smooth_win = max(1, int(20.0 / hop_ms))  # ~200 ms smoothing by default
+        kernel = np.ones(smooth_win, dtype=np.float32) / float(smooth_win)
+        rms_smooth = np.convolve(rms, kernel, mode="same")
+
+        # Convert to dBFS
+        rms_db = 20.0 * np.log10(np.maximum(rms_smooth, 1e-8))
+        active = rms_db > float(threshold_db)
+        if not np.any(active):
+            return y
+        first_f = int(np.argmax(active))
+        last_f = int(len(active) - np.argmax(active[::-1]) - 1)
+
+        # Map frame indices back to sample indices and add padding
+        pre = int(self.sr * (pre_pad_ms / 1000.0))
+        post = int(self.sr * (post_pad_ms / 1000.0))
+        i1 = max(0, first_f * hop - pre)
+        i2 = min(n, last_f * hop + frame_len + post)
+        if i2 <= i1:
+            return y
+        return y[i1:i2]
 
     def _update_waveform(self) -> None:
         if not self.audio_buffer:
@@ -796,7 +867,14 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             except Exception:
                 pass
             return
-        self.playhead.setPos(self.player.idx / self.sr)
+        cur_t = self.player.idx / self.sr
+        self.playhead.setPos(cur_t)
+        # update transcript highlighting if we have timestamped segments
+        try:
+            if self.transcript_segment_ranges:
+                self._highlight_transcript_at_time(cur_t)
+        except Exception:
+            pass
 
     # --------------------------- scoring ----------------------------------
 
@@ -816,6 +894,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self,
             options=self._whisper_options(),
         )
+        self._received_segments_this_run = False
+        try:
+            self.worker.completed_with_segments.connect(self._on_transcription_done_with_segments)
+        except Exception:
+            pass
         self.worker.completed.connect(self._on_transcription_done)
         self.worker.start()
 
@@ -836,6 +919,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self,
             options=self._whisper_options(free_speak=True),
         )
+        self._received_segments_this_run = False
+        try:
+            self.free_worker.completed_with_segments.connect(self._on_free_transcription_done_with_segments)
+        except Exception:
+            pass
         self.free_worker.completed.connect(self._on_free_transcription_done)
         self.free_worker.start()
 
@@ -846,11 +934,20 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.metrics_label.setText(
             f"Score: {score:.2f}/5 | WER: {err:.2%} | Clarity: {clar:.2%}"
         )
-        self.transcript_txt.setText(hyp)
+        if not self._received_segments_this_run:
+            self.transcript_txt.setText(hyp)
+            self._clear_transcript_sync()
         self.btn_score.setEnabled(True)
 
         # Update existing session if it was created at stop; otherwise create
         if getattr(self, "current_session_id", None) is not None:
+            # Persist segments if we used them in this run
+            segments_json = None
+            if self.transcript_segments is not None and self.transcript_segment_ranges:
+                try:
+                    segments_json = json.dumps(self.transcript_segments)
+                except Exception:
+                    segments_json = None
             sess = db.update_session_scores(
                 self.db,
                 self.current_session_id,
@@ -858,8 +955,15 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 err,
                 clar,
                 score,
+                segments_json=segments_json,
             )
         else:
+            segments_json = None
+            if self.transcript_segments is not None and self.transcript_segment_ranges:
+                try:
+                    segments_json = json.dumps(self.transcript_segments)
+                except Exception:
+                    segments_json = None
             sess = db.add_session(
                 self.db,
                 self.current_script_name,
@@ -869,6 +973,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 err,
                 clar,
                 score,
+                segments_json=segments_json,
             )
             self.current_session_id = sess.id
             label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
@@ -883,10 +988,135 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def _on_free_transcription_done(self, hyp: str) -> None:
         self.last_transcript_text = hyp
-        self.transcript_txt.setText(hyp)
+        if not self._received_segments_this_run:
+            self.transcript_txt.setText(hyp)
+            self._clear_transcript_sync()
         self.metrics_label.setText("Transcript ready (Free Speak)")
         self.btn_score.setEnabled(True)
         self.btn_save.setEnabled(True)
+
+    @QtCore.pyqtSlot(str, float, float, float, object)
+    def _on_transcription_done_with_segments(self, hyp: str, err: float, clar: float, score: float, segments: object) -> None:
+        try:
+            self._received_segments_this_run = True
+            txt = self._build_transcript_from_segments(segments)
+            self.transcript_txt.setPlainText(txt)
+            self.metrics_label.setText(
+                f"Score: {score:.2f}/5 | WER: {err:.2%} | Clarity: {clar:.2%}"
+            )
+            self.transcript_active_index = -1
+            self._highlight_transcript_at_time(0.0)
+            # Persist on-the-fly if we already have a session id
+            if getattr(self, "current_session_id", None) is not None:
+                try:
+                    segments_json = json.dumps(self.transcript_segments or [])
+                    db.update_session_scores(
+                        self.db,
+                        self.current_session_id,
+                        hyp,
+                        err,
+                        clar,
+                        score,
+                        segments_json=segments_json,
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            self.transcript_txt.setText(hyp)
+            self._clear_transcript_sync()
+        finally:
+            self.btn_score.setEnabled(True)
+
+    @QtCore.pyqtSlot(str, object)
+    def _on_free_transcription_done_with_segments(self, hyp: str, segments: object) -> None:
+        try:
+            self._received_segments_this_run = True
+            self.last_transcript_text = hyp
+            txt = self._build_transcript_from_segments(segments)
+            self.transcript_txt.setPlainText(txt)
+            self.metrics_label.setText("Transcript ready (Free Speak)")
+            self.transcript_active_index = -1
+            self._highlight_transcript_at_time(0.0)
+            # In free speak, we don't have a session yet; persistence happens on Save
+        except Exception:
+            self.transcript_txt.setText(hyp)
+            self._clear_transcript_sync()
+        finally:
+            self.btn_score.setEnabled(True)
+            self.btn_save.setEnabled(True)
+
+    # --------------------- transcript sync helpers -------------------------
+    def _clear_transcript_sync(self) -> None:
+        self.transcript_segments = None
+        self.transcript_segment_ranges = []
+        self.transcript_active_index = -1
+        try:
+            self.transcript_txt.setExtraSelections([])
+        except Exception:
+            pass
+
+    def _build_transcript_from_segments(self, segments_obj: object) -> str:
+        self.transcript_segments = []
+        self.transcript_segment_ranges = []
+        self.transcript_active_index = -1
+        text_parts: list[str] = []
+        cursor_index = 0
+        for seg in list(segments_obj):
+            if not isinstance(seg, dict):
+                continue
+            seg_text = str(seg.get("text", ""))
+            if seg_text == "":
+                continue
+            start_char = cursor_index
+            text_parts.append(seg_text)
+            cursor_index += len(seg_text)
+            end_char = cursor_index
+            try:
+                t0 = float(seg.get("start", 0.0))
+                t1 = float(seg.get("end", t0))
+            except Exception:
+                t0, t1 = 0.0, 0.0
+            self.transcript_segments.append(seg)
+            self.transcript_segment_ranges.append((start_char, end_char, t0, t1))
+        return "".join(text_parts)
+
+    def _highlight_transcript_at_time(self, t_seconds: float) -> None:
+        if not self.transcript_segment_ranges:
+            return
+        idx = self.transcript_active_index
+        if 0 <= idx < len(self.transcript_segment_ranges):
+            s_char, e_char, t0, t1 = self.transcript_segment_ranges[idx]
+            if t0 - 0.05 <= t_seconds <= t1 + 0.05:
+                pass
+            else:
+                idx = -1
+        if idx == -1:
+            for i, (_s, _e, t0, t1) in enumerate(self.transcript_segment_ranges):
+                if t0 - 0.05 <= t_seconds <= t1 + 0.05:
+                    idx = i
+                    break
+        if idx == -1 or idx == self.transcript_active_index:
+            return
+        self.transcript_active_index = idx
+        s_char, e_char, _t0, _t1 = self.transcript_segment_ranges[idx]
+        cursor = self.transcript_txt.textCursor()
+        cursor.setPosition(max(0, int(s_char)))
+        cursor.setPosition(max(0, int(e_char)), QtGui.QTextCursor.KeepAnchor)
+        sel = QtWidgets.QTextEdit.ExtraSelection()
+        sel.cursor = cursor
+        fmt = QtGui.QTextCharFormat()
+        fmt.setBackground(QColor("#3355ff55"))
+        fmt.setProperty(QtGui.QTextFormat.FullWidthSelection, False)
+        sel.format = fmt
+        try:
+            self.transcript_txt.setExtraSelections([sel])
+            prev = self.transcript_txt.hasFocus()
+            self.transcript_txt.setTextCursor(cursor)
+            self.transcript_txt.ensureCursorVisible()
+            if not prev:
+                self.transcript_txt.clearFocus()
+        except Exception:
+            pass
 
     def _save_free_speak_session(self) -> None:
         if not self.free_speak_mode:
@@ -922,6 +1152,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     self.metrics_label.setText(f"Could not save recording file: {e}")
                     return
         try:
+            segments_json = None
+            if self.transcript_segments is not None and self.transcript_segment_ranges:
+                try:
+                    segments_json = json.dumps(self.transcript_segments)
+                except Exception:
+                    segments_json = None
             sess = db.add_session(
                 self.db,
                 "Free Speak",
@@ -931,6 +1167,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 wer=None,
                 clarity=None,
                 score=None,
+                segments_json=segments_json,
             )
             self.current_session_id = sess.id
             label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
@@ -1052,6 +1289,28 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             f"Score: {score_txt}/5 | WER: {wer_txt} | Clarity: {clar_txt}"
         )
         self.transcript_txt.setText(sess.transcript or "")
+        try:
+            self.transcript_txt.setExtraSelections([])
+        except Exception:
+            pass
+        # Restore segments if present in DB to enable synced highlighting
+        try:
+            if getattr(sess, "segments", None):
+                segs = json.loads(sess.segments)
+                # Build mapping and text from segments; prefer DB transcript text if present
+                self.transcript_segments = list(segs) if isinstance(segs, list) else []
+                # Rebuild ranges from segments and currently set text to ensure indices match
+                self._build_transcript_from_segments(self.transcript_segments)
+                if sess.transcript:
+                    # Keep stored transcript text if it matches concatenated segments length
+                    self.transcript_txt.setPlainText(sess.transcript)
+                    # Recalculate ranges to match this text length if needed
+                    # Note: assumes segment texts concatenated equal stored transcript
+                    self._build_transcript_from_segments(self.transcript_segments)
+        except Exception:
+            self.transcript_segments = None
+            self.transcript_segment_ranges = []
+        self.transcript_active_index = -1
 
         # Load audio (WAV/FLAC/OGG/MP3...) and convert to mono float32 at app samplerate
         data, file_sr = sf.read(sess.audio_path, dtype="float32")

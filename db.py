@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float
+    create_engine, Column, Integer, String, Float, Text
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -22,6 +22,8 @@ class PracticeSession(Base):
     wer         = Column(Float,   nullable=True)
     clarity     = Column(Float,   nullable=True)
     score       = Column(Float,   nullable=True)
+    # JSON string of Whisper segments (optional)
+    segments    = Column(Text,    nullable=True)
 
 
 def get_engine(db_path: str = "sessions.db"):
@@ -33,6 +35,17 @@ def init_db(engine=None):
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
+    # Lightweight migration: add 'segments' column if missing (SQLite)
+    try:
+        # Use a transaction and driver SQL for compatibility with SQLAlchemy 1.4/2.0
+        with engine.begin() as conn:
+            cols = conn.exec_driver_sql("PRAGMA table_info(sessions)").fetchall()
+            names = {row[1] for row in cols}  # row[1] is the column name
+            if "segments" not in names:
+                conn.exec_driver_sql("ALTER TABLE sessions ADD COLUMN segments TEXT")
+    except Exception:
+        # best-effort; ignore if migration not applicable
+        pass
 
 
 def get_session(db_path: str = "sessions.db"):
@@ -58,6 +71,7 @@ def add_session(
     wer: float | None = None,
     clarity: float | None = None,
     score: float | None = None,
+    segments_json: str | None = None,
 ):
     ts = datetime.now().isoformat(timespec="seconds")
     sess = PracticeSession(
@@ -69,6 +83,7 @@ def add_session(
         wer=wer,
         clarity=clarity,
         score=score,
+        segments=segments_json,
     )
     db.add(sess)
     db.commit()
@@ -83,6 +98,7 @@ def update_session_scores(
     wer: float,
     clarity: float,
     score: float,
+    segments_json: str | None = None,
 ):
     sess = db.query(PracticeSession).get(sess_id)
     if not sess:
@@ -91,6 +107,8 @@ def update_session_scores(
     sess.wer = wer
     sess.clarity = clarity
     sess.score = score
+    if segments_json is not None:
+        sess.segments = segments_json
     db.commit()
     db.refresh(sess)
     return sess

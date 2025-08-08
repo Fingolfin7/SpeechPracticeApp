@@ -128,6 +128,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         act_next = mb.addAction("Next Script")
         act_next.triggered.connect(self.load_next_script)
+        # simple View menu for toggles
+        view_menu = mb.addMenu("View")
 
         splitter = QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -213,6 +215,13 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_play.setIcon(self.ic_play)
         self.btn_score = QPushButton("Score")
         self.btn_score.setObjectName("PrimaryButton")
+        # volume slider
+        self.vol_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        # 0..120 maps to ~0%..200% with perceptual curve
+        self.vol_slider.setRange(0, 120)
+        self.vol_slider.setValue(90)
+        self.vol_slider.setFixedWidth(120)
+        self.vol_slider.setToolTip("Volume")
 
         icon_sz = 28  # <— pick any size you like (px)
 
@@ -229,10 +238,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_record.clicked.connect(self._toggle_record)
         self.btn_play.clicked.connect(self._toggle_play_pause)
         self.btn_score.clicked.connect(self._transcribe_and_score)
+        self.vol_slider.valueChanged.connect(self._on_volume_changed)
 
         for b in (self.btn_record, self.btn_play, self.btn_score):
             b.setEnabled(False)
             tlay.addWidget(b)
+        tlay.addWidget(self.vol_slider)
 
         rl.addWidget(transport, alignment=QtCore.Qt.AlignHCenter)
 
@@ -334,6 +345,31 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         p.drawRoundedRect(x, y, s, s, 2, 2)
         p.end()
         return QtGui.QIcon(pix)
+
+    # -------------------------- input hooks ------------------------------
+    def keyPressEvent(self, ev: QtGui.QKeyEvent) -> None:
+        # Spacebar toggles play/pause when not typing in a text box
+        if ev.key() == QtCore.Qt.Key_Space and not (self.script_txt.hasFocus() or self.transcript_txt.hasFocus()):
+            self._toggle_play_pause()
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
+
+    def _on_volume_changed(self, value: int) -> None:
+        # Perceptual mapping: slider 0..120 -> gain 0.0..2.0
+        # Below 100: approximate -inf..0 dB; Above 100: up to +6 dB with soft limiting
+        v = max(0, min(int(value), 120))
+        if v == 0:
+            gain = 0.0
+        elif v <= 100:
+            # Map to -48..0 dB, then to linear
+            db = (v - 100) * 0.48  # -48 dB at v=0, 0 dB at v=100
+            gain = 10 ** (db / 20.0)
+        else:
+            # 100..120 -> 0..+6 dB (1.0..~2.0)
+            db = (v - 100) * 0.3  # +6 dB at 120
+            gain = 10 ** (db / 20.0)
+        self.player.set_volume(gain)
 
     def _history_context_menu(self, pt) -> None:
         item = self.history_list.itemAt(pt)
@@ -616,6 +652,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         if not self.player.active:
             self.play_timer.stop()
             self.btn_play.setIcon(self.ic_play)
+            # auto-rewind to start visually when finished
+            try:
+                if self.audio_data is not None and self.player.idx >= self.audio_data.size:
+                    self.playhead.setPos(0)
+            except Exception:
+                pass
             return
         self.playhead.setPos(self.player.idx / self.sr)
 

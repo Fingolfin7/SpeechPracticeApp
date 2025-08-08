@@ -13,6 +13,7 @@ class AudioPlayer:
         self.sr = samplerate
         self.data = np.zeros((0,), dtype=np.float32)
         self.idx = 0
+        self.gain = 1.0  # linear volume multiplier (0.0 – 1.0)
 
         # Larger blocksize + high latency for robustness
         self.stream = sd.OutputStream(
@@ -32,7 +33,13 @@ class AudioPlayer:
         end = self.idx + frames
         chunk = self.data[self.idx : end]
         n = chunk.shape[0]
-        outdata[:n, 0] = chunk
+        if self.gain <= 1.0:
+            out = chunk * float(self.gain)
+        else:
+            # Gentle soft limiter when boosting above 1.0 to avoid hard clipping
+            boosted = chunk * float(self.gain)
+            out = np.tanh(boosted) * 0.95
+        outdata[:n, 0] = out
         if n < frames:
             outdata[n:frames, 0] = 0
             self.idx = self.data.size
@@ -102,3 +109,13 @@ class AudioPlayer:
             return bool(self.stream.active) and (self.idx < self.data.size)
         except Exception:
             return False
+
+    # ─────────────── volume ─────────────────
+    def set_volume(self, gain: float):
+        """Set playback volume. Accepts 0.0–2.0 (200%). Values >1 apply soft limiting."""
+        gain = 0.0 if gain is None else float(gain)
+        if gain < 0.0:
+            gain = 0.0
+        if gain > 2.0:
+            gain = 2.0
+        self.gain = gain

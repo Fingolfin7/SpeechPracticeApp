@@ -57,9 +57,16 @@ class AudioPlayer:
         if self.data.size == 0:
             return
         self.idx = max(0, min(int(start_index), self.data.size - 1))
-        if self.stream.active:
-            # abort old stream immediately
-            self.stream.abort()
+        # Always try to reset any previous state before starting
+        try:
+            if self.stream.active:
+                self.stream.abort()
+            else:
+                # Some backends behave better if we abort even when stopped
+                # after a CallbackStop; ignore errors when not active
+                self.stream.abort()
+        except Exception:
+            pass
         self.stream.start()
 
     def pause(self):
@@ -90,5 +97,8 @@ class AudioPlayer:
 
     @property
     def active(self) -> bool:
-        """Is playback currently running?"""
-        return self.stream.active
+        """Is playback currently running? Consider finished-at-end as not active."""
+        try:
+            return bool(self.stream.active) and (self.idx < self.data.size)
+        except Exception:
+            return False

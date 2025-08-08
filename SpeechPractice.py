@@ -21,7 +21,6 @@ from PyQt5.QtWidgets import (
     QMenu,
     QPushButton,
     QSplitter,
-    QStyle,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -32,6 +31,65 @@ from audio_player import AudioPlayer
 from script_loader import pick_next_script
 from transcribe_worker import TranscribeWorker
 
+# ───────────────────────────── theming ───────────────────────────────────
+
+def apply_modern_theme(app: QtWidgets.QApplication) -> None:
+    """Apply a clean, modern dark theme with a cyan accent."""
+    app.setStyle("Fusion")
+
+    # Base font
+    try:
+        app.setFont(QtGui.QFont("Segoe UI", 10))
+    except Exception:
+        pass
+
+    # Dark palette
+    bg = QtGui.QColor("#0f141a")
+    panel = QtGui.QColor("#151b22")
+    text = QtGui.QColor("#e6eaf0")
+    accent = QtGui.QColor("#00d0ff")
+
+    pal = QtGui.QPalette()
+    pal.setColor(QtGui.QPalette.Window, bg)
+    pal.setColor(QtGui.QPalette.WindowText, text)
+    pal.setColor(QtGui.QPalette.Base, panel)
+    pal.setColor(QtGui.QPalette.AlternateBase, bg)
+    pal.setColor(QtGui.QPalette.Text, text)
+    pal.setColor(QtGui.QPalette.Button, panel)
+    pal.setColor(QtGui.QPalette.ButtonText, text)
+    pal.setColor(QtGui.QPalette.ToolTipBase, panel)
+    pal.setColor(QtGui.QPalette.ToolTipText, text)
+    pal.setColor(QtGui.QPalette.Highlight, accent)
+    pal.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor("#0f141a"))
+    app.setPalette(pal)
+
+    # App-wide stylesheet (widgets keep subtle borders/padding)
+    app.setStyleSheet(
+        """
+QMainWindow{background:#0f141a;}
+QMenuBar{background:#0f141a;color:#e6eaf0;}
+QMenuBar::item:selected{background:#151b22;}
+QMenu{background:#151b22;color:#e6eaf0;border:1px solid #202833;}
+QMenu::item:selected{background:#1f2a36;}
+QSplitter::handle{background:#0f141a;width:6px;margin:0 4px;}
+QSplitter::handle:hover{background:#1a2230;}
+QLabel{color:#e6eaf0;}
+QListWidget{background:#151b22;color:#e6eaf0;border:1px solid #202833;border-radius:6px;}
+QListWidget::item:selected{background:#0e639c;}
+QTextEdit{background:#151b22;color:#e6eaf0;border:1px solid #202833;border-radius:6px;}
+QPushButton{background:#1d2633;color:#e6eaf0;border:1px solid #263241;border-radius:8px;padding:8px 14px;}
+QPushButton:hover{background:#223043;}
+QPushButton:disabled{color:#6f7c91;border-color:#2b3747;}
+QPushButton#PrimaryButton{background:#00d0ff;color:#0f141a;font-weight:600;border:0;padding:8px 18px;border-radius:18px;}
+QPushButton#PrimaryButton:hover{background:#5ee0ff;}
+QPushButton#RecordBtn{background:#e5484d;border:0;width:44px;height:44px;border-radius:22px;color:#0f141a;}
+QPushButton#RecordBtn:pressed{background:#ff5b61;}
+QPushButton#CircleBtn{background:#1d2633;width:44px;height:44px;border-radius:22px;}
+QWidget#Transport{background:#151b22;border:1px solid #263241;border-radius:28px;}
+QToolTip{background-color:#151b22;color:#e6eaf0;border:1px solid #202833;}
+        """
+    )
+
 # ───────────────────────────── main window ────────────────────────────────
 
 
@@ -41,11 +99,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.setWindowTitle("Speech Clarity Practice")
 
         # back-end
-        changed, msg = (False, None)
-        try:
-            changed, msg = db.ensure_db_writable("sessions.db")
-        except Exception:
-            pass
         self.db = db.get_session()
         self.sr = 16_000
         self.model = whisper.load_model("base")
@@ -67,10 +120,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self._build_ui()
         self._load_history()
         self.load_next_script()
-
-        # Show a one-time notice if we fixed DB permissions
-        if msg:
-            self.statusBar().showMessage(msg, 8000)
 
     # ───────────────────────────────── UI ─────────────────────────────────
 
@@ -119,13 +168,14 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.plot.showAxis("right", False)
         self.plot.getPlotItem().setContentsMargins(0, 0, 0, 0)
         self.plot.setFrameStyle(pg.QtWidgets.QFrame.NoFrame)
+        self.plot.showGrid(x=True, y=False, alpha=0.2)
 
-        pen = pg.mkPen("#00d0ff", width=1.5)
-        brush = pg.mkBrush("#00d0ff20")
+        pen = pg.mkPen("#00d0ff", width=1.8)
+        brush = pg.mkBrush("#00d0ff22")
         self.wave_line = self.plot.plot(fillLevel=0, pen=pen, brush=brush)
 
         self.playhead = pg.InfiniteLine(
-            pos=0, angle=90, movable=False, pen=pg.mkPen("r", width=2)
+            pos=0, angle=90, movable=False, pen=pg.mkPen("#e5484d", width=2)
         )
         self.plot.addItem(self.playhead)
 
@@ -137,45 +187,40 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.top_axis.setHeight(20)
         self.plot.showAxis("bottom", False)
         self.plot.showAxis("top", True)
+        try:
+            self.top_axis.setPen(pg.mkPen("#2b3747"))
+            self.top_axis.setTextPen(pg.mkPen("#6f7c91"))
+        except Exception:
+            pass
 
         # centred transport bar -------------------------------------------
-        transport = QWidget()
-        transport.setFixedHeight(48)
-        transport.setStyleSheet(
-            """
-            QWidget { 
-                background:#9c9a9a; 
-                border-radius:24px; 
-            }  
-            
-            QPushButton { 
-                border:none; 
-                color:white; 
-                padding:0 16px; 
-            }
-            """
-        )
+        transport = QWidget(objectName="Transport")
+        transport.setFixedHeight(56)
         tlay = QHBoxLayout(transport)
-        tlay.setContentsMargins(12, 4, 12, 4)
-        tlay.setSpacing(8)
+        tlay.setContentsMargins(10, 6, 10, 6)
+        tlay.setSpacing(10)
 
-        # icons
-        self.ic_play = self.style().standardIcon(QStyle.SP_MediaPlay)
-        self.ic_pause = self.style().standardIcon(QStyle.SP_MediaPause)
-        self.ic_stop = self.style().standardIcon(QStyle.SP_MediaStop)
+        # icons (high-contrast glyphs)
+        self.ic_play = self._make_play_icon()
+        self.ic_pause = self._make_pause_icon()
+        self.ic_stop = self._make_stop_icon()
         self.ic_record = self._make_record_icon()
 
         # buttons
-        self.btn_record = QPushButton()
+        self.btn_record = QPushButton(objectName="RecordBtn")
         self.btn_record.setIcon(self.ic_record)
-        self.btn_play = QPushButton()
+        self.btn_play = QPushButton(objectName="CircleBtn")
         self.btn_play.setIcon(self.ic_play)
         self.btn_score = QPushButton("Score")
+        self.btn_score.setObjectName("PrimaryButton")
 
         icon_sz = 28  # <— pick any size you like (px)
 
-        # remake the record glyph at the new size
+        # remake glyphs at the chosen size
         self.ic_record = self._make_record_icon(icon_sz)
+        self.ic_play = self._make_play_icon(icon_sz)
+        self.ic_pause = self._make_pause_icon(icon_sz)
+        self.ic_stop = self._make_stop_icon(icon_sz)
 
         # enlarge the icons that live on the buttons
         self.btn_play.setIconSize(QtCore.QSize(icon_sz, icon_sz))
@@ -219,9 +264,74 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         pix.fill(QtCore.Qt.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setBrush(QColor("red"))
-        p.setPen(QtCore.Qt.NoPen)
+        # High-contrast red circle with a dark outline
+        p.setBrush(QColor("#ff4d57"))
+        p.setPen(QColor("#0f141a"))
         p.drawEllipse(0, 0, size, size)
+        p.end()
+        return QtGui.QIcon(pix)
+
+    def _make_play_icon(self, size: int = 20) -> QtGui.QIcon:
+        w = h = size
+        pix = QPixmap(w, h)
+        pix.fill(QtCore.Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        # circular dark background + cyan triangle for contrast
+        p.setBrush(QColor("#1d2633"))
+        p.setPen(QColor("#0f141a"))
+        p.drawEllipse(0, 0, w, h)
+        p.setBrush(QColor("#e6eaf0"))
+        p.setPen(QtCore.Qt.NoPen)
+        # triangle
+        margin = int(size * 0.28)
+        points = [
+            QtCore.QPoint(margin, margin),
+            QtCore.QPoint(w - margin, h // 2),
+            QtCore.QPoint(margin, h - margin),
+        ]
+        p.drawPolygon(QtGui.QPolygon(points))
+        p.end()
+        return QtGui.QIcon(pix)
+
+    def _make_pause_icon(self, size: int = 20) -> QtGui.QIcon:
+        w = h = size
+        pix = QPixmap(w, h)
+        pix.fill(QtCore.Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setBrush(QColor("#1d2633"))
+        p.setPen(QColor("#0f141a"))
+        p.drawEllipse(0, 0, w, h)
+        # pause bars
+        bar_w = max(2, int(size * 0.18))
+        gap = int(size * 0.14)
+        x1 = w // 2 - gap - bar_w
+        x2 = w // 2 + gap
+        y = int(size * 0.24)
+        bar_h = h - 2 * y
+        p.setBrush(QColor("#e6eaf0"))
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawRoundedRect(x1, y, bar_w, bar_h, 2, 2)
+        p.drawRoundedRect(x2, y, bar_w, bar_h, 2, 2)
+        p.end()
+        return QtGui.QIcon(pix)
+
+    def _make_stop_icon(self, size: int = 20) -> QtGui.QIcon:
+        w = h = size
+        pix = QPixmap(w, h)
+        pix.fill(QtCore.Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setBrush(QColor("#1d2633"))
+        p.setPen(QColor("#0f141a"))
+        p.drawEllipse(0, 0, w, h)
+        p.setBrush(QColor("#e6eaf0"))
+        p.setPen(QtCore.Qt.NoPen)
+        s = int(size * 0.42)
+        x = (w - s) // 2
+        y = (h - s) // 2
+        p.drawRoundedRect(x, y, s, s, 2, 2)
         p.end()
         return QtGui.QIcon(pix)
 
@@ -678,6 +788,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
 def main() -> None:
     app = QtWidgets.QApplication(sys.argv)
+    # Apply modern theme before creating the window
+    try:
+        apply_modern_theme(app)
+    except Exception:
+        pass
     win = SpeechPracticeApp()
     win.resize(1100, 640)
     win.show()

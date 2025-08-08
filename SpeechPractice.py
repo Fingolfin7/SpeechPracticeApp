@@ -950,6 +950,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.free_speak_mode = bool(checked)
         if self.free_speak_mode:
             # Switch UI cues
+            try:
+                self.act_free_mode.setText("Script Mode")
+                self.act_free_mode.setStatusTip("Switch back to scripted practice")
+            except Exception:
+                pass
             self.btn_score.setText("Transcribe")
             self.btn_save.setVisible(True)
             self.btn_save.setEnabled(False)
@@ -958,6 +963,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             # clear any pending session id to avoid unintended updates
             self.current_session_id = None
         else:
+            try:
+                self.act_free_mode.setText("Free Speak Mode")
+                self.act_free_mode.setStatusTip("Transcribe without scoring or auto-saving")
+            except Exception:
+                pass
             self.btn_score.setText("Score")
             self.btn_save.setVisible(False)
             # return to normal script flow

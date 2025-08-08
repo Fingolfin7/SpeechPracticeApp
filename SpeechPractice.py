@@ -16,10 +16,17 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QAction,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
     QMenu,
+    QComboBox,
+    QCheckBox,
+    QFormLayout,
+    QDialogButtonBox,
+    QSpinBox,
+    QDoubleSpinBox,
     QPushButton,
     QSplitter,
     QTextEdit,
@@ -102,7 +109,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # back-end
         self.db = db.get_session()
         self.sr = 16_000
-        self.model = whisper.load_model("base")
+        # Lazy-load Whisper model to reduce startup time and memory
+        self.model = None
 
         # state
         self.audio_buffer: list[np.ndarray] = []
@@ -117,6 +125,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.play_timer.timeout.connect(self._update_playhead)
 
         self.player = AudioPlayer(self.sr)
+        # live waveform tail window (seconds) to avoid repeated O(n) concatenations
+        self._live_tail_seconds: int = 1
 
         # modes/state
         self.free_speak_mode: bool = False
@@ -130,6 +140,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             pass
         self._load_history()
         self.load_next_script()
+        # Load persisted settings
+        self._load_settings()
 
     # ───────────────────────────────── UI ─────────────────────────────────
 
@@ -143,6 +155,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.act_free_mode.setStatusTip("Transcribe without scoring or auto-saving")
         self.act_free_mode.toggled.connect(self._on_toggle_free_mode)
         mb.addAction(self.act_free_mode)
+        # Settings dialog action
+        act_settings = mb.addAction("Settings")
+        act_settings.triggered.connect(self._open_settings)
 
         splitter = QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -286,6 +301,23 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         splitter.setStretchFactor(2, 3)
 
     # --------------------------- helpers ---------------------------------
+
+    def _ensure_model(self) -> None:
+        if self.model is None:
+            model_name = (
+                getattr(self, "settings", {}).get("model_name")
+                if hasattr(self, "settings") and isinstance(self.settings, dict)
+                else None
+            ) or os.getenv("WHISPER_MODEL", "base.en")
+            self.model = whisper.load_model(model_name)
+
+    def _replace_player(self, new_player: AudioPlayer) -> None:
+        try:
+            if hasattr(self, "player") and self.player is not None:
+                self.player.close()
+        except Exception:
+            pass
+        self.player = new_player
 
     def _make_record_icon(self, size: int = 20) -> QtGui.QIcon:
         pix = QPixmap(size, size)
@@ -597,7 +629,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         else:
             self.current_audio_path = None
 
-        self.player = AudioPlayer(self.sr)
+        self._replace_player(AudioPlayer(self.sr))
         self.player.set_data(trimmed)
 
         x_env, y_env = self._envelope(trimmed)
@@ -692,12 +724,25 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _update_waveform(self) -> None:
         if not self.audio_buffer:
             return
-        snippet = np.concatenate(self.audio_buffer, axis=0).flatten()
-        snippet = snippet[-self.sr :]
-        x = np.arange(snippet.size) / self.sr
+        # Concatenate only the trailing blocks required for the last N seconds
+        needed = int(self.sr * self._live_tail_seconds)
+        total = 0
+        parts: list[np.ndarray] = []
+        for block in reversed(self.audio_buffer):
+            parts.append(block)
+            total += int(block.shape[0])
+            if total >= needed:
+                break
+        snippet = (
+            np.concatenate(list(reversed(parts)), axis=0).flatten()
+            if parts
+            else np.zeros(0, dtype=np.float32)
+        )
+        snippet = snippet[-needed:]
         x_env, y_env = self._envelope(snippet)
         self.wave_line.setData(x_env, y_env)
-        self.playhead.setPos(x_env[-1])
+        if x_env.size:
+            self.playhead.setPos(x_env[-1])
         self._update_time_axis(snippet.size)
 
     # --------------------------- playback ---------------------------------
@@ -763,26 +808,33 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             return
         self.btn_score.setEnabled(False)
         self.metrics_label.setText("Scoring… please wait")
+        self._ensure_model()
         self.worker = TranscribeWorker(
             self.model,
             self.current_script_text,
             self.current_audio_path,
             self,
+            options=self._whisper_options(),
         )
         self.worker.completed.connect(self._on_transcription_done)
         self.worker.start()
 
     def _transcribe_free(self) -> None:
-        if self.current_audio_path is None:
+        # Allow transcribing from in-memory audio or an already-saved path
+        if self.audio_data is None and self.current_audio_path is None:
             return
         self.btn_score.setEnabled(False)
         self.metrics_label.setText("Transcribing… (Free Speak)")
         # Pass in-memory audio to avoid creating files
-        audio_input = self.audio_data if self.audio_data is not None else self.current_audio_path
+        audio_input = (
+            self.audio_data if self.audio_data is not None else self.current_audio_path
+        )
+        self._ensure_model()
         self.free_worker = FreeTranscribeWorker(
             self.model,
             audio_input,
             self,
+            options=self._whisper_options(free_speak=True),
         )
         self.free_worker.completed.connect(self._on_free_transcription_done)
         self.free_worker.start()
@@ -1010,12 +1062,199 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.playhead.setPos(0)
         self._update_time_axis(data.size)
 
-        self.player = AudioPlayer(self.sr)
+        self._replace_player(AudioPlayer(self.sr))
         self.player.set_data(data)
 
         self.btn_record.setEnabled(True)
         self.btn_play.setEnabled(True)
         self.btn_score.setEnabled(True)
+
+    # --------------------------- settings ----------------------------------
+
+    def _default_settings(self) -> dict:
+        return {
+            "device": "auto",   # auto | cpu | gpu
+            "model_name": os.getenv("WHISPER_MODEL", "base.en"),
+            "preset": "balanced_cpu",  # fast_cpu | balanced_cpu | balanced_gpu | accurate_gpu
+            "language": "en",
+            "timestamps": False,
+            "beam_size": 1,
+            "temperature": 0.0,
+        }
+
+    def _settings_path(self) -> str:
+        return os.path.abspath("settings.json")
+
+    def _load_settings(self) -> None:
+        import json
+        self.settings = self._default_settings()
+        try:
+            if os.path.exists(self._settings_path()):
+                with open(self._settings_path(), "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                    if isinstance(data, dict):
+                        self.settings.update(data)
+        except Exception:
+            pass
+
+    def _save_settings(self) -> None:
+        import json
+        try:
+            with open(self._settings_path(), "w", encoding="utf-8") as fh:
+                json.dump(self.settings, fh, indent=2)
+        except Exception:
+            pass
+
+    def _detect_gpu(self) -> tuple[bool, str]:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                count = torch.cuda.device_count()
+                name = torch.cuda.get_device_name(0)
+                total_vram = int(torch.cuda.get_device_properties(0).total_memory // (1024 ** 2))
+                return True, f"{name} ({total_vram} MB VRAM, {count} device(s))"
+        except Exception:
+            pass
+        return False, "No CUDA GPU detected"
+
+    def _open_settings(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Settings")
+        form = QFormLayout(dlg)
+
+        # Device
+        device_cb = QComboBox(dlg)
+        device_cb.addItems(["auto", "cpu", "gpu"])
+        device_cb.setCurrentText(self.settings.get("device", "auto"))
+        form.addRow("Device", device_cb)
+
+        # Model name with descriptive labels
+        model_cb = QComboBox(dlg)
+        model_choices = [
+            ("tiny.en",   "fastest, lowest accuracy, minimal RAM"),
+            ("base.en",   "fast, decent accuracy, low RAM"),
+            ("small.en",  "balanced speed/accuracy, moderate RAM"),
+            ("medium.en", "slower, higher accuracy, higher RAM"),
+            ("tiny",      "multilingual tiny; fast but lowest accuracy"),
+            ("base",      "multilingual base; low RAM, decent accuracy"),
+            ("small",     "multilingual small; balanced option"),
+            ("medium",    "multilingual medium; slower, more accurate"),
+        ]
+        for key, desc in model_choices:
+            model_cb.addItem(f"{key} ({desc})", userData=key)
+        # Select saved model by userData
+        saved_model = self.settings.get("model_name", "base.en")
+        found_index = -1
+        for i in range(model_cb.count()):
+            if model_cb.itemData(i) == saved_model:
+                found_index = i
+                break
+        if found_index >= 0:
+            model_cb.setCurrentIndex(found_index)
+        else:
+            model_cb.setCurrentIndex(1)  # default to base.en
+        form.addRow("Model", model_cb)
+
+        # Preset
+        preset_cb = QComboBox(dlg)
+        preset_cb.addItems(["fast_cpu", "balanced_cpu", "balanced_gpu", "accurate_gpu"])
+        preset_cb.setCurrentText(self.settings.get("preset", "balanced_cpu"))
+        form.addRow("Preset", preset_cb)
+
+        # Beam size
+        beam_sb = QSpinBox(dlg)
+        beam_sb.setRange(1, 10)
+        beam_sb.setValue(int(self.settings.get("beam_size", 1)))
+        form.addRow("Beam size", beam_sb)
+
+        # Temperature
+        temp_sb = QDoubleSpinBox(dlg)
+        temp_sb.setRange(0.0, 1.0)
+        temp_sb.setSingleStep(0.1)
+        temp_sb.setDecimals(2)
+        temp_sb.setValue(float(self.settings.get("temperature", 0.0)))
+        form.addRow("Temperature", temp_sb)
+
+        # Timestamps
+        ts_ck = QCheckBox("Generate timestamps", dlg)
+        ts_ck.setChecked(bool(self.settings.get("timestamps", False)))
+        form.addRow("Timestamps", ts_ck)
+
+        # Language
+        lang_cb = QComboBox(dlg)
+        lang_cb.addItems(["auto", "en"])  # can be extended
+        lang_cb.setCurrentText(self.settings.get("language", "en"))
+        form.addRow("Language", lang_cb)
+
+        # GPU detection / recommendation
+        gpu_label = QLabel("")
+        has_gpu, summary = self._detect_gpu()
+        recommendation = "Use GPU presets (balanced_gpu)." if has_gpu else "Use CPU presets (fast/balanced_cpu)."
+        gpu_label.setText(f"Detected: {summary}\nRecommendation: {recommendation}")
+        form.addRow("Hardware", gpu_label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dlg)
+        form.addRow(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        if dlg.exec_() == QDialog.Accepted:
+            self.settings["device"] = device_cb.currentText()
+            # Save underlying model id, not the descriptive label
+            selected_model = model_cb.currentData()
+            self.settings["model_name"] = selected_model if selected_model else model_cb.currentText().split(" ")[0]
+            self.settings["preset"] = preset_cb.currentText()
+            self.settings["beam_size"] = int(beam_sb.value())
+            self.settings["temperature"] = float(temp_sb.value())
+            self.settings["timestamps"] = bool(ts_ck.isChecked())
+            self.settings["language"] = lang_cb.currentText()
+            # Reset model so it will be recreated with new settings
+            self.model = None
+            self._save_settings()
+
+    def _whisper_options(self, free_speak: bool = False) -> dict:
+        # Base options
+        language = None if self.settings.get("language") == "auto" else self.settings.get("language", "en")
+        without_ts = not bool(self.settings.get("timestamps", False))
+        beam_size = int(self.settings.get("beam_size", 1))
+        temperature = float(self.settings.get("temperature", 0.0))
+
+        opts = dict(
+            language=language,
+            task="transcribe",
+            temperature=temperature,
+            beam_size=beam_size,
+            without_timestamps=without_ts,
+            condition_on_previous_text=False,
+            compression_ratio_threshold=2.4,
+            logprob_threshold=-1.0,
+            no_speech_threshold=0.6,
+        )
+
+        # Device/precision hints: whisper python uses internal detection; we control fp16
+        preset = self.settings.get("preset")
+        device = self.settings.get("device")
+        use_fp16 = False
+        if device == "gpu":
+            use_fp16 = True
+        elif device == "auto":
+            try:
+                import torch
+                use_fp16 = torch.cuda.is_available()
+            except Exception:
+                use_fp16 = False
+        opts["fp16"] = bool(use_fp16)
+
+        if preset == "fast_cpu":
+            opts.update(dict(beam_size=1, temperature=0.0))
+        elif preset == "balanced_cpu":
+            opts.update(dict(beam_size=max(1, beam_size or 1), temperature=0.0))
+        elif preset == "balanced_gpu":
+            opts.update(dict(beam_size=max(3, beam_size or 3), temperature=0.0, fp16=True))
+        elif preset == "accurate_gpu":
+            opts.update(dict(beam_size=max(5, beam_size or 5), temperature=0.0, fp16=True))
+
+        return opts
 
 
 # ────────────────────────────── main ///////////////////////////////////////
@@ -1031,7 +1270,23 @@ def main() -> None:
     win = SpeechPracticeApp()
     win.resize(1100, 640)
     win.show()
-    sys.exit(app.exec_())
+    ret = app.exec_()
+    # best-effort resource cleanup
+    try:
+        if hasattr(win, "player") and win.player is not None:
+            win.player.close()
+        if hasattr(win, "stream") and win.stream is not None:
+            try:
+                win.stream.stop(); win.stream.close()
+            except Exception:
+                pass
+        try:
+            win.db.close()
+        except Exception:
+            pass
+    except Exception:
+        pass
+    sys.exit(ret)
 
 
 if __name__ == "__main__":

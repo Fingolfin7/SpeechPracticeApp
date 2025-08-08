@@ -1,11 +1,13 @@
 /.venv/
+/.venv312/
 /.idea/
 /.__pycache__/
 *.pyc
 /sessions.db
 /recordings/
 /scripts/
-script_index.json
+/script_index.json
+/settings.json
 /SpeechPractice.spec
 /build/
 /dist/

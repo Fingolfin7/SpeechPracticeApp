@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from typing import Dict, Optional, Union
+
+import numpy as np
 from PyQt5 import QtCore
 from jiwer import wer
 import math
@@ -23,19 +28,22 @@ class TranscribeWorker(QtCore.QThread):
     completed = QtCore.pyqtSignal(str, float, float, float)
 
     def __init__(
-        self, model, ref_text: str, audio_path: str, parent=None
+        self,
+        model,
+        ref_text: str,
+        audio_path: str,
+        parent=None,
+        options: Optional[Dict] = None,
     ):
         super().__init__(parent)
         self._model = model
         self._ref = ref_text
         self._audio_path = audio_path
+        self._options = options or {}
 
     def run(self) -> None:
-        hyp = (
-            self._model.transcribe(self._audio_path, fp16=False)["text"]
-            .strip()
-            .lower()
-        )
+        result = self._model.transcribe(self._audio_path, **self._options)
+        hyp = str(result["text"]).strip().lower()
         err = wer(self._ref, hyp)
         clar = 1.0 - err
 
@@ -53,14 +61,14 @@ class FreeTranscribeWorker(QtCore.QThread):
 
     completed = QtCore.pyqtSignal(str)
 
-    def __init__(self, model, audio_path: str, parent=None):
+    def __init__(self, model, audio_source: Union[str, np.ndarray], parent=None, options: Optional[Dict] = None):
         super().__init__(parent)
         self._model = model
-        self._audio_path = audio_path
+        # Accept either a file path or an in-memory waveform (float32 1-D)
+        self._audio_source: Union[str, np.ndarray] = audio_source
+        self._options = options or {}
 
     def run(self) -> None:
-        hyp = (
-            self._model.transcribe(self._audio_path, fp16=False)["text"]
-            .strip()
-        )
+        result = self._model.transcribe(self._audio_source, **self._options)
+        hyp = str(result["text"]).strip()
         self.completed.emit(hyp)

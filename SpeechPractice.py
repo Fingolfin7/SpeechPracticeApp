@@ -7,6 +7,8 @@ import sys
 from datetime import datetime
 import subprocess
 import soundfile as sf
+from pydub import AudioSegment
+import tempfile
 
 import numpy as np
 import sounddevice as sd
@@ -70,6 +72,50 @@ import json
 # ───────────────────────────── theming ───────────────────────────────────
 
 # ───────────────────────────── main window ────────────────────────────────
+
+
+def load_audio_file(file_path: str) -> tuple[np.ndarray, int]:
+    """
+    Load audio file supporting various formats including M4A.
+    Returns (audio_data, sample_rate) as float32 mono.
+    """
+    file_ext = os.path.splitext(file_path)[1].lower()
+    
+    # Try direct soundfile loading first (for WAV, FLAC, OGG, etc.)
+    try:
+        return sf.read(file_path, dtype="float32")
+    except Exception as e:
+        # If soundfile fails and it's a format that needs pydub conversion
+        if file_ext in ['.m4a', '.aac', '.mp3', '.wma', '.mp4', '.mov']:
+            try:
+                # Load with pydub and convert to temporary WAV for soundfile
+                audio_segment = AudioSegment.from_file(file_path)
+                
+                # Convert to mono and get raw audio data
+                if audio_segment.channels > 1:
+                    audio_segment = audio_segment.set_channels(1)
+                
+                # Create temporary WAV file
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                    temp_wav_path = temp_file.name
+                    audio_segment.export(temp_wav_path, format="wav")
+                
+                try:
+                    # Load the temporary WAV file with soundfile
+                    data, sr = sf.read(temp_wav_path, dtype="float32")
+                    return data, sr
+                finally:
+                    # Clean up temporary file
+                    try:
+                        os.unlink(temp_wav_path)
+                    except:
+                        pass
+                        
+            except Exception as pydub_error:
+                raise Exception(f"Failed to load audio file {file_path}. Soundfile error: {e}. Pydub error: {pydub_error}")
+        else:
+            # Re-raise original soundfile error for other formats
+            raise e
 
 
 class SpeechPracticeApp(QtWidgets.QMainWindow):
@@ -390,7 +436,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.history_list.addItem("No sessions yet")
         else:
             for sess in sessions:
-                label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+                formatted_timestamp = datetime.strptime(sess.timestamp, "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y %H:%M")
+                label = f"{formatted_timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
                 self.history_list.addItem(it)
@@ -773,8 +820,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.transcript_segment_ranges = []
         self.transcript_active_index = -1
 
-        # Load audio (WAV/FLAC/OGG/MP3...) and convert to mono float32 at app samplerate
-        data, file_sr = sf.read(sess.audio_path, dtype="float32")
+        # Load audio (all formats: WAV/FLAC/OGG/AIFF via soundfile, MP3/M4A/AAC/WMA via pydub) and convert to mono float32 at app samplerate
+        data, file_sr = load_audio_file(sess.audio_path)
         if hasattr(data, "ndim") and data.ndim > 1:
             data = data[:, 0]
         if file_sr != self.sr and data.size > 0:

@@ -6,6 +6,7 @@ openai-whisper>=20231117
 jiwer>=3.0
 SQLAlchemy>=1.4
 soundfile>=0.12
+pydub>=0.25.1
 # Optional: packaging helper
 pyinstaller>=6.0
 # if running python 3.12 or lower, and have an Nvidia GPU you can install CUDA enabled torch to run whisper on:

@@ -14,7 +14,7 @@ from transcript_utils import build_transcript_from_segments, highlight_transcrip
 from settings_ui import whisper_options
 
 
-class TranscriptionService:
+class TranscriptionService(QtCore.QObject):
     """
     Centralized service for handling all transcription operations.
     This service manages Whisper model loading, transcription workflows,
@@ -23,6 +23,7 @@ class TranscriptionService:
     
     def __init__(self, window):
         """Initialize the transcription service with a reference to the main window."""
+        super().__init__()
         self.window = window
         self.model: Optional[Any] = None
         self._received_segments_this_run: bool = False

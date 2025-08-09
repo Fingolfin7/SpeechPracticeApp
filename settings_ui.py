@@ -23,11 +23,11 @@ def default_settings() -> Dict:
         "model_name": os.getenv("WHISPER_MODEL", "base.en"),
         "preset": "balanced_cpu",  # fast_cpu | balanced_cpu | balanced_gpu | accurate_gpu
         "language": "en",
-        "timestamps": False,
+        "timestamps": True,
         "beam_size": 1,
         "temperature": 0.0,
         # advanced decoding controls
-        "no_speech_threshold": 0.45,
+        "no_speech_threshold": 0.30,
         "condition_on_previous_text": True,
     }
 

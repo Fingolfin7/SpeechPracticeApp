@@ -64,8 +64,16 @@ def highlight_transcript_at_time(
         return active_index
     s_char, e_char, _t0, _t1 = ranges[idx]
     cursor = edit.textCursor()
-    cursor.setPosition(max(0, int(s_char)))
-    cursor.setPosition(max(0, int(e_char)), QtGui.QTextCursor.KeepAnchor)
+    
+    # Get the actual text length to avoid out-of-range errors
+    text_length = len(edit.toPlainText())
+    
+    # Ensure positions are within bounds
+    start_pos = max(0, min(int(s_char), text_length))
+    end_pos = max(0, min(int(e_char), text_length))
+    
+    cursor.setPosition(start_pos)
+    cursor.setPosition(end_pos, QtGui.QTextCursor.KeepAnchor)
     sel = QtWidgets.QTextEdit.ExtraSelection()
     sel.cursor = cursor
     fmt = QtGui.QTextCharFormat()

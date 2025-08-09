@@ -10,7 +10,7 @@ import soundfile as sf
 
 import numpy as np
 import sounddevice as sd
-import whisper
+
 from jiwer import wer
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtGui import QColor, QPainter, QPixmap
@@ -38,6 +38,7 @@ import db
 from audio_player import AudioPlayer
 from script_loader import pick_next_script
 from transcribe_worker import TranscribeWorker, FreeTranscribeWorker
+from transcription_service import TranscriptionService
 from theme import apply_modern_theme
 from icons import (
     make_play_icon,
@@ -50,7 +51,21 @@ from transcript_utils import (
     build_transcript_from_segments,
     highlight_transcript_at_time,
 )
+from settings_ui import (
+    default_settings,
+    settings_path,
+    load_settings,
+    save_settings,
+    open_settings_dialog,
+    whisper_options,
+)
+from free_speak import (
+    on_toggle_free_mode,
+    transcribe_free,
+    save_free_speak_session,
+)
 import json
+
 
 # ───────────────────────────── theming ───────────────────────────────────
 
@@ -65,8 +80,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # back-end
         self.db = db.get_session()
         self.sr = 16_000
-        # Lazy-load Whisper model to reduce startup time and memory
-        self.model = None
+        # Transcription service handles all transcription operations
+        self.transcription_service = TranscriptionService(self)
 
         # state
         self.audio_buffer: list[np.ndarray] = []
@@ -91,7 +106,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.transcript_segments: list[dict] | None = None
         self.transcript_segment_ranges: list[tuple[int, int, float, float]] = []  # (start_char, end_char, t0, t1)
         self.transcript_active_index: int = -1
-        self._received_segments_this_run: bool = False
 
         self._build_ui()
         # housekeeping: remove any recording files not referenced by the DB
@@ -114,7 +128,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Free Speak mode toggle directly on the menubar
         self.act_free_mode = QAction("Free Speak Mode", self, checkable=True)
         self.act_free_mode.setStatusTip("Transcribe without scoring or auto-saving")
-        self.act_free_mode.toggled.connect(self._on_toggle_free_mode)
+        self.act_free_mode.toggled.connect(lambda checked: on_toggle_free_mode(self, checked))
         mb.addAction(self.act_free_mode)
         # Settings dialog action
         act_settings = mb.addAction("Settings")
@@ -229,8 +243,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.btn_record.clicked.connect(self._toggle_record)
         self.btn_play.clicked.connect(self._toggle_play_pause)
-        self.btn_score.clicked.connect(self._transcribe_and_score)
-        self.btn_save.clicked.connect(self._save_free_speak_session)
+        self.btn_score.clicked.connect(self.transcription_service.transcribe_and_score)
+        self.btn_save.clicked.connect(lambda: save_free_speak_session(self))
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
 
         for b in (self.btn_record, self.btn_play, self.btn_score, self.btn_save):
@@ -262,15 +276,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         splitter.setStretchFactor(2, 3)
 
     # --------------------------- helpers ---------------------------------
-
-    def _ensure_model(self) -> None:
-        if self.model is None:
-            model_name = (
-                getattr(self, "settings", {}).get("model_name")
-                if hasattr(self, "settings") and isinstance(self.settings, dict)
-                else None
-            ) or os.getenv("WHISPER_MODEL", "base.en")
-            self.model = whisper.load_model(model_name)
 
     def _replace_player(self, new_player: AudioPlayer) -> None:
         try:
@@ -541,7 +546,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_save.setEnabled(False)
             self.metrics_label.setText("Free Speak: ready to transcribe")
             # Auto-start transcription for convenience
-            QtCore.QTimer.singleShot(100, self._transcribe_free)
+            QtCore.QTimer.singleShot(100, self.transcription_service.transcribe_free)
             return
 
         if not self.free_speak_mode:
@@ -606,7 +611,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                         print("DB save error (fallback):", repr(e2))
                     except Exception:
                         pass
-
     
 
     def _update_waveform(self) -> None:
@@ -703,288 +707,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
     # --------------------------- scoring ----------------------------------
 
-    def _transcribe_and_score(self) -> None:
-        if self.current_audio_path is None:
-            return
-        if self.free_speak_mode:
-            self._transcribe_free()
-            return
-        self.btn_score.setEnabled(False)
-        self.metrics_label.setText("Scoring… please wait")
-        self._ensure_model()
-        self.worker = TranscribeWorker(
-            self.model,
-            self.current_script_text,
-            self.current_audio_path,
-            self,
-            options=self._whisper_options(),
-        )
-        self._received_segments_this_run = False
-        try:
-            self.worker.completed_with_segments.connect(self._on_transcription_done_with_segments)
-        except Exception:
-            pass
-        self.worker.completed.connect(self._on_transcription_done)
-        self.worker.start()
-
-    def _transcribe_free(self) -> None:
-        # Allow transcribing from in-memory audio or an already-saved path
-        if self.audio_data is None and self.current_audio_path is None:
-            return
-        self.btn_score.setEnabled(False)
-        self.metrics_label.setText("Transcribing… (Free Speak)")
-        # Pass in-memory audio to avoid creating files
-        audio_input = (
-            self.audio_data if self.audio_data is not None else self.current_audio_path
-        )
-        self._ensure_model()
-        self.free_worker = FreeTranscribeWorker(
-            self.model,
-            audio_input,
-            self,
-            options=self._whisper_options(free_speak=True),
-        )
-        self._received_segments_this_run = False
-        try:
-            self.free_worker.completed_with_segments.connect(self._on_free_transcription_done_with_segments)
-        except Exception:
-            pass
-        self.free_worker.completed.connect(self._on_free_transcription_done)
-        self.free_worker.start()
-
-    @QtCore.pyqtSlot(str, float, float, float)
-    def _on_transcription_done(
-        self, hyp: str, err: float, clar: float, score: float
-    ) -> None:
-        self.metrics_label.setText(
-            f"Score: {score:.2f}/5 | WER: {err:.2%} | Clarity: {clar:.2%}"
-        )
-        if not self._received_segments_this_run:
-            self.transcript_txt.setText(hyp)
-            self._clear_transcript_sync()
-        self.btn_score.setEnabled(True)
-
-        # Update existing session if it was created at stop; otherwise create
-        if getattr(self, "current_session_id", None) is not None:
-            # Persist segments if we used them in this run
-            segments_json = None
-            if self.transcript_segments is not None and self.transcript_segment_ranges:
-                try:
-                    segments_json = json.dumps(self.transcript_segments)
-                except Exception:
-                    segments_json = None
-            sess = db.update_session_scores(
-                self.db,
-                self.current_session_id,
-                hyp,
-                err,
-                clar,
-                score,
-                segments_json=segments_json,
-            )
-        else:
-            segments_json = None
-            if self.transcript_segments is not None and self.transcript_segment_ranges:
-                try:
-                    segments_json = json.dumps(self.transcript_segments)
-                except Exception:
-                    segments_json = None
-            sess = db.add_session(
-                self.db,
-                self.current_script_name,
-                self.current_script_text,
-                self.current_audio_path,
-                hyp,
-                err,
-                clar,
-                score,
-                segments_json=segments_json,
-            )
-            self.current_session_id = sess.id
-            label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
-            it = QListWidgetItem(label)
-            it.setData(QtCore.Qt.UserRole, sess.id)
-            if self.history_list.count() == 1 and not isinstance(
-                self.history_list.item(0).data(QtCore.Qt.UserRole), int
-            ):
-                self.history_list.takeItem(0)
-            self.history_list.addItem(it)
-
-    @QtCore.pyqtSlot(str)
-    def _on_free_transcription_done(self, hyp: str) -> None:
-        self.last_transcript_text = hyp
-        if not self._received_segments_this_run:
-            self.transcript_txt.setText(hyp)
-            self._clear_transcript_sync()
-        self.metrics_label.setText("Transcript ready (Free Speak)")
-        self.btn_score.setEnabled(True)
-        self.btn_save.setEnabled(True)
-
-    @QtCore.pyqtSlot(str, float, float, float, object)
-    def _on_transcription_done_with_segments(self, hyp: str, err: float, clar: float, score: float, segments: object) -> None:
-        try:
-            self._received_segments_this_run = True
-            txt, segs, ranges, active_idx = build_transcript_from_segments(segments)
-            self.transcript_segments = segs
-            self.transcript_segment_ranges = ranges
-            self.transcript_active_index = active_idx
-            self.transcript_txt.setPlainText(txt)
-            self.metrics_label.setText(
-                f"Score: {score:.2f}/5 | WER: {err:.2%} | Clarity: {clar:.2%}"
-            )
-            self.transcript_active_index = -1
-            self.transcript_active_index = highlight_transcript_at_time(
-                self.transcript_txt, self.transcript_segment_ranges, 0.0, self.transcript_active_index
-            )
-            # Persist on-the-fly if we already have a session id
-            if getattr(self, "current_session_id", None) is not None:
-                try:
-                    segments_json = json.dumps(self.transcript_segments or [])
-                    db.update_session_scores(
-                        self.db,
-                        self.current_session_id,
-                        hyp,
-                        err,
-                        clar,
-                        score,
-                        segments_json=segments_json,
-                    )
-                except Exception:
-                    pass
-        except Exception:
-            self.transcript_txt.setText(hyp)
-            self._clear_transcript_sync()
-        finally:
-            self.btn_score.setEnabled(True)
-
-    @QtCore.pyqtSlot(str, object)
-    def _on_free_transcription_done_with_segments(self, hyp: str, segments: object) -> None:
-        try:
-            self._received_segments_this_run = True
-            self.last_transcript_text = hyp
-            txt, segs, ranges, active_idx = build_transcript_from_segments(segments)
-            self.transcript_segments = segs
-            self.transcript_segment_ranges = ranges
-            self.transcript_active_index = active_idx
-            self.transcript_txt.setPlainText(txt)
-            self.metrics_label.setText("Transcript ready (Free Speak)")
-            self.transcript_active_index = -1
-            self.transcript_active_index = highlight_transcript_at_time(
-                self.transcript_txt, self.transcript_segment_ranges, 0.0, self.transcript_active_index
-            )
-            # In free speak, we don't have a session yet; persistence happens on Save
-        except Exception:
-            self.transcript_txt.setText(hyp)
-            self._clear_transcript_sync()
-        finally:
-            self.btn_score.setEnabled(True)
-            self.btn_save.setEnabled(True)
-
-    # --------------------- transcript sync helpers -------------------------
-    def _clear_transcript_sync(self) -> None:
-        self.transcript_segments = None
-        self.transcript_segment_ranges = []
-        self.transcript_active_index = -1
-        try:
-            self.transcript_txt.setExtraSelections([])
-        except Exception:
-            pass
-
-    
-
-    
-
     def _save_free_speak_session(self) -> None:
-        if not self.free_speak_mode:
-            return
-        transcript = self.transcript_txt.toPlainText().strip()
-        # Ensure we have a file path to save; if none, write it now
-        if self.current_audio_path is None:
-            base = datetime.now().strftime("%Y%m%d_%H%M%S")
-            os.makedirs("recordings", exist_ok=True)
-            try:
-                flac_path = os.path.join("recordings", base + ".flac")
-                sf.write(
-                    flac_path,
-                    (self.audio_data or np.zeros(0, dtype=np.float32)).astype(np.float32),
-                    self.sr,
-                    format="FLAC",
-                    subtype="PCM_16",
-                )
-                self.current_audio_path = flac_path
-            except Exception:
-                # Fallback to WAV
-                try:
-                    wav_path = os.path.join("recordings", base + ".wav")
-                    sf.write(
-                        wav_path,
-                        (self.audio_data or np.zeros(0, dtype=np.float32)).astype(np.float32),
-                        self.sr,
-                        format="WAV",
-                        subtype="PCM_16",
-                    )
-                    self.current_audio_path = wav_path
-                except Exception as e:
-                    self.metrics_label.setText(f"Could not save recording file: {e}")
-                    return
-        try:
-            segments_json = None
-            if self.transcript_segments is not None and self.transcript_segment_ranges:
-                try:
-                    segments_json = json.dumps(self.transcript_segments)
-                except Exception:
-                    segments_json = None
-            sess = db.add_session(
-                self.db,
-                "Free Speak",
-                "",
-                self.current_audio_path,
-                transcript=transcript if transcript else None,
-                wer=None,
-                clarity=None,
-                score=None,
-                segments_json=segments_json,
-            )
-            self.current_session_id = sess.id
-            label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
-            it = QListWidgetItem(label)
-            it.setData(QtCore.Qt.UserRole, sess.id)
-            if self.history_list.count() == 1 and not isinstance(
-                self.history_list.item(0).data(QtCore.Qt.UserRole), int
-            ):
-                self.history_list.takeItem(0)
-            self.history_list.addItem(it)
-            self.metrics_label.setText("Saved Free Speak session")
-            # keep in Free Speak mode, allow further recordings
-        except Exception as e:
-            self.metrics_label.setText(f"Could not save Free Speak session: {e}")
+        save_free_speak_session(self)
 
     def _on_toggle_free_mode(self, checked: bool) -> None:
-        self.free_speak_mode = bool(checked)
-        if self.free_speak_mode:
-            # Switch UI cues
-            try:
-                self.act_free_mode.setText("Script Mode")
-                self.act_free_mode.setStatusTip("Switch back to scripted practice")
-            except Exception:
-                pass
-            self.btn_score.setText("Transcribe")
-            self.btn_save.setVisible(True)
-            self.btn_save.setEnabled(False)
-            self.metrics_label.setText("Free Speak: not scoring")
-            self.script_txt.setText("Free Speak Mode — Talk, then Transcribe.")
-            # clear any pending session id to avoid unintended updates
-            self.current_session_id = None
-        else:
-            try:
-                self.act_free_mode.setText("Free Speak Mode")
-                self.act_free_mode.setStatusTip("Transcribe without scoring or auto-saving")
-            except Exception:
-                pass
-            self.btn_score.setText("Score")
-            self.btn_save.setVisible(False)
-            # return to normal script flow
-            self.load_next_script()
+        on_toggle_free_mode(self, checked)
 
     # ----------------------- axis helper ----------------------------------
 
@@ -1075,41 +802,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     # --------------------------- settings ----------------------------------
 
     def _default_settings(self) -> dict:
-        return {
-            "device": "auto",   # auto | cpu | gpu
-            "model_name": os.getenv("WHISPER_MODEL", "base.en"),
-            "preset": "balanced_cpu",  # fast_cpu | balanced_cpu | balanced_gpu | accurate_gpu
-            "language": "en",
-            "timestamps": False,
-            "beam_size": 1,
-            "temperature": 0.0,
-            # advanced decoding controls
-            "no_speech_threshold": 0.45,              # lower than default 0.6 to reduce missed quiet speech
-            "condition_on_previous_text": True,        # improve continuity on longer audio
-        }
+        return default_settings()
 
     def _settings_path(self) -> str:
-        return os.path.abspath("settings.json")
+        return settings_path()
 
     def _load_settings(self) -> None:
-        import json
-        self.settings = self._default_settings()
-        try:
-            if os.path.exists(self._settings_path()):
-                with open(self._settings_path(), "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                    if isinstance(data, dict):
-                        self.settings.update(data)
-        except Exception:
-            pass
+        self.settings = load_settings(self._default_settings(), self._settings_path())
 
     def _save_settings(self) -> None:
-        import json
-        try:
-            with open(self._settings_path(), "w", encoding="utf-8") as fh:
-                json.dump(self.settings, fh, indent=2)
-        except Exception:
-            pass
+        save_settings(self.settings, self._settings_path())
 
     def _detect_gpu(self) -> tuple[bool, str]:
         try:
@@ -1124,194 +826,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         return False, "No CUDA GPU detected"
 
     def _open_settings(self) -> None:
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Settings")
-        form = QFormLayout(dlg)
+        open_settings_dialog(self)
 
-        # Device
-        device_cb = QComboBox(dlg)
-        device_cb.addItems(["auto", "cpu", "gpu"])
-        device_cb.setCurrentText(self.settings.get("device", "auto"))
-        form.addRow("Device", device_cb)
 
-        # Model name with descriptive labels
-        model_cb = QComboBox(dlg)
-        model_choices = [
-            ("tiny.en",   "fastest, lowest accuracy, minimal RAM"),
-            ("base.en",   "fast, decent accuracy, low RAM"),
-            ("small.en",  "balanced speed/accuracy, moderate RAM"),
-            ("medium.en", "slower, higher accuracy, higher RAM"),
-            ("tiny",      "multilingual tiny; fast but lowest accuracy"),
-            ("base",      "multilingual base; low RAM, decent accuracy"),
-            ("small",     "multilingual small; balanced option"),
-            ("medium",    "multilingual medium; slower, more accurate"),
-        ]
-        for key, desc in model_choices:
-            model_cb.addItem(f"{key} ({desc})", userData=key)
-        # Select saved model by userData
-        saved_model = self.settings.get("model_name", "base.en")
-        found_index = -1
-        for i in range(model_cb.count()):
-            if model_cb.itemData(i) == saved_model:
-                found_index = i
-                break
-        if found_index >= 0:
-            model_cb.setCurrentIndex(found_index)
-        else:
-            model_cb.setCurrentIndex(1)  # default to base.en
-        form.addRow("Model", model_cb)
-
-        # Preset
-        preset_cb = QComboBox(dlg)
-        preset_cb.addItems(["---", "fast_cpu", "balanced_cpu", "balanced_gpu", "accurate_gpu"])
-        preset_cb.setCurrentText(self.settings.get("preset", "balanced_cpu"))
-        form.addRow("Preset", preset_cb)
-
-        # Beam size
-        beam_sb = QSpinBox(dlg)
-        beam_sb.setRange(1, 10)
-        beam_sb.setValue(int(self.settings.get("beam_size", 1)))
-        form.addRow("Beam size", beam_sb)
-
-        # Temperature
-        temp_sb = QDoubleSpinBox(dlg)
-        temp_sb.setRange(0.0, 1.0)
-        temp_sb.setSingleStep(0.1)
-        temp_sb.setDecimals(2)
-        temp_sb.setValue(float(self.settings.get("temperature", 0.0)))
-        form.addRow("Temperature", temp_sb)
-
-        # When a preset is selected, reflect forced values in the UI controls
-        def _apply_preset_visual(preset_text: str) -> None:
-            # Enable by default; disable when a preset is active
-            force = preset_text != "---"
-            if preset_text == "fast_cpu":
-                beam_sb.setValue(1)
-                temp_sb.setValue(0.0)
-            elif preset_text == "balanced_cpu":
-                beam_sb.setValue(2)
-                temp_sb.setValue(0.0)
-            elif preset_text == "balanced_gpu":
-                beam_sb.setValue(3)
-                temp_sb.setValue(0.0)
-            elif preset_text == "accurate_gpu":
-                beam_sb.setValue(5)
-                temp_sb.setValue(0.0)
-            # Only disable when a preset (not ---) is chosen
-            beam_sb.setEnabled(not force)
-            temp_sb.setEnabled(not force)
-
-        # Condition on previous text
-        cot_ck = QCheckBox("Use previous text context for continuity", dlg)
-        cot_ck.setChecked(bool(self.settings.get("condition_on_previous_text", True)))
-        form.addRow("Conditioning", cot_ck)
-
-        # Timestamps
-        ts_ck = QCheckBox("Generate timestamps", dlg)
-        ts_ck.setChecked(bool(self.settings.get("timestamps", False)))
-        form.addRow("Timestamps", ts_ck)
-
-        # No-speech threshold
-        ns_sb = QDoubleSpinBox(dlg)
-        ns_sb.setRange(0.0, 1.0)
-        ns_sb.setSingleStep(0.05)
-        ns_sb.setDecimals(2)
-        ns_sb.setValue(float(self.settings.get("no_speech_threshold", 0.45)))
-        form.addRow("No-speech threshold", ns_sb)
-
-        # Language
-        lang_cb = QComboBox(dlg)
-        lang_cb.addItems(["auto", "en"])  # can be extended
-        lang_cb.setCurrentText(self.settings.get("language", "en"))
-        form.addRow("Language", lang_cb)
-
-        # GPU detection / recommendation
-        gpu_label = QLabel("")
-        has_gpu, summary = self._detect_gpu()
-        recommendation = "Use GPU presets (balanced_gpu)." if has_gpu else "Use CPU presets (fast/balanced_cpu)."
-        gpu_label.setText(f"Detected: {summary}\nRecommendation: {recommendation}")
-        form.addRow("Hardware", gpu_label)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dlg)
-        form.addRow(buttons)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-
-        # Hook up preset change to update beam/temperature controls live
-        preset_cb.currentTextChanged.connect(_apply_preset_visual)
-        # Also apply once on open so the dialog accurately reflects forced behavior
-        _apply_preset_visual(preset_cb.currentText())
-
-        if dlg.exec_() == QDialog.Accepted:
-            self.settings["device"] = device_cb.currentText()
-            # Save underlying model id, not the descriptive label
-            selected_model = model_cb.currentData()
-            self.settings["model_name"] = selected_model if selected_model else model_cb.currentText().split(" ")[0]
-            self.settings["preset"] = preset_cb.currentText()
-            self.settings["beam_size"] = int(beam_sb.value())
-            self.settings["temperature"] = float(temp_sb.value())
-            self.settings["condition_on_previous_text"] = bool(cot_ck.isChecked())
-            self.settings["timestamps"] = bool(ts_ck.isChecked())
-            self.settings["no_speech_threshold"] = float(ns_sb.value())
-            self.settings["language"] = lang_cb.currentText()
-            # Reset model so it will be recreated with new settings
-            self.model = None
-            self._save_settings()
-
-    def _whisper_options(self, free_speak: bool = False) -> dict:
-        # Base options
-        language = None if self.settings.get("language") == "auto" else self.settings.get("language", "en")
-        without_ts = not bool(self.settings.get("timestamps", False))
-        beam_size = int(self.settings.get("beam_size", 1))
-        temperature = float(self.settings.get("temperature", 0.0))
-
-        opts = dict(
-            language=language,
-            task="transcribe",
-            temperature=temperature,
-            beam_size=beam_size,
-            without_timestamps=without_ts,
-            condition_on_previous_text=bool(
-                self.settings.get("condition_on_previous_text", True)
-            ),
-            compression_ratio_threshold=2.4,
-            logprob_threshold=-1.0,
-            no_speech_threshold=float(
-                self.settings.get("no_speech_threshold", 0.45)
-            ),
-        )
-
-        # Device/precision hints: whisper python uses internal detection; we control fp16
-        preset = self.settings.get("preset")
-        device = self.settings.get("device")
-        use_fp16 = False
-        if device == "gpu":
-            use_fp16 = True
-        elif device == "auto":
-            try:
-                import torch
-                use_fp16 = torch.cuda.is_available()
-            except Exception:
-                use_fp16 = False
-        opts["fp16"] = bool(use_fp16)
-
-        if preset == "fast_cpu":
-            # Force fast decode
-            opts.update(dict(beam_size=1, temperature=0.0))
-        elif preset == "balanced_cpu":
-            # Force balanced CPU settings
-            opts.update(dict(beam_size=2, temperature=0.0))
-        elif preset == "balanced_gpu":
-            # Force balanced GPU settings
-            opts.update(dict(beam_size=3, temperature=0.0, fp16=True))
-        elif preset == "accurate_gpu":
-            # Force higher accuracy on GPU
-            opts.update(dict(beam_size=5, temperature=0.0, fp16=True))
-        elif preset == "---":
-            # No preset: keep manual beam_size and temperature as-is
-            pass
-
-        return opts
 
 
 # ────────────────────────────── main ///////////////////////////////////////

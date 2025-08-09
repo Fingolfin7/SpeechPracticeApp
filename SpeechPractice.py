@@ -1,7 +1,7 @@
 # speech_practice.py
 # prettier-ignore
 from __future__ import annotations
-
+import math
 import os
 import sys
 from datetime import datetime
@@ -764,15 +764,39 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _on_toggle_free_mode(self, checked: bool) -> None:
         on_toggle_free_mode(self, checked)
 
-    # ----------------------- axis helper ----------------------------------
+    # ----------------------- axis helpers ----------------------------------
+
+    @staticmethod
+    def _nice_step(raw: float) -> float:
+        if raw <= 0:
+            return 1.0
+        exponent = math.floor(math.log10(raw))
+        fraction = raw / (10 ** exponent)
+        if fraction <= 1:
+            nice_fraction = 1
+        elif fraction <= 2:
+            nice_fraction = 2
+        elif fraction <= 5:
+            nice_fraction = 5
+        else:
+            nice_fraction = 10
+        return nice_fraction * (10 ** exponent)
 
     def _update_time_axis(self, n_samples: int) -> None:
         dur = n_samples / self.sr if n_samples else 15
-        step = 1.0 if dur <= 60 else 5.0
-        ticks = [(t, f"{int(t)}") for t in np.arange(0, dur + 0.1, step)]
+        if dur <= 30:
+            step = 1.0
+        else:
+            # target max 10 ticks on the axis
+            raw_step = dur / 10
+            step = self._nice_step(raw_step)
+        if dur > 30:
+            ticks = [(t, f"{int(t // 60)}:{int(t % 60):02d}") for t in
+                     np.arange(0, dur + 0.1, step)]
+        else:
+            ticks = [(t, f"{int(t)}") for t in np.arange(0, dur + 0.1, step)]
         self.top_axis.setTicks([ticks, []])
         self.plot.setLimits(xMin=0, xMax=max(1, dur))
-
     
 
     # ----------------------- load session ---------------------------------

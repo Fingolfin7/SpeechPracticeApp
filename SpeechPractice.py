@@ -66,6 +66,7 @@ from free_speak import (
     transcribe_free,
     save_free_speak_session,
 )
+from progress_tracker import open_progress_tracker
 import json
 
 
@@ -176,6 +177,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.act_free_mode.setStatusTip("Transcribe without scoring or auto-saving")
         self.act_free_mode.toggled.connect(lambda checked: on_toggle_free_mode(self, checked))
         mb.addAction(self.act_free_mode)
+        # Progress Tracker action
+        act_progress = mb.addAction("Progress Tracker")
+        act_progress.triggered.connect(self._open_progress_tracker)
         # Settings dialog action
         act_settings = mb.addAction("Settings")
         act_settings.triggered.connect(self._open_settings)
@@ -872,6 +876,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             pass
         return False, "No CUDA GPU detected"
 
+    def _open_progress_tracker(self) -> None:
+        """Open the progress tracker dialog."""
+        open_progress_tracker(self)
+    
     def _open_settings(self) -> None:
         open_settings_dialog(self)
 

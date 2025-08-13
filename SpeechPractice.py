@@ -614,7 +614,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     score=None,
                 )
                 self.current_session_id = sess.id
-                label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+                formatted_timestamp = datetime.strptime(sess.timestamp, "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y %H:%M")
+                label = f"{formatted_timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
                 # remove placeholder if present
@@ -643,7 +644,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                         score=0.0,
                     )
                     self.current_session_id = sess.id
-                    label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+                    formatted_timestamp = datetime.strptime(sess.timestamp, "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y %H:%M")
+                    label = f"{formatted_timestamp} — {sess.script_name}"
                     it = QListWidgetItem(label)
                     it.setData(QtCore.Qt.UserRole, sess.id)
                     if self.history_list.count() == 1 and not isinstance(

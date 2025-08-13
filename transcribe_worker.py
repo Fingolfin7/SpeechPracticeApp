@@ -6,16 +6,8 @@ import numpy as np
 from PyQt5 import QtCore
 from jiwer import wer
 import math
+import re
 
-
-def _scale_score(clarity: float) -> float:
-    # in `transcribe_worker.py`, replace the existing score calculation with:
-
-    # Clamp clarity between 0 and 1
-    clarity = max(0.0, min(clarity, 1.0))
-    # Sigmoid centered at 0.75, steepness 20
-    score = 1 + 4 / (1 + math.exp(-20 * (clarity - 0.75)))
-    return min(5, max(1, score))
 
 
 class TranscribeWorker(QtCore.QThread):
@@ -40,17 +32,36 @@ class TranscribeWorker(QtCore.QThread):
     ):
         super().__init__(parent)
         self._model = model
-        self._ref = ref_text
+        self._ref = self.clean_text(ref_text)
         self._audio_path = audio_path
         self._options = options or {}
 
+    @staticmethod
+    def _scale_score(clarity: float) -> float:
+        # in `transcribe_worker.py`, replace the existing score calculation with:
+
+        # Clamp clarity between 0 and 1
+        clarity = max(0.0, min(clarity, 1.0))
+        # Sigmoid centered at 0.80, steepness 20
+        score = 1 + 4 / (1 + math.exp(-20 * (clarity - 0.80)))
+        return min(5, max(1, score))
+
+    @staticmethod
+    def clean_text(text: str) -> str:
+        text = text.lower().strip()
+        # Normalize whitespace (newlines, multiple spaces)
+        text = re.sub(r'\s+', ' ', text)
+        # remove punctuation
+        text = re.sub(r'[^\w\s]', '', text)
+        return text
+
     def run(self) -> None:
         result = self._model.transcribe(self._audio_path, **self._options)
-        hyp = str(result["text"]).strip().lower()
-        err = wer(self._ref, hyp)
+        hyp = self.clean_text(result["text"])
+        err = wer(reference=self._ref, hypothesis=hyp)
         clar = 1.0 - err
 
-        score = _scale_score(clar)
+        score = self._scale_score(clar)
 
         # If timestamps were requested, Whisper returns segments with start/end
         segments = result.get("segments") if isinstance(result, dict) else None

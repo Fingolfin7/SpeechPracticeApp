@@ -1,9 +1,9 @@
+from __future__ import annotations
+
 import os
 from datetime import datetime
 
-from sqlalchemy import (
-    create_engine, Column, Integer, String, Float, Text
-)
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -12,18 +12,25 @@ Base = declarative_base()
 
 class PracticeSession(Base):
     __tablename__ = "sessions"
-    id          = Column(Integer, primary_key=True)
-    timestamp   = Column(String,  nullable=False)
-    script_name = Column(String,  nullable=False)
-    script_text = Column(String,  nullable=False)
-    audio_path  = Column(String,  nullable=False)
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(String, nullable=False)
+    script_name = Column(String, nullable=False)
+    script_text = Column(String, nullable=False)
+    audio_path = Column(String, nullable=False)
     # Allow empty values until scoring is run
-    transcript  = Column(String,  nullable=True)
-    wer         = Column(Float,   nullable=True)
-    clarity     = Column(Float,   nullable=True)
-    score       = Column(Float,   nullable=True)
+    transcript = Column(String, nullable=True)
+    wer = Column(Float, nullable=True)
+    clarity = Column(Float, nullable=True)
+    score = Column(Float, nullable=True)
     # JSON string of Whisper segments (optional)
-    segments    = Column(Text,    nullable=True)
+    segments = Column(Text, nullable=True)
+    # New metrics
+    cer = Column(Float, nullable=True)
+    artic_rate = Column(Float, nullable=True)  # words/minute (speech time)
+    pause_ratio = Column(Float, nullable=True)  # fraction of total time
+    filled_pauses = Column(Float, nullable=True)  # count (float for simplicity)
+    avg_conf = Column(Float, nullable=True)  # 0..1 normalized from avg_logprob
 
 
 def get_engine(db_path: str = "sessions.db"):
@@ -35,14 +42,26 @@ def init_db(engine=None):
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
-    # Lightweight migration: add 'segments' column if missing (SQLite)
+    # Lightweight migration: add columns if missing (SQLite)
     try:
-        # Use a transaction and driver SQL for compatibility with SQLAlchemy 1.4/2.0
         with engine.begin() as conn:
-            cols = conn.exec_driver_sql("PRAGMA table_info(sessions)").fetchall()
+            cols = conn.exec_driver_sql(
+                "PRAGMA table_info(sessions)"
+            ).fetchall()
             names = {row[1] for row in cols}  # row[1] is the column name
-            if "segments" not in names:
-                conn.exec_driver_sql("ALTER TABLE sessions ADD COLUMN segments TEXT")
+
+            def add_col(name: str, ddl: str) -> None:
+                if name not in names:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE sessions ADD COLUMN {name} {ddl}"
+                    )
+
+            add_col("segments", "TEXT")
+            add_col("cer", "FLOAT")
+            add_col("artic_rate", "FLOAT")
+            add_col("pause_ratio", "FLOAT")
+            add_col("filled_pauses", "FLOAT")
+            add_col("avg_conf", "FLOAT")
     except Exception:
         # best-effort; ignore if migration not applicable
         pass
@@ -55,7 +74,11 @@ def get_session(db_path: str = "sessions.db"):
 
 
 def get_all_sessions(db):
-    return db.query(PracticeSession).order_by(PracticeSession.timestamp.desc()).all()
+    return (
+        db.query(PracticeSession)
+        .order_by(PracticeSession.timestamp.desc())
+        .all()
+    )
 
 
 def get_session_by_id(db, sess_id: int):
@@ -72,6 +95,11 @@ def add_session(
     clarity: float | None = None,
     score: float | None = None,
     segments_json: str | None = None,
+    cer: float | None = None,
+    artic_rate: float | None = None,
+    pause_ratio: float | None = None,
+    filled_pauses: float | None = None,
+    avg_conf: float | None = None,
 ):
     ts = datetime.now().isoformat(timespec="seconds")
     sess = PracticeSession(
@@ -84,6 +112,11 @@ def add_session(
         clarity=clarity,
         score=score,
         segments=segments_json,
+        cer=cer,
+        artic_rate=artic_rate,
+        pause_ratio=pause_ratio,
+        filled_pauses=filled_pauses,
+        avg_conf=avg_conf,
     )
     db.add(sess)
     db.commit()
@@ -99,6 +132,11 @@ def update_session_scores(
     clarity: float,
     score: float,
     segments_json: str | None = None,
+    cer: float | None = None,
+    artic_rate: float | None = None,
+    pause_ratio: float | None = None,
+    filled_pauses: float | None = None,
+    avg_conf: float | None = None,
 ):
     sess = db.query(PracticeSession).get(sess_id)
     if not sess:
@@ -109,6 +147,16 @@ def update_session_scores(
     sess.score = score
     if segments_json is not None:
         sess.segments = segments_json
+    if cer is not None:
+        sess.cer = cer
+    if artic_rate is not None:
+        sess.artic_rate = artic_rate
+    if pause_ratio is not None:
+        sess.pause_ratio = pause_ratio
+    if filled_pauses is not None:
+        sess.filled_pauses = filled_pauses
+    if avg_conf is not None:
+        sess.avg_conf = avg_conf
     db.commit()
     db.refresh(sess)
     return sess
@@ -118,11 +166,14 @@ def delete_session(db, sess_id: int):
     sess = db.query(PracticeSession).get(sess_id)
     if not sess:
         return
-    # delete WAV file if no other session references it
-    exists = db.query(PracticeSession).filter(
-        PracticeSession.audio_path == sess.audio_path,
-        PracticeSession.id != sess.id
-    ).first()
+    exists = (
+        db.query(PracticeSession)
+        .filter(
+            PracticeSession.audio_path == sess.audio_path,
+            PracticeSession.id != sess.id,
+        )
+        .first()
+    )
     if not exists:
         try:
             os.remove(sess.audio_path)

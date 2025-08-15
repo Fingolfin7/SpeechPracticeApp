@@ -81,26 +81,28 @@ def load_audio_file(file_path: str) -> tuple[np.ndarray, int]:
     Returns (audio_data, sample_rate) as float32 mono.
     """
     file_ext = os.path.splitext(file_path)[1].lower()
-    
+
     # Try direct soundfile loading first (for WAV, FLAC, OGG, etc.)
     try:
         return sf.read(file_path, dtype="float32")
     except Exception as e:
         # If soundfile fails and it's a format that needs pydub conversion
-        if file_ext in ['.m4a', '.aac', '.mp3', '.wma', '.mp4', '.mov']:
+        if file_ext in [".m4a", ".aac", ".mp3", ".wma", ".mp4", ".mov"]:
             try:
                 # Load with pydub and convert to temporary WAV for soundfile
                 audio_segment = AudioSegment.from_file(file_path)
-                
+
                 # Convert to mono and get raw audio data
                 if audio_segment.channels > 1:
                     audio_segment = audio_segment.set_channels(1)
-                
+
                 # Create temporary WAV file
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                with tempfile.NamedTemporaryFile(
+                    suffix=".wav", delete=False
+                ) as temp_file:
                     temp_wav_path = temp_file.name
                     audio_segment.export(temp_wav_path, format="wav")
-                
+
                 try:
                     # Load the temporary WAV file with soundfile
                     data, sr = sf.read(temp_wav_path, dtype="float32")
@@ -111,9 +113,12 @@ def load_audio_file(file_path: str) -> tuple[np.ndarray, int]:
                         os.unlink(temp_wav_path)
                     except:
                         pass
-                        
+
             except Exception as pydub_error:
-                raise Exception(f"Failed to load audio file {file_path}. Soundfile error: {e}. Pydub error: {pydub_error}")
+                raise Exception(
+                    f"Failed to load audio file {file_path}. "
+                    f"Soundfile error: {e}. Pydub error: {pydub_error}"
+                )
         else:
             # Re-raise original soundfile error for other formats
             raise e
@@ -151,7 +156,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.last_transcript_text: str = ""
         # transcript timestamp sync state
         self.transcript_segments: list[dict] | None = None
-        self.transcript_segment_ranges: list[tuple[int, int, float, float]] = []  # (start_char, end_char, t0, t1)
+        self.transcript_segment_ranges: list[
+            tuple[int, int, float, float]
+        ] = []  # (start_char, end_char, t0, t1)
         self.transcript_active_index: int = -1
 
         self._build_ui()
@@ -174,8 +181,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         act_next.triggered.connect(self.load_next_script)
         # Free Speak mode toggle directly on the menubar
         self.act_free_mode = QAction("Free Speak Mode", self, checkable=True)
-        self.act_free_mode.setStatusTip("Transcribe without scoring or auto-saving")
-        self.act_free_mode.toggled.connect(lambda checked: on_toggle_free_mode(self, checked))
+        self.act_free_mode.setStatusTip(
+            "Transcribe without scoring or auto-saving"
+        )
+        self.act_free_mode.toggled.connect(
+            lambda checked: on_toggle_free_mode(self, checked)
+        )
         mb.addAction(self.act_free_mode)
         # Progress Tracker action
         act_progress = mb.addAction("Progress Tracker")
@@ -192,7 +203,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         hl = QVBoxLayout(hist_w)
         hl.addWidget(QLabel("Session History"))
         self.history_list = QtWidgets.QListWidget()
-        self.history_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.history_list.setContextMenuPolicy(
+            QtCore.Qt.CustomContextMenu
+        )
         self.history_list.customContextMenuRequested.connect(
             self._history_context_menu
         )
@@ -293,8 +306,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.btn_record.clicked.connect(self._toggle_record)
         self.btn_play.clicked.connect(self._toggle_play_pause)
-        self.btn_score.clicked.connect(self.transcription_service.transcribe_and_score)
-        self.btn_save.clicked.connect(lambda: save_free_speak_session(self))
+        self.btn_score.clicked.connect(
+            self.transcription_service.transcribe_and_score
+        )
+        self.btn_save.clicked.connect(
+            lambda: save_free_speak_session(self)
+        )
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
 
         for b in (self.btn_record, self.btn_play, self.btn_score, self.btn_save):
@@ -305,9 +322,14 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         rl.addWidget(transport, alignment=QtCore.Qt.AlignHCenter)
 
         # metrics label ----------------------------------------------------
-        self.metrics_label = QLabel("Score: –, WER: –, Clarity: –")
-        self.metrics_label.setTextInteractionFlags( # enable copy-paste
-            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+        self.metrics_label = QLabel(
+            "Score: –, WER: –, CER: –, Clarity: – | "
+            "Rate: – wpm | Pauses: – | Conf: –"
+        )
+        self.metrics_label.setTextInteractionFlags(
+            # enable copy-paste
+            QtCore.Qt.TextSelectableByMouse
+            | QtCore.Qt.TextSelectableByKeyboard
         )
         f = self.metrics_label.font()
         f.setPointSize(f.pointSize() + 2)
@@ -335,12 +357,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             pass
         self.player = new_player
 
-    
-
     # -------------------------- input hooks ------------------------------
     def keyPressEvent(self, ev: QtGui.QKeyEvent) -> None:
         # Spacebar toggles play/pause when not typing in a text box
-        if ev.key() == QtCore.Qt.Key_Space and not (self.script_txt.hasFocus() or self.transcript_txt.hasFocus()):
+        if ev.key() == QtCore.Qt.Key_Space and not (
+            self.script_txt.hasFocus() or self.transcript_txt.hasFocus()
+        ):
             self._toggle_play_pause()
             ev.accept()
             return
@@ -387,7 +409,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 return
             if sys.platform.startswith("win"):
                 # Use Explorer to select the file
-                subprocess.run(["explorer", "/select,", path.replace("/", "\\")])
+                subprocess.run(
+                    ["explorer", "/select,", path.replace("/", "\\")]
+                )
             elif sys.platform == "darwin":
                 subprocess.run(["open", "-R", path])
             else:
@@ -417,7 +441,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         for fname in os.listdir(rec_dir):
             fpath = os.path.abspath(os.path.join(rec_dir, fname))
             # Only consider typical audio files
-            if not fname.lower().endswith((".flac", ".wav", ".mp3", ".ogg", ".m4a", ".aac", ".wma")):
+            if not fname.lower().endswith(
+                (".flac", ".wav", ".mp3", ".ogg", ".m4a", ".aac", ".wma")
+            ):
                 continue
             if fpath not in referenced:
                 try:
@@ -440,7 +466,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.history_list.addItem("No sessions yet")
         else:
             for sess in sessions:
-                formatted_timestamp = datetime.strptime(sess.timestamp, "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y %H:%M")
+                formatted_timestamp = datetime.strptime(
+                    sess.timestamp, "%Y-%m-%dT%H:%M:%S"
+                ).strftime("%d %b %Y %H:%M")
                 label = f"{formatted_timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
@@ -471,7 +499,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.playhead.setPos(0)
         self._update_time_axis(0)
 
-        self.metrics_label.setText("Score: –, WER: –, Clarity: –")
+        self.metrics_label.setText(
+            "Score: –, WER: –, CER: –, Clarity: – | "
+            "Rate: – wpm | Pauses: – | Conf: –"
+        )
         self.transcript_txt.clear()
         try:
             self.transcript_txt.setExtraSelections([])
@@ -597,7 +628,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_save.setEnabled(False)
             self.metrics_label.setText("Free Speak: ready to transcribe")
             # Auto-start transcription for convenience
-            QtCore.QTimer.singleShot(100, self.transcription_service.transcribe_free)
+            QtCore.QTimer.singleShot(
+                100, self.transcription_service.transcribe_free
+            )
             return
 
         if not self.free_speak_mode:
@@ -614,7 +647,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     score=None,
                 )
                 self.current_session_id = sess.id
-                formatted_timestamp = datetime.strptime(sess.timestamp, "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y %H:%M")
+                formatted_timestamp = datetime.strptime(
+                    sess.timestamp, "%Y-%m-%dT%H:%M:%S"
+                ).strftime("%d %b %Y %H:%M")
                 label = f"{formatted_timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
@@ -624,7 +659,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 ):
                     self.history_list.takeItem(0)
                 self.history_list.addItem(it)
-                self.metrics_label.setText("Saved session; scores pending. Run Score when ready.")
+                self.metrics_label.setText(
+                    "Saved session; scores pending. Run Score when ready."
+                )
             except Exception as e:
                 # Fallback for legacy DBs with NOT NULL constraints: store placeholders
                 try:
@@ -644,7 +681,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                         score=0.0,
                     )
                     self.current_session_id = sess.id
-                    formatted_timestamp = datetime.strptime(sess.timestamp, "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y %H:%M")
+                    formatted_timestamp = datetime.strptime(
+                        sess.timestamp, "%Y-%m-%dT%H:%M:%S"
+                    ).strftime("%d %b %Y %H:%M")
                     label = f"{formatted_timestamp} — {sess.script_name}"
                     it = QListWidgetItem(label)
                     it.setData(QtCore.Qt.UserRole, sess.id)
@@ -653,7 +692,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     ):
                         self.history_list.takeItem(0)
                     self.history_list.addItem(it)
-                    self.metrics_label.setText("Saved session (legacy DB); scores pending.")
+                    self.metrics_label.setText(
+                        "Saved session (legacy DB); scores pending."
+                    )
                 except Exception as e2:
                     # Surface the specific error for troubleshooting
                     self.metrics_label.setText(
@@ -664,7 +705,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                         print("DB save error (fallback):", repr(e2))
                     except Exception:
                         pass
-    
 
     def _update_waveform(self) -> None:
         if not self.audio_buffer:
@@ -701,9 +741,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_play.setIcon(self.ic_play)
             return
         start = (
-            self.player.idx
-            if 0 <= self.player.idx < self.audio_data.size
-            else 0
+            self.player.idx if 0 <= self.player.idx < self.audio_data.size else 0
         )
         self.player.set_data(self.audio_data)
         self.player.play(start)
@@ -711,10 +749,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_play.setIcon(self.ic_pause)
 
     def _vb_click_event(self, ev) -> None:
-        if (
-            ev.button() != QtCore.Qt.LeftButton
-            or self.audio_data is None
-        ):
+        if ev.button() != QtCore.Qt.LeftButton or self.audio_data is None:
             ev.ignore()
             return
         pos = ev.scenePos()
@@ -736,7 +771,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_play.setIcon(self.ic_play)
             # auto-rewind to start visually when finished
             try:
-                if self.audio_data is not None and self.player.idx >= self.audio_data.size:
+                if (
+                    self.audio_data is not None
+                    and self.player.idx >= self.audio_data.size
+                ):
                     self.playhead.setPos(0)
             except Exception:
                 pass
@@ -747,11 +785,13 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         try:
             if self.transcript_segment_ranges:
                 try:
-                    self.transcript_active_index = highlight_transcript_at_time(
-                        self.transcript_txt,
-                        self.transcript_segment_ranges,
-                        cur_t,
-                        self.transcript_active_index,
+                    self.transcript_active_index = (
+                        highlight_transcript_at_time(
+                            self.transcript_txt,
+                            self.transcript_segment_ranges,
+                            cur_t,
+                            self.transcript_active_index,
+                        )
                     )
                 except Exception:
                     pass
@@ -793,13 +833,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             raw_step = dur / 10
             step = self._nice_step(raw_step)
         if dur > 30:
-            ticks = [(t, f"{int(t // 60)}:{int(t % 60):02d}") for t in
-                     np.arange(0, dur + 0.1, step)]
+            ticks = [
+                (t, f"{int(t // 60)}:{int(t % 60):02d}")
+                for t in np.arange(0, dur + 0.1, step)
+            ]
         else:
-            ticks = [(t, f"{int(t)}") for t in np.arange(0, dur + 0.1, step)]
+            ticks = [
+                (t, f"{int(t)}") for t in np.arange(0, dur + 0.1, step)
+            ]
         self.top_axis.setTicks([ticks, []])
         self.plot.setLimits(xMin=0, xMax=max(1, dur))
-    
 
     # ----------------------- load session ---------------------------------
 
@@ -818,16 +861,56 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Handle sessions that may not yet have scores/transcript
         no_scores = (sess.transcript is None) or (sess.transcript == "")
         score_txt = (
-            f"{sess.score:.2f}" if (sess.score is not None and not no_scores) else "–"
+            f"{sess.score:.2f}"
+            if (sess.score is not None and not no_scores)
+            else "–"
         )
         wer_txt = (
-            f"{sess.wer:.2%}" if (sess.wer is not None and not no_scores) else "–"
+            f"{sess.wer:.2%}"
+            if (sess.wer is not None and not no_scores)
+            else "–"
+        )
+        cer_txt = (
+            f"{sess.cer:.2%}"
+            if (
+                getattr(sess, "cer", None) is not None and not no_scores
+            )
+            else "–"
         )
         clar_txt = (
-            f"{sess.clarity:.2%}" if (sess.clarity is not None and not no_scores) else "–"
+            f"{sess.clarity:.2%}"
+            if (sess.clarity is not None and not no_scores)
+            else "–"
+        )
+        rate_txt = (
+            f"{sess.artic_rate:.0f} wpm"
+            if (
+                getattr(sess, "artic_rate", None) is not None
+                and not no_scores
+            )
+            else "–"
+        )
+        pause_txt = (
+            f"{sess.pause_ratio:.0%}"
+            if (
+                getattr(sess, "pause_ratio", None) is not None
+                and not no_scores
+            )
+            else "–"
+        )
+        conf_txt = (
+            f"{sess.avg_conf:.0%}"
+            if (
+                getattr(sess, "avg_conf", None) is not None
+                and not no_scores
+            )
+            else "–"
         )
         self.metrics_label.setText(
-            f"Score: {score_txt}/5 | WER: {wer_txt} | Clarity: {clar_txt}"
+            "Score: "
+            f"{score_txt}/5 | WER: {wer_txt} | CER: {cer_txt} | "
+            f"Clarity: {clar_txt} | Rate: {rate_txt} | "
+            f"Pauses: {pause_txt} | Conf: {conf_txt}"
         )
         self.transcript_txt.setText(sess.transcript or "")
         try:
@@ -838,8 +921,14 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         try:
             if getattr(sess, "segments", None):
                 segs_from_db = json.loads(sess.segments)
-                seg_list = list(segs_from_db) if isinstance(segs_from_db, list) else []
-                txt, segs, ranges, active_idx = build_transcript_from_segments(seg_list)
+                seg_list = (
+                    list(segs_from_db)
+                    if isinstance(segs_from_db, list)
+                    else []
+                )
+                txt, segs, ranges, active_idx = build_transcript_from_segments(
+                    seg_list
+                )
                 self.transcript_segments = segs
                 self.transcript_segment_ranges = ranges
                 self.transcript_active_index = -1
@@ -850,7 +939,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.transcript_segment_ranges = []
         self.transcript_active_index = -1
 
-        # Load audio (all formats: WAV/FLAC/OGG/AIFF via soundfile, MP3/M4A/AAC/WMA via pydub) and convert to mono float32 at app samplerate
+        # Load audio (all formats: WAV/FLAC/OGG/AIFF via soundfile, MP3/M4A/AAC/WMA via pydub)
+        # and convert to mono float32 at app samplerate
         data, file_sr = load_audio_file(sess.audio_path)
         if hasattr(data, "ndim") and data.ndim > 1:
             data = data[:, 0]
@@ -885,7 +975,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         return settings_path()
 
     def _load_settings(self) -> None:
-        self.settings = load_settings(self._default_settings(), self._settings_path())
+        self.settings = load_settings(
+            self._default_settings(), self._settings_path()
+        )
 
     def _save_settings(self) -> None:
         save_settings(self.settings, self._settings_path())
@@ -893,11 +985,18 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _detect_gpu(self) -> tuple[bool, str]:
         try:
             import torch
+
             if torch.cuda.is_available():
                 count = torch.cuda.device_count()
                 name = torch.cuda.get_device_name(0)
-                total_vram = int(torch.cuda.get_device_properties(0).total_memory // (1024 ** 2))
-                return True, f"{name} ({total_vram} MB VRAM, {count} device(s))"
+                total_vram = int(
+                    torch.cuda.get_device_properties(0).total_memory
+                    // (1024**2)
+                )
+                return (
+                    True,
+                    f"{name} ({total_vram} MB VRAM, {count} device(s))",
+                )
         except Exception:
             pass
         return False, "No CUDA GPU detected"
@@ -905,11 +1004,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _open_progress_tracker(self) -> None:
         """Open the progress tracker dialog."""
         open_progress_tracker(self)
-    
+
     def _open_settings(self) -> None:
         open_settings_dialog(self)
-
-
 
 
 # ────────────────────────────── main ///////////////////////////////////////
@@ -932,7 +1029,8 @@ def main() -> None:
             win.player.close()
         if hasattr(win, "stream") and win.stream is not None:
             try:
-                win.stream.stop(); win.stream.close()
+                win.stream.stop()
+                win.stream.close()
             except Exception:
                 pass
         try:

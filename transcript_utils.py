@@ -1,17 +1,14 @@
+# transcript_utils.py
 from __future__ import annotations
 
 from typing import List, Tuple
 
 from PyQt5 import QtGui, QtWidgets
 from PyQt5.QtGui import QColor
+from highlight_theme import PLAYHEAD
 
 
 def build_transcript_from_segments(segments_obj: object) -> tuple[str, list, list, int]:
-    """
-    Build transcript text and ranges from Whisper segments.
-    Returns (text, segments_list, ranges, active_index)
-    where ranges are tuples of (start_char, end_char, t0, t1).
-    """
     segments: list = []
     ranges: List[Tuple[int, int, float, float]] = []
     active_index = -1
@@ -44,19 +41,17 @@ def highlight_transcript_at_time(
     active_index: int,
     base_selections: List[QtWidgets.QTextEdit.ExtraSelection] | None = None,
 ) -> int:
-    """
-    Highlight the segment covering time t_seconds; returns new active_index.
-    Preserves base_selections (error highlights) by appending the playhead
-    highlight on top.
-    """
     if not ranges:
+        # still refresh base selections if provided
+        try:
+            edit.setExtraSelections(list(base_selections or []))
+        except Exception:
+            pass
         return -1
     idx = active_index
     if 0 <= idx < len(ranges):
         s_char, e_char, t0, t1 = ranges[idx]
-        if t0 - 0.05 <= t_seconds <= t1 + 0.05:
-            pass
-        else:
+        if not (t0 - 0.05 <= t_seconds <= t1 + 0.05):
             idx = -1
     if idx == -1:
         for i, (_s, _e, t0, t1) in enumerate(ranges):
@@ -64,7 +59,6 @@ def highlight_transcript_at_time(
                 idx = i
                 break
     if idx == -1 or idx == active_index:
-        # still refresh selections to ensure base selections are set
         try:
             edit.setExtraSelections(list(base_selections or []))
         except Exception:
@@ -74,10 +68,7 @@ def highlight_transcript_at_time(
     s_char, e_char, _t0, _t1 = ranges[idx]
     cursor = edit.textCursor()
 
-    # Get the actual text length to avoid out-of-range errors
     text_length = len(edit.toPlainText())
-
-    # Ensure positions are within bounds
     start_pos = max(0, min(int(s_char), text_length))
     end_pos = max(0, min(int(e_char), text_length))
 
@@ -86,7 +77,7 @@ def highlight_transcript_at_time(
     sel = QtWidgets.QTextEdit.ExtraSelection()
     sel.cursor = cursor
     fmt = QtGui.QTextCharFormat()
-    fmt.setBackground(QColor("#3355ff55"))
+    fmt.setBackground(QColor(PLAYHEAD))
     fmt.setProperty(QtGui.QTextFormat.FullWidthSelection, False)
     sel.format = fmt
     try:

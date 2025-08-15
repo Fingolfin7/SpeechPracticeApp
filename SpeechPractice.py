@@ -66,6 +66,7 @@ from free_speak import (
     transcribe_free,
     save_free_speak_session,
 )
+from highlight_theme import legend_html_for_script, legend_html_for_transcript
 from progress_tracker import open_progress_tracker
 from typing import List, Tuple
 import json
@@ -223,6 +224,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         scr_w = QWidget()
         sl = QVBoxLayout(scr_w)
         sl.addWidget(QLabel("Current Script"))
+
+        # Legend for script highlights
+        self.script_legend = QLabel(parent=scr_w)
+        self.script_legend.setWordWrap(True)
+        self.script_legend.setTextFormat(QtCore.Qt.RichText)
+        self.script_legend.setStyleSheet(
+            "color:#9fb0c0; font-size:11px; margin-top:2px; margin-bottom:4px;"
+        )
+        self.script_legend.setText(legend_html_for_script())
+        sl.addWidget(self.script_legend)
         self.script_txt = QTextEdit(readOnly=True)
         sl.addWidget(self.script_txt)
         splitter.addWidget(scr_w)
@@ -346,6 +357,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         # transcript pane --------------------------------------------------
         rl.addWidget(QLabel("Transcript"))
+        # Legend for transcript highlights
+        # Legend for transcript highlights
+        self.transcript_legend = QLabel(parent=right_w)
+        self.transcript_legend.setWordWrap(True)
+        self.transcript_legend.setTextFormat(QtCore.Qt.RichText)
+        self.transcript_legend.setStyleSheet(
+            "color:#9fb0c0; font-size:11px; margin-top:2px; margin-bottom:4px;"
+        )
+        self.transcript_legend.setText(legend_html_for_transcript())
+        rl.addWidget(self.transcript_legend)
         self.transcript_txt = QTextEdit(readOnly=True)
         rl.addWidget(self.transcript_txt)
 

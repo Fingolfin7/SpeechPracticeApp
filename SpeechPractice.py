@@ -166,8 +166,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # persistent error highlights (base layers)
         self.script_error_selections: List[QtWidgets.QTextEdit.ExtraSelection] = []
         self.transcript_error_selections: List[QtWidgets.QTextEdit.ExtraSelection] = []
-
-        # NEW helpers in SpeechPracticeApp
+        self.show_error_highlights: bool = True
 
         self._build_ui()
         # housekeeping: remove any recording files not referenced by the DB
@@ -202,6 +201,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Settings dialog action
         act_settings = mb.addAction("Settings")
         act_settings.triggered.connect(self._open_settings)
+        # Toggle for error highlights
+        self.act_error_hl = QAction("Error Highlights", self, checkable=True)
+        self.act_error_hl.setStatusTip("Toggle word/character error highlights")
+        self.act_error_hl.setChecked(True)
+        self.act_error_hl.toggled.connect(self._toggle_error_highlights)
+        mb.addAction(self.act_error_hl)
 
         splitter = QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -309,6 +314,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.vol_slider.setValue(90)
         self.vol_slider.setFixedWidth(120)
         self.vol_slider.setToolTip("Volume")
+
 
         icon_sz = 28  # <— pick any size you like (px)
 
@@ -423,19 +429,32 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             script_spans: List[Tuple[int, int, str]],
             transcript_spans: List[Tuple[int, int, str]],
     ) -> None:
-        # Build and apply base selections
+        # Build selections (store regardless of toggle so we can re-apply later)
         self.script_error_selections = self._spans_to_selections(
             self.script_txt, script_spans
         )
         self.transcript_error_selections = self._spans_to_selections(
             self.transcript_txt, transcript_spans
         )
+
+        if not self.show_error_highlights:
+            # Respect toggle: clear visuals, keep stored selections
+            try:
+                self.script_txt.setExtraSelections([])
+            except Exception:
+                pass
+            try:
+                self.transcript_txt.setExtraSelections([])
+            except Exception:
+                pass
+            return
+
+        # Apply base selections
         try:
             self.script_txt.setExtraSelections(self.script_error_selections)
         except Exception:
             pass
         try:
-            # Apply base selections; playhead overlay will be added during playback
             self.transcript_txt.setExtraSelections(
                 self.transcript_error_selections
             )
@@ -454,6 +473,78 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+    def _toggle_error_highlights(self, checked: bool) -> None:
+        self.show_error_highlights = bool(checked)
+        # persist
+        try:
+            if not hasattr(self, "settings") or not isinstance(self.settings, dict):
+                self.settings = {}
+            self.settings["error_highlights"] = self.show_error_highlights
+            self._save_settings()
+        except Exception:
+            pass
+
+        # Legends
+        try:
+            if hasattr(self, "script_legend"):
+                self.script_legend.setVisible(self.show_error_highlights)
+            if hasattr(self, "transcript_legend"):
+                self.transcript_legend.setVisible(self.show_error_highlights)
+        except Exception:
+            pass
+
+        # Apply/clear selections
+        if self.show_error_highlights:
+            # Re-apply base selections
+            try:
+                self.script_txt.setExtraSelections(self.script_error_selections)
+            except Exception:
+                pass
+            try:
+                # If we have timestamps, overlay the playhead too
+                if self.transcript_segment_ranges:
+                    cur_t = (
+                        (self.player.idx / self.sr)
+                        if getattr(self, "player", None) and self.player.active
+                        else 0.0
+                    )
+                    self.transcript_active_index = highlight_transcript_at_time(
+                        self.transcript_txt,
+                        self.transcript_segment_ranges,
+                        cur_t,
+                        self.transcript_active_index,
+                        base_selections=self.transcript_error_selections,
+                    )
+                else:
+                    self.transcript_txt.setExtraSelections(
+                        self.transcript_error_selections
+                    )
+            except Exception:
+                pass
+        else:
+            # Clear base selections; keep only playhead (if any)
+            try:
+                self.script_txt.setExtraSelections([])
+            except Exception:
+                pass
+            try:
+                if self.transcript_segment_ranges:
+                    cur_t = (
+                        (self.player.idx / self.sr)
+                        if getattr(self, "player", None) and self.player.active
+                        else 0.0
+                    )
+                    self.transcript_active_index = highlight_transcript_at_time(
+                        self.transcript_txt,
+                        self.transcript_segment_ranges,
+                        cur_t,
+                        self.transcript_active_index,
+                        base_selections=[],
+                    )
+                else:
+                    self.transcript_txt.setExtraSelections([])
+            except Exception:
+                pass
 
     def _on_volume_changed(self, value: int) -> None:
         # Perceptual mapping: slider 0..120 -> gain 0.0..2.0
@@ -592,6 +683,15 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         )
         self.transcript_txt.clear()
         self._clear_error_highlights()
+
+        # Respect current toggle for legends
+        try:
+            if hasattr(self, "script_legend"):
+                self.script_legend.setVisible(self.show_error_highlights)
+            if hasattr(self, "transcript_legend"):
+                self.transcript_legend.setVisible(self.show_error_highlights)
+        except Exception:
+            pass
 
         try:
             self.transcript_txt.setExtraSelections([])
@@ -874,12 +974,17 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         try:
             if self.transcript_segment_ranges:
                 try:
+                    base = (
+                        self.transcript_error_selections
+                        if self.show_error_highlights
+                        else []
+                    )
                     self.transcript_active_index = highlight_transcript_at_time(
                         self.transcript_txt,
                         self.transcript_segment_ranges,
                         cur_t,
                         self.transcript_active_index,
-                        base_selections=self.transcript_error_selections,
+                        base_selections=base,
                     )
                 except Exception:
                     pass
@@ -1150,6 +1255,22 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.settings = load_settings(
             self._default_settings(), self._settings_path()
         )
+        # Load the toggle (default True if missing)
+        self.show_error_highlights = bool(
+            self.settings.get("error_highlights", True)
+        )
+        # Sync the action and legends if UI is built
+        try:
+            self.act_error_hl.setChecked(self.show_error_highlights)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "script_legend"):
+                self.script_legend.setVisible(self.show_error_highlights)
+            if hasattr(self, "transcript_legend"):
+                self.transcript_legend.setVisible(self.show_error_highlights)
+        except Exception:
+            pass
 
     def _save_settings(self) -> None:
         save_settings(self.settings, self._settings_path())

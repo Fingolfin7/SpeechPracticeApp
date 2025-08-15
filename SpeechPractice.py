@@ -67,6 +67,7 @@ from free_speak import (
     save_free_speak_session,
 )
 from progress_tracker import open_progress_tracker
+from typing import List, Tuple
 import json
 
 
@@ -160,6 +161,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             tuple[int, int, float, float]
         ] = []  # (start_char, end_char, t0, t1)
         self.transcript_active_index: int = -1
+
+        # persistent error highlights (base layers)
+        self.script_error_selections: List[QtWidgets.QTextEdit.ExtraSelection] = []
+        self.transcript_error_selections: List[QtWidgets.QTextEdit.ExtraSelection] = []
+
+        # NEW helpers in SpeechPracticeApp
 
         self._build_ui()
         # housekeeping: remove any recording files not referenced by the DB
@@ -368,6 +375,65 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             return
         super().keyPressEvent(ev)
 
+    def _spans_to_selections(
+            self, edit: QtWidgets.QTextEdit, spans: List[Tuple[int, int, str]]
+    ) -> List[QtWidgets.QTextEdit.ExtraSelection]:
+        sels: List[QtWidgets.QTextEdit.ExtraSelection] = []
+        doc_len = len(edit.toPlainText())
+        for start, end, color in spans or []:
+            s = max(0, min(int(start), doc_len))
+            e = max(0, min(int(end), doc_len))
+            if e <= s:
+                continue
+            cursor = edit.textCursor()
+            cursor.setPosition(s)
+            cursor.setPosition(e, QtGui.QTextCursor.KeepAnchor)
+            sel = QtWidgets.QTextEdit.ExtraSelection()
+            sel.cursor = cursor
+            fmt = QtGui.QTextCharFormat()
+            fmt.setBackground(QColor(color))
+            fmt.setProperty(QtGui.QTextFormat.FullWidthSelection, False)
+            sel.format = fmt
+            sels.append(sel)
+        return sels
+
+    def set_error_highlights(
+            self,
+            script_spans: List[Tuple[int, int, str]],
+            transcript_spans: List[Tuple[int, int, str]],
+    ) -> None:
+        # Build and apply base selections
+        self.script_error_selections = self._spans_to_selections(
+            self.script_txt, script_spans
+        )
+        self.transcript_error_selections = self._spans_to_selections(
+            self.transcript_txt, transcript_spans
+        )
+        try:
+            self.script_txt.setExtraSelections(self.script_error_selections)
+        except Exception:
+            pass
+        try:
+            # Apply base selections; playhead overlay will be added during playback
+            self.transcript_txt.setExtraSelections(
+                self.transcript_error_selections
+            )
+        except Exception:
+            pass
+
+    def _clear_error_highlights(self) -> None:
+        self.script_error_selections = []
+        self.transcript_error_selections = []
+        try:
+            self.script_txt.setExtraSelections([])
+        except Exception:
+            pass
+        try:
+            self.transcript_txt.setExtraSelections([])
+        except Exception:
+            pass
+
+
     def _on_volume_changed(self, value: int) -> None:
         # Perceptual mapping: slider 0..120 -> gain 0.0..2.0
         # Below 100: approximate -inf..0 dB; Above 100: up to +6 dB with soft limiting
@@ -504,6 +570,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             "Rate: – wpm | Pauses: – | Conf: –"
         )
         self.transcript_txt.clear()
+        self._clear_error_highlights()
+
         try:
             self.transcript_txt.setExtraSelections([])
         except Exception:
@@ -785,13 +853,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         try:
             if self.transcript_segment_ranges:
                 try:
-                    self.transcript_active_index = (
-                        highlight_transcript_at_time(
-                            self.transcript_txt,
-                            self.transcript_segment_ranges,
-                            cur_t,
-                            self.transcript_active_index,
-                        )
+                    self.transcript_active_index = highlight_transcript_at_time(
+                        self.transcript_txt,
+                        self.transcript_segment_ranges,
+                        cur_t,
+                        self.transcript_active_index,
+                        base_selections=self.transcript_error_selections,
                     )
                 except Exception:
                     pass
@@ -851,14 +918,17 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         sess = db.get_session_by_id(self.db, sid)
         self.current_session_id = sid
 
+        # Stop any playback
         if hasattr(self, "player"):
             self.player.pause()
         self.play_timer.stop()
 
+        # Populate script pane
         self.current_script_name = sess.script_name
         self.current_script_text = sess.script_text
         self.script_txt.setText(sess.script_text)
-        # Handle sessions that may not yet have scores/transcript
+
+        # Metrics formatting (handle missing values gracefully)
         no_scores = (sess.transcript is None) or (sess.transcript == "")
         score_txt = (
             f"{sess.score:.2f}"
@@ -866,15 +936,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             else "–"
         )
         wer_txt = (
-            f"{sess.wer:.2%}"
-            if (sess.wer is not None and not no_scores)
-            else "–"
+            f"{sess.wer:.2%}" if (sess.wer is not None and not no_scores) else "–"
         )
         cer_txt = (
-            f"{sess.cer:.2%}"
-            if (
-                getattr(sess, "cer", None) is not None and not no_scores
-            )
+            f"{getattr(sess, 'cer', None):.2%}"
+            if (getattr(sess, "cer", None) is not None and not no_scores)
             else "–"
         )
         clar_txt = (
@@ -883,27 +949,18 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             else "–"
         )
         rate_txt = (
-            f"{sess.artic_rate:.0f} wpm"
-            if (
-                getattr(sess, "artic_rate", None) is not None
-                and not no_scores
-            )
+            f"{getattr(sess, 'artic_rate', None):.0f} wpm"
+            if (getattr(sess, "artic_rate", None) is not None and not no_scores)
             else "–"
         )
         pause_txt = (
-            f"{sess.pause_ratio:.0%}"
-            if (
-                getattr(sess, "pause_ratio", None) is not None
-                and not no_scores
-            )
+            f"{getattr(sess, 'pause_ratio', None):.0%}"
+            if (getattr(sess, "pause_ratio", None) is not None and not no_scores)
             else "–"
         )
         conf_txt = (
-            f"{sess.avg_conf:.0%}"
-            if (
-                getattr(sess, "avg_conf", None) is not None
-                and not no_scores
-            )
+            f"{getattr(sess, 'avg_conf', None):.0%}"
+            if (getattr(sess, "avg_conf", None) is not None and not no_scores)
             else "–"
         )
         self.metrics_label.setText(
@@ -912,19 +969,23 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             f"Clarity: {clar_txt} | Rate: {rate_txt} | "
             f"Pauses: {pause_txt} | Conf: {conf_txt}"
         )
+
+        # Transcript text
         self.transcript_txt.setText(sess.transcript or "")
         try:
             self.transcript_txt.setExtraSelections([])
         except Exception:
             pass
-        # Restore segments if present in DB to enable synced highlighting
+
+        # Restore segments if present to enable synced highlighting
+        self.transcript_segments = None
+        self.transcript_segment_ranges = []
+        self.transcript_active_index = -1
         try:
             if getattr(sess, "segments", None):
                 segs_from_db = json.loads(sess.segments)
                 seg_list = (
-                    list(segs_from_db)
-                    if isinstance(segs_from_db, list)
-                    else []
+                    list(segs_from_db) if isinstance(segs_from_db, list) else []
                 )
                 txt, segs, ranges, active_idx = build_transcript_from_segments(
                     seg_list
@@ -932,38 +993,128 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 self.transcript_segments = segs
                 self.transcript_segment_ranges = ranges
                 self.transcript_active_index = -1
+                # If no plain transcript stored, show the reconstructed one
                 if not sess.transcript:
                     self.transcript_txt.setPlainText(txt)
         except Exception:
             self.transcript_segments = None
             self.transcript_segment_ranges = []
-        self.transcript_active_index = -1
+            self.transcript_active_index = -1
 
-        # Load audio (all formats: WAV/FLAC/OGG/AIFF via soundfile, MP3/M4A/AAC/WMA via pydub)
-        # and convert to mono float32 at app samplerate
-        data, file_sr = load_audio_file(sess.audio_path)
-        if hasattr(data, "ndim") and data.ndim > 1:
-            data = data[:, 0]
-        if file_sr != self.sr and data.size > 0:
-            duration = data.size / float(file_sr)
-            new_len = int(round(duration * self.sr))
-            x_old = np.linspace(0.0, duration, num=data.size, endpoint=False)
-            x_new = np.linspace(0.0, duration, num=new_len, endpoint=False)
-            data = np.interp(x_new, x_old, data).astype(np.float32)
-        self.audio_data = data
-        self.current_audio_path = sess.audio_path
+        # Compute and apply error highlights (script vs transcript)
+        # Helper to convert (start,end,color) spans to ExtraSelections
+        def _spans_to_selections(edit: QtWidgets.QTextEdit, spans):
+            sels = []
+            doc_len = len(edit.toPlainText())
+            for start, end, color in spans or []:
+                s = max(0, min(int(start), doc_len))
+                e = max(0, min(int(end), doc_len))
+                if e <= s:
+                    continue
+                cur = edit.textCursor()
+                cur.setPosition(s)
+                cur.setPosition(e, QtGui.QTextCursor.KeepAnchor)
+                sel = QtWidgets.QTextEdit.ExtraSelection()
+                sel.cursor = cur
+                fmt = QtGui.QTextCharFormat()
+                fmt.setBackground(QColor(color))
+                fmt.setProperty(QtGui.QTextFormat.FullWidthSelection, False)
+                sel.format = fmt
+                sels.append(sel)
+            return sels
 
-        x_env, y_env = envelope(data, self.sr)
-        self.wave_line.setData(x_env, y_env)
+        try:
+            # Ensure attributes exist for base selections
+            if not hasattr(self, "script_error_selections"):
+                self.script_error_selections = []
+            if not hasattr(self, "transcript_error_selections"):
+                self.transcript_error_selections = []
 
-        self.playhead.setPos(0)
-        self._update_time_axis(data.size)
+            script_display = self.script_txt.toPlainText()
+            transcript_display = self.transcript_txt.toPlainText()
 
-        self._replace_player(AudioPlayer(self.sr))
-        self.player.set_data(data)
+            # Use the service helper (alignment-based)
+            s_spans, t_spans = self.transcription_service.compute_error_spans(
+                script_display, transcript_display
+            )
+            self.script_error_selections = _spans_to_selections(
+                self.script_txt, s_spans
+            )
+            self.transcript_error_selections = _spans_to_selections(
+                self.transcript_txt, t_spans
+            )
+            # Apply base selections
+            try:
+                self.script_txt.setExtraSelections(
+                    self.script_error_selections
+                )
+            except Exception:
+                pass
+            try:
+                self.transcript_txt.setExtraSelections(
+                    self.transcript_error_selections
+                )
+            except Exception:
+                pass
+        except Exception:
+            # If anything fails, clear base selections
+            self.script_error_selections = []
+            self.transcript_error_selections = []
+            try:
+                self.script_txt.setExtraSelections([])
+                self.transcript_txt.setExtraSelections([])
+            except Exception:
+                pass
 
+        # Load audio (support many formats) and resample to app SR
+        try:
+            data, file_sr = load_audio_file(sess.audio_path)
+            if hasattr(data, "ndim") and data.ndim > 1:
+                data = data[:, 0]
+            if file_sr != self.sr and data.size > 0:
+                duration = data.size / float(file_sr)
+                new_len = int(round(duration * self.sr))
+                x_old = np.linspace(0.0, duration, num=data.size, endpoint=False)
+                x_new = np.linspace(0.0, duration, num=new_len, endpoint=False)
+                data = np.interp(x_new, x_old, data).astype(np.float32)
+            self.audio_data = data
+            self.current_audio_path = sess.audio_path
+
+            x_env, y_env = envelope(data, self.sr)
+            self.wave_line.setData(x_env, y_env)
+
+            self.playhead.setPos(0)
+            self._update_time_axis(data.size)
+
+            self._replace_player(AudioPlayer(self.sr))
+            self.player.set_data(data)
+        except Exception as e:
+            # Surface the error but keep UI usable
+            self.metrics_label.setText(f"Could not load audio: {e}")
+            self.audio_data = None
+            self.current_audio_path = None
+            self.wave_line.clear()
+            self.playhead.setPos(0)
+            self._update_time_axis(0)
+
+        # If we have timestamped segments, add the playhead highlight on top
+        if self.transcript_segment_ranges:
+            try:
+                self.transcript_active_index = -1
+                self.transcript_active_index = highlight_transcript_at_time(
+                    self.transcript_txt,
+                    self.transcript_segment_ranges,
+                    0.0,
+                    self.transcript_active_index,
+                    # keep base error highlights visible
+                    base_selections=self.transcript_error_selections,
+                )
+            except Exception:
+                pass
+
+        # Enable controls
         self.btn_record.setEnabled(True)
-        self.btn_play.setEnabled(True)
+        self.btn_play.setEnabled(self.audio_data is not None)
         self.btn_score.setEnabled(True)
 
     # --------------------------- settings ----------------------------------

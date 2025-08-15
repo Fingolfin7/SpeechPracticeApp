@@ -42,9 +42,12 @@ def highlight_transcript_at_time(
     ranges: List[Tuple[int, int, float, float]],
     t_seconds: float,
     active_index: int,
+    base_selections: List[QtWidgets.QTextEdit.ExtraSelection] | None = None,
 ) -> int:
     """
     Highlight the segment covering time t_seconds; returns new active_index.
+    Preserves base_selections (error highlights) by appending the playhead
+    highlight on top.
     """
     if not ranges:
         return -1
@@ -61,17 +64,23 @@ def highlight_transcript_at_time(
                 idx = i
                 break
     if idx == -1 or idx == active_index:
+        # still refresh selections to ensure base selections are set
+        try:
+            edit.setExtraSelections(list(base_selections or []))
+        except Exception:
+            pass
         return active_index
+
     s_char, e_char, _t0, _t1 = ranges[idx]
     cursor = edit.textCursor()
-    
+
     # Get the actual text length to avoid out-of-range errors
     text_length = len(edit.toPlainText())
-    
+
     # Ensure positions are within bounds
     start_pos = max(0, min(int(s_char), text_length))
     end_pos = max(0, min(int(e_char), text_length))
-    
+
     cursor.setPosition(start_pos)
     cursor.setPosition(end_pos, QtGui.QTextCursor.KeepAnchor)
     sel = QtWidgets.QTextEdit.ExtraSelection()
@@ -81,7 +90,9 @@ def highlight_transcript_at_time(
     fmt.setProperty(QtGui.QTextFormat.FullWidthSelection, False)
     sel.format = fmt
     try:
-        edit.setExtraSelections([sel])
+        selections = list(base_selections or [])
+        selections.append(sel)
+        edit.setExtraSelections(selections)
         prev = edit.hasFocus()
         edit.setTextCursor(cursor)
         edit.ensureCursorVisible()
@@ -90,5 +101,3 @@ def highlight_transcript_at_time(
     except Exception:
         pass
     return idx
-
-

@@ -66,7 +66,9 @@ from free_speak import (
     transcribe_free,
     save_free_speak_session,
 )
+from highlight_theme import legend_html_for_script, legend_html_for_transcript
 from progress_tracker import open_progress_tracker
+from typing import List, Tuple
 import json
 
 
@@ -81,26 +83,28 @@ def load_audio_file(file_path: str) -> tuple[np.ndarray, int]:
     Returns (audio_data, sample_rate) as float32 mono.
     """
     file_ext = os.path.splitext(file_path)[1].lower()
-    
+
     # Try direct soundfile loading first (for WAV, FLAC, OGG, etc.)
     try:
         return sf.read(file_path, dtype="float32")
     except Exception as e:
         # If soundfile fails and it's a format that needs pydub conversion
-        if file_ext in ['.m4a', '.aac', '.mp3', '.wma', '.mp4', '.mov']:
+        if file_ext in [".m4a", ".aac", ".mp3", ".wma", ".mp4", ".mov"]:
             try:
                 # Load with pydub and convert to temporary WAV for soundfile
                 audio_segment = AudioSegment.from_file(file_path)
-                
+
                 # Convert to mono and get raw audio data
                 if audio_segment.channels > 1:
                     audio_segment = audio_segment.set_channels(1)
-                
+
                 # Create temporary WAV file
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                with tempfile.NamedTemporaryFile(
+                    suffix=".wav", delete=False
+                ) as temp_file:
                     temp_wav_path = temp_file.name
                     audio_segment.export(temp_wav_path, format="wav")
-                
+
                 try:
                     # Load the temporary WAV file with soundfile
                     data, sr = sf.read(temp_wav_path, dtype="float32")
@@ -111,9 +115,12 @@ def load_audio_file(file_path: str) -> tuple[np.ndarray, int]:
                         os.unlink(temp_wav_path)
                     except:
                         pass
-                        
+
             except Exception as pydub_error:
-                raise Exception(f"Failed to load audio file {file_path}. Soundfile error: {e}. Pydub error: {pydub_error}")
+                raise Exception(
+                    f"Failed to load audio file {file_path}. "
+                    f"Soundfile error: {e}. Pydub error: {pydub_error}"
+                )
         else:
             # Re-raise original soundfile error for other formats
             raise e
@@ -151,10 +158,33 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.last_transcript_text: str = ""
         # transcript timestamp sync state
         self.transcript_segments: list[dict] | None = None
-        self.transcript_segment_ranges: list[tuple[int, int, float, float]] = []  # (start_char, end_char, t0, t1)
+        self.transcript_segment_ranges: list[
+            tuple[int, int, float, float]
+        ] = []  # (start_char, end_char, t0, t1)
         self.transcript_active_index: int = -1
 
+        # persistent error highlights (base layers)
+        self.script_error_selections: List[QtWidgets.QTextEdit.ExtraSelection] = []
+        self.transcript_error_selections: List[QtWidgets.QTextEdit.ExtraSelection] = []
+        self.show_error_highlights: bool = True
+
+        # raw spans for navigation (start, end, color)
+        self.script_error_spans = []
+        self.transcript_error_spans = []
+
+        # error navigation index (built from spans + timestamps)
+        self._error_nav_points = []  # list[(t0: float, mid_char: int, seg_idx: int)]
+        self._error_nav_idx = -1
+
         self._build_ui()
+
+        # Enable click-to-jump on the transcript (install on widget and viewport)
+        self.transcript_txt.installEventFilter(self)
+        self.transcript_txt.viewport().installEventFilter(self)
+
+        # Catch Left/Right globally so widgets can't swallow them
+        QtWidgets.QApplication.instance().installEventFilter(self)
+
         # housekeeping: remove any recording files not referenced by the DB
         try:
             self._cleanup_orphan_recordings()
@@ -174,8 +204,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         act_next.triggered.connect(self.load_next_script)
         # Free Speak mode toggle directly on the menubar
         self.act_free_mode = QAction("Free Speak Mode", self, checkable=True)
-        self.act_free_mode.setStatusTip("Transcribe without scoring or auto-saving")
-        self.act_free_mode.toggled.connect(lambda checked: on_toggle_free_mode(self, checked))
+        self.act_free_mode.setStatusTip(
+            "Transcribe without scoring or auto-saving"
+        )
+        self.act_free_mode.toggled.connect(
+            lambda checked: on_toggle_free_mode(self, checked)
+        )
         mb.addAction(self.act_free_mode)
         # Progress Tracker action
         act_progress = mb.addAction("Progress Tracker")
@@ -183,6 +217,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Settings dialog action
         act_settings = mb.addAction("Settings")
         act_settings.triggered.connect(self._open_settings)
+        # Toggle for error highlights
+        self.act_error_hl = QAction("Error Highlights", self, checkable=True)
+        self.act_error_hl.setStatusTip("Toggle word/character error highlights")
+        self.act_error_hl.setChecked(True)
+        self.act_error_hl.toggled.connect(self._toggle_error_highlights)
+        mb.addAction(self.act_error_hl)
 
         splitter = QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -192,7 +232,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         hl = QVBoxLayout(hist_w)
         hl.addWidget(QLabel("Session History"))
         self.history_list = QtWidgets.QListWidget()
-        self.history_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.history_list.setContextMenuPolicy(
+            QtCore.Qt.CustomContextMenu
+        )
         self.history_list.customContextMenuRequested.connect(
             self._history_context_menu
         )
@@ -203,6 +245,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         scr_w = QWidget()
         sl = QVBoxLayout(scr_w)
         sl.addWidget(QLabel("Current Script"))
+
+        # Legend for script highlights
+        self.script_legend = QLabel(parent=scr_w)
+        self.script_legend.setWordWrap(True)
+        self.script_legend.setTextFormat(QtCore.Qt.RichText)
+        self.script_legend.setStyleSheet(
+            "color:#9fb0c0; font-size:11px; margin-top:2px; margin-bottom:4px;"
+        )
+        self.script_legend.setText(legend_html_for_script())
+        sl.addWidget(self.script_legend)
         self.script_txt = QTextEdit(readOnly=True)
         sl.addWidget(self.script_txt)
         splitter.addWidget(scr_w)
@@ -279,6 +331,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.vol_slider.setFixedWidth(120)
         self.vol_slider.setToolTip("Volume")
 
+
         icon_sz = 28  # <— pick any size you like (px)
 
         # remake glyphs at the chosen size
@@ -293,8 +346,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.btn_record.clicked.connect(self._toggle_record)
         self.btn_play.clicked.connect(self._toggle_play_pause)
-        self.btn_score.clicked.connect(self.transcription_service.transcribe_and_score)
-        self.btn_save.clicked.connect(lambda: save_free_speak_session(self))
+        self.btn_score.clicked.connect(
+            self.transcription_service.transcribe_and_score
+        )
+        self.btn_save.clicked.connect(
+            lambda: save_free_speak_session(self)
+        )
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
 
         for b in (self.btn_record, self.btn_play, self.btn_score, self.btn_save):
@@ -305,9 +362,14 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         rl.addWidget(transport, alignment=QtCore.Qt.AlignHCenter)
 
         # metrics label ----------------------------------------------------
-        self.metrics_label = QLabel("Score: –, WER: –, Clarity: –")
-        self.metrics_label.setTextInteractionFlags( # enable copy-paste
-            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+        self.metrics_label = QLabel(
+            "Score: –, WER: –, CER: –, Clarity: – | "
+            "Rate: – wpm | Pauses: – | Conf: –"
+        )
+        self.metrics_label.setTextInteractionFlags(
+            # enable copy-paste
+            QtCore.Qt.TextSelectableByMouse
+            | QtCore.Qt.TextSelectableByKeyboard
         )
         f = self.metrics_label.font()
         f.setPointSize(f.pointSize() + 2)
@@ -317,6 +379,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         # transcript pane --------------------------------------------------
         rl.addWidget(QLabel("Transcript"))
+        # Legend for transcript highlights
+        # Legend for transcript highlights
+        self.transcript_legend = QLabel(parent=right_w)
+        self.transcript_legend.setWordWrap(True)
+        self.transcript_legend.setTextFormat(QtCore.Qt.RichText)
+        self.transcript_legend.setStyleSheet(
+            "color:#9fb0c0; font-size:11px; margin-top:2px; margin-bottom:4px;"
+        )
+        self.transcript_legend.setText(legend_html_for_transcript())
+        rl.addWidget(self.transcript_legend)
         self.transcript_txt = QTextEdit(readOnly=True)
         rl.addWidget(self.transcript_txt)
 
@@ -335,16 +407,177 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             pass
         self.player = new_player
 
-    
-
     # -------------------------- input hooks ------------------------------
     def keyPressEvent(self, ev: QtGui.QKeyEvent) -> None:
-        # Spacebar toggles play/pause when not typing in a text box
-        if ev.key() == QtCore.Qt.Key_Space and not (self.script_txt.hasFocus() or self.transcript_txt.hasFocus()):
+        # Space toggles play/pause when not typing in a text box
+        if (
+                ev.key() == QtCore.Qt.Key_Space
+                and not (self.script_txt.hasFocus() or self.transcript_txt.hasFocus())
+        ):
             self._toggle_play_pause()
             ev.accept()
             return
+
+        # Arrow keys navigate errors when not typing in a text box
+        if (
+                ev.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_Right)
+                and not (self.script_txt.hasFocus() or self.transcript_txt.hasFocus())
+        ):
+            self._goto_error(-1 if ev.key() == QtCore.Qt.Key_Left else +1)
+            ev.accept()
+            return
+
         super().keyPressEvent(ev)
+
+    def _spans_to_selections(
+            self, edit: QtWidgets.QTextEdit, spans: List[Tuple[int, int, str]]
+    ) -> List[QtWidgets.QTextEdit.ExtraSelection]:
+        sels: List[QtWidgets.QTextEdit.ExtraSelection] = []
+        doc_len = len(edit.toPlainText())
+        for start, end, color in spans or []:
+            s = max(0, min(int(start), doc_len))
+            e = max(0, min(int(end), doc_len))
+            if e <= s:
+                continue
+            cursor = edit.textCursor()
+            cursor.setPosition(s)
+            cursor.setPosition(e, QtGui.QTextCursor.KeepAnchor)
+            sel = QtWidgets.QTextEdit.ExtraSelection()
+            sel.cursor = cursor
+            fmt = QtGui.QTextCharFormat()
+            fmt.setBackground(QColor(color))
+            fmt.setProperty(QtGui.QTextFormat.FullWidthSelection, False)
+            sel.format = fmt
+            sels.append(sel)
+        return sels
+
+    def set_error_highlights(
+            self,
+            script_spans: list[tuple[int, int, str]],
+            transcript_spans: list[tuple[int, int, str]],
+    ) -> None:
+        # Store raw spans for nav
+        self.script_error_spans = list(script_spans or [])
+        self.transcript_error_spans = list(transcript_spans or [])
+
+        # Build selection layers (kept even if currently hidden)
+        self.script_error_selections = self._spans_to_selections(
+            self.script_txt, script_spans
+        )
+        self.transcript_error_selections = self._spans_to_selections(
+            self.transcript_txt, transcript_spans
+        )
+
+        # Apply visuals if toggle is on
+        if getattr(self, "show_error_highlights", True):
+            try:
+                self.script_txt.setExtraSelections(self.script_error_selections)
+            except Exception:
+                pass
+            try:
+                self.transcript_txt.setExtraSelections(
+                    self.transcript_error_selections
+                )
+            except Exception:
+                pass
+        else:
+            # Clear visuals, keep data
+            try:
+                self.script_txt.setExtraSelections([])
+            except Exception:
+                pass
+            try:
+                self.transcript_txt.setExtraSelections([])
+            except Exception:
+                pass
+
+        # Rebuild error navigation anchors
+        self._rebuild_error_nav_points()
+
+    def _clear_error_highlights(self) -> None:
+        self.script_error_selections = []
+        self.transcript_error_selections = []
+        try:
+            self.script_txt.setExtraSelections([])
+        except Exception:
+            pass
+        try:
+            self.transcript_txt.setExtraSelections([])
+        except Exception:
+            pass
+
+    def _toggle_error_highlights(self, checked: bool) -> None:
+        self.show_error_highlights = bool(checked)
+        # persist
+        try:
+            if not hasattr(self, "settings") or not isinstance(self.settings, dict):
+                self.settings = {}
+            self.settings["error_highlights"] = self.show_error_highlights
+            self._save_settings()
+        except Exception:
+            pass
+
+        # Legends
+        try:
+            if hasattr(self, "script_legend"):
+                self.script_legend.setVisible(self.show_error_highlights)
+            if hasattr(self, "transcript_legend"):
+                self.transcript_legend.setVisible(self.show_error_highlights)
+        except Exception:
+            pass
+
+        # Apply/clear selections
+        if self.show_error_highlights:
+            # Re-apply base selections
+            try:
+                self.script_txt.setExtraSelections(self.script_error_selections)
+            except Exception:
+                pass
+            try:
+                # If we have timestamps, overlay the playhead too
+                if self.transcript_segment_ranges:
+                    cur_t = (
+                        (self.player.idx / self.sr)
+                        if getattr(self, "player", None) and self.player.active
+                        else 0.0
+                    )
+                    self.transcript_active_index = highlight_transcript_at_time(
+                        self.transcript_txt,
+                        self.transcript_segment_ranges,
+                        cur_t,
+                        self.transcript_active_index,
+                        base_selections=self.transcript_error_selections,
+                    )
+                else:
+                    self.transcript_txt.setExtraSelections(
+                        self.transcript_error_selections
+                    )
+            except Exception:
+                pass
+        else:
+            # Clear base selections; keep only playhead (if any)
+            try:
+                self.script_txt.setExtraSelections([])
+            except Exception:
+                pass
+            try:
+                if self.transcript_segment_ranges:
+                    cur_t = (
+                        (self.player.idx / self.sr)
+                        if getattr(self, "player", None) and self.player.active
+                        else 0.0
+                    )
+                    self.transcript_active_index = highlight_transcript_at_time(
+                        self.transcript_txt,
+                        self.transcript_segment_ranges,
+                        cur_t,
+                        self.transcript_active_index,
+                        base_selections=[],
+                    )
+                else:
+                    self.transcript_txt.setExtraSelections([])
+            except Exception:
+                pass
 
     def _on_volume_changed(self, value: int) -> None:
         # Perceptual mapping: slider 0..120 -> gain 0.0..2.0
@@ -387,7 +620,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 return
             if sys.platform.startswith("win"):
                 # Use Explorer to select the file
-                subprocess.run(["explorer", "/select,", path.replace("/", "\\")])
+                subprocess.run(
+                    ["explorer", "/select,", path.replace("/", "\\")]
+                )
             elif sys.platform == "darwin":
                 subprocess.run(["open", "-R", path])
             else:
@@ -417,7 +652,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         for fname in os.listdir(rec_dir):
             fpath = os.path.abspath(os.path.join(rec_dir, fname))
             # Only consider typical audio files
-            if not fname.lower().endswith((".flac", ".wav", ".mp3", ".ogg", ".m4a", ".aac", ".wma")):
+            if not fname.lower().endswith(
+                (".flac", ".wav", ".mp3", ".ogg", ".m4a", ".aac", ".wma")
+            ):
                 continue
             if fpath not in referenced:
                 try:
@@ -440,7 +677,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.history_list.addItem("No sessions yet")
         else:
             for sess in sessions:
-                formatted_timestamp = datetime.strptime(sess.timestamp, "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y %H:%M")
+                formatted_timestamp = datetime.strptime(
+                    sess.timestamp, "%Y-%m-%dT%H:%M:%S"
+                ).strftime("%d %b %Y %H:%M")
                 label = f"{formatted_timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
@@ -471,8 +710,22 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.playhead.setPos(0)
         self._update_time_axis(0)
 
-        self.metrics_label.setText("Score: –, WER: –, Clarity: –")
+        self.metrics_label.setText(
+            "Score: –, WER: –, CER: –, Clarity: – | "
+            "Rate: – wpm | Pauses: – | Conf: –"
+        )
         self.transcript_txt.clear()
+        self._clear_error_highlights()
+
+        # Respect current toggle for legends
+        try:
+            if hasattr(self, "script_legend"):
+                self.script_legend.setVisible(self.show_error_highlights)
+            if hasattr(self, "transcript_legend"):
+                self.transcript_legend.setVisible(self.show_error_highlights)
+        except Exception:
+            pass
+
         try:
             self.transcript_txt.setExtraSelections([])
         except Exception:
@@ -597,7 +850,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_save.setEnabled(False)
             self.metrics_label.setText("Free Speak: ready to transcribe")
             # Auto-start transcription for convenience
-            QtCore.QTimer.singleShot(100, self.transcription_service.transcribe_free)
+            QtCore.QTimer.singleShot(
+                100, self.transcription_service.transcribe_free
+            )
             return
 
         if not self.free_speak_mode:
@@ -614,7 +869,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     score=None,
                 )
                 self.current_session_id = sess.id
-                formatted_timestamp = datetime.strptime(sess.timestamp, "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y %H:%M")
+                formatted_timestamp = datetime.strptime(
+                    sess.timestamp, "%Y-%m-%dT%H:%M:%S"
+                ).strftime("%d %b %Y %H:%M")
                 label = f"{formatted_timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
@@ -624,7 +881,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 ):
                     self.history_list.takeItem(0)
                 self.history_list.addItem(it)
-                self.metrics_label.setText("Saved session; scores pending. Run Score when ready.")
+                self.metrics_label.setText(
+                    "Saved session; scores pending. Run Score when ready."
+                )
             except Exception as e:
                 # Fallback for legacy DBs with NOT NULL constraints: store placeholders
                 try:
@@ -644,7 +903,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                         score=0.0,
                     )
                     self.current_session_id = sess.id
-                    formatted_timestamp = datetime.strptime(sess.timestamp, "%Y-%m-%dT%H:%M:%S").strftime("%d %b %Y %H:%M")
+                    formatted_timestamp = datetime.strptime(
+                        sess.timestamp, "%Y-%m-%dT%H:%M:%S"
+                    ).strftime("%d %b %Y %H:%M")
                     label = f"{formatted_timestamp} — {sess.script_name}"
                     it = QListWidgetItem(label)
                     it.setData(QtCore.Qt.UserRole, sess.id)
@@ -653,7 +914,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     ):
                         self.history_list.takeItem(0)
                     self.history_list.addItem(it)
-                    self.metrics_label.setText("Saved session (legacy DB); scores pending.")
+                    self.metrics_label.setText(
+                        "Saved session (legacy DB); scores pending."
+                    )
                 except Exception as e2:
                     # Surface the specific error for troubleshooting
                     self.metrics_label.setText(
@@ -664,7 +927,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                         print("DB save error (fallback):", repr(e2))
                     except Exception:
                         pass
-    
 
     def _update_waveform(self) -> None:
         if not self.audio_buffer:
@@ -701,9 +963,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_play.setIcon(self.ic_play)
             return
         start = (
-            self.player.idx
-            if 0 <= self.player.idx < self.audio_data.size
-            else 0
+            self.player.idx if 0 <= self.player.idx < self.audio_data.size else 0
         )
         self.player.set_data(self.audio_data)
         self.player.play(start)
@@ -711,10 +971,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_play.setIcon(self.ic_pause)
 
     def _vb_click_event(self, ev) -> None:
-        if (
-            ev.button() != QtCore.Qt.LeftButton
-            or self.audio_data is None
-        ):
+        if ev.button() != QtCore.Qt.LeftButton or self.audio_data is None:
             ev.ignore()
             return
         pos = ev.scenePos()
@@ -736,7 +993,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_play.setIcon(self.ic_play)
             # auto-rewind to start visually when finished
             try:
-                if self.audio_data is not None and self.player.idx >= self.audio_data.size:
+                if (
+                    self.audio_data is not None
+                    and self.player.idx >= self.audio_data.size
+                ):
                     self.playhead.setPos(0)
             except Exception:
                 pass
@@ -747,16 +1007,173 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         try:
             if self.transcript_segment_ranges:
                 try:
+                    base = (
+                        self.transcript_error_selections
+                        if self.show_error_highlights
+                        else []
+                    )
                     self.transcript_active_index = highlight_transcript_at_time(
                         self.transcript_txt,
                         self.transcript_segment_ranges,
                         cur_t,
                         self.transcript_active_index,
+                        base_selections=base,
                     )
                 except Exception:
                     pass
         except Exception:
             pass
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        # Clicks in the transcript jump to that segment
+        if obj in (
+                self.transcript_txt,
+                getattr(self.transcript_txt, "viewport", lambda: None)(),
+        ) and event.type() in (
+                QtCore.QEvent.MouseButtonRelease,
+                QtCore.QEvent.MouseButtonDblClick,
+        ):
+            try:
+                me = event  # type: ignore
+                if me.button() == QtCore.Qt.LeftButton:
+                    QtCore.QTimer.singleShot(0, self._handle_transcript_click)
+            except Exception:
+                pass
+            return False  # let QTextEdit also handle caret movement
+
+        # Global Left/Right error navigation
+        if event.type() == QtCore.QEvent.KeyPress:
+            ke = event  # type: ignore
+            if ke.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_Right):
+                fw = QtWidgets.QApplication.focusWidget()
+                # Don't steal arrows from text inputs or sliders
+                if isinstance(
+                        fw,
+                        (
+                                QtWidgets.QLineEdit,
+                                QtWidgets.QTextEdit,
+                                QtWidgets.QPlainTextEdit,
+                                QtWidgets.QSlider,
+                                QtWidgets.QSpinBox,
+                                QtWidgets.QComboBox,
+                        ),
+                ):
+                    return False
+                self._goto_error(+1 if ke.key() == QtCore.Qt.Key_Right else -1)
+                ke.accept()
+                return True  # consumed
+
+        return super().eventFilter(obj, event)
+
+    def _handle_transcript_click(self) -> None:
+        # Only jump if not selecting (or Ctrl held)
+        cur = self.transcript_txt.textCursor()
+        mods = QtWidgets.QApplication.keyboardModifiers()
+        if cur.hasSelection() and not (mods & QtCore.Qt.ControlModifier):
+            return
+        self._jump_to_transcript_char(cur.position(), play=True)
+
+    def _jump_to_transcript_char(self, char_pos: int, play: bool = True) -> None:
+        if not self.transcript_segment_ranges or self.audio_data is None:
+            return
+        # find segment containing or nearest to char_pos
+        idx = -1
+        for i, (s_char, e_char, _t0, _t1) in enumerate(
+                self.transcript_segment_ranges
+        ):
+            if s_char <= char_pos <= e_char:
+                idx = i
+                break
+        if idx == -1:
+            # nearest by midpoint distance
+            candidates = [
+                (abs(((s + e) // 2) - char_pos), i)
+                for i, (s, e, _t0, _t1) in enumerate(self.transcript_segment_ranges)
+            ]
+            if not candidates:
+                return
+            idx = min(candidates)[1]
+        t = float(self.transcript_segment_ranges[idx][2])
+        self._jump_to_time(t, play=play)
+
+    def _jump_to_time(self, t: float, play: bool = True) -> None:
+        if self.audio_data is None:
+            return
+        dur = self.audio_data.size / self.sr
+        t = max(0.0, min(t, dur))
+        idx = int(t * self.sr)
+
+        # Move playhead and audio
+        self.playhead.setPos(t)
+        self.player.set_data(self.audio_data)
+        if play:
+            self.player.play(idx)
+            self.play_timer.start()
+            self.btn_play.setIcon(self.ic_pause)
+        else:
+            self.player.pause()
+            self.play_timer.stop()
+            self.btn_play.setIcon(self.ic_play)
+
+        # Sync transcript highlight right away
+        try:
+            base = (
+                self.transcript_error_selections
+                if getattr(self, "show_error_highlights", True)
+                else []
+            )
+            self.transcript_active_index = highlight_transcript_at_time(
+                self.transcript_txt,
+                self.transcript_segment_ranges,
+                t,
+                self.transcript_active_index,
+                base_selections=base,
+            )
+        except Exception:
+            pass
+
+    def _rebuild_error_nav_points(self) -> None:
+        """Build list of error anchors mapped to segment start times."""
+        self._error_nav_points = []
+        self._error_nav_idx = -1
+        if not self.transcript_segment_ranges or not self.transcript_error_spans:
+            return
+        for s, e, _col in self.transcript_error_spans:
+            mid = (int(s) + int(e)) // 2
+            for i, (cs, ce, t0, _t1) in enumerate(self.transcript_segment_ranges):
+                if cs <= mid <= ce:
+                    self._error_nav_points.append((float(t0), mid, i))
+                    break
+        self._error_nav_points.sort(key=lambda x: x[0])
+
+    def _goto_error(self, direction: int) -> None:
+        """direction: +1 next, -1 previous."""
+        if not getattr(self, "_error_nav_points", None):
+            self._rebuild_error_nav_points()
+        if not self._error_nav_points:
+            return
+
+        if not self._error_nav_points or self.audio_data is None:
+            return
+        # current time from playhead
+        try:
+            cur_t = float(self.playhead.value())
+        except Exception:
+            cur_t = (self.player.idx / self.sr) if self.player else 0.0
+
+        eps = 1e-3
+        if direction > 0:
+            candidates = [p for p in self._error_nav_points if p[0] > cur_t + eps]
+            target = candidates[0] if candidates else self._error_nav_points[0]
+        else:
+            candidates = [p for p in self._error_nav_points if p[0] < cur_t - eps]
+            target = candidates[-1] if candidates else self._error_nav_points[-1]
+
+        self._jump_to_time(target[0], play=True)
+        try:
+            self._error_nav_idx = self._error_nav_points.index(target)
+        except Exception:
+            self._error_nav_idx = -1
 
     # --------------------------- scoring ----------------------------------
 
@@ -793,13 +1210,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             raw_step = dur / 10
             step = self._nice_step(raw_step)
         if dur > 30:
-            ticks = [(t, f"{int(t // 60)}:{int(t % 60):02d}") for t in
-                     np.arange(0, dur + 0.1, step)]
+            ticks = [
+                (t, f"{int(t // 60)}:{int(t % 60):02d}")
+                for t in np.arange(0, dur + 0.1, step)
+            ]
         else:
-            ticks = [(t, f"{int(t)}") for t in np.arange(0, dur + 0.1, step)]
+            ticks = [
+                (t, f"{int(t)}") for t in np.arange(0, dur + 0.1, step)
+            ]
         self.top_axis.setTicks([ticks, []])
         self.plot.setLimits(xMin=0, xMax=max(1, dur))
-    
 
     # ----------------------- load session ---------------------------------
 
@@ -808,72 +1228,203 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         sess = db.get_session_by_id(self.db, sid)
         self.current_session_id = sid
 
+        # Stop any playback
         if hasattr(self, "player"):
             self.player.pause()
         self.play_timer.stop()
 
+        # Populate script pane
         self.current_script_name = sess.script_name
         self.current_script_text = sess.script_text
         self.script_txt.setText(sess.script_text)
-        # Handle sessions that may not yet have scores/transcript
+
+        # Metrics formatting (handle missing values gracefully)
         no_scores = (sess.transcript is None) or (sess.transcript == "")
         score_txt = (
-            f"{sess.score:.2f}" if (sess.score is not None and not no_scores) else "–"
+            f"{sess.score:.2f}"
+            if (sess.score is not None and not no_scores)
+            else "–"
         )
         wer_txt = (
             f"{sess.wer:.2%}" if (sess.wer is not None and not no_scores) else "–"
         )
+        cer_txt = (
+            f"{getattr(sess, 'cer', None):.2%}"
+            if (getattr(sess, "cer", None) is not None and not no_scores)
+            else "–"
+        )
         clar_txt = (
-            f"{sess.clarity:.2%}" if (sess.clarity is not None and not no_scores) else "–"
+            f"{sess.clarity:.2%}"
+            if (sess.clarity is not None and not no_scores)
+            else "–"
+        )
+        rate_txt = (
+            f"{getattr(sess, 'artic_rate', None):.0f} wpm"
+            if (getattr(sess, "artic_rate", None) is not None and not no_scores)
+            else "–"
+        )
+        pause_txt = (
+            f"{getattr(sess, 'pause_ratio', None):.0%}"
+            if (getattr(sess, "pause_ratio", None) is not None and not no_scores)
+            else "–"
+        )
+        conf_txt = (
+            f"{getattr(sess, 'avg_conf', None):.0%}"
+            if (getattr(sess, "avg_conf", None) is not None and not no_scores)
+            else "–"
         )
         self.metrics_label.setText(
-            f"Score: {score_txt}/5 | WER: {wer_txt} | Clarity: {clar_txt}"
+            "Score: "
+            f"{score_txt}/5 | WER: {wer_txt} | CER: {cer_txt} | "
+            f"Clarity: {clar_txt} | Rate: {rate_txt} | "
+            f"Pauses: {pause_txt} | Conf: {conf_txt}"
         )
+
+        # Transcript text
         self.transcript_txt.setText(sess.transcript or "")
         try:
             self.transcript_txt.setExtraSelections([])
         except Exception:
             pass
-        # Restore segments if present in DB to enable synced highlighting
+
+        # Restore segments if present to enable synced highlighting
+        self.transcript_segments = None
+        self.transcript_segment_ranges = []
+        self.transcript_active_index = -1
         try:
             if getattr(sess, "segments", None):
                 segs_from_db = json.loads(sess.segments)
-                seg_list = list(segs_from_db) if isinstance(segs_from_db, list) else []
-                txt, segs, ranges, active_idx = build_transcript_from_segments(seg_list)
+                seg_list = (
+                    list(segs_from_db) if isinstance(segs_from_db, list) else []
+                )
+                txt, segs, ranges, active_idx = build_transcript_from_segments(
+                    seg_list
+                )
                 self.transcript_segments = segs
                 self.transcript_segment_ranges = ranges
                 self.transcript_active_index = -1
+                # If no plain transcript stored, show the reconstructed one
                 if not sess.transcript:
                     self.transcript_txt.setPlainText(txt)
         except Exception:
             self.transcript_segments = None
             self.transcript_segment_ranges = []
-        self.transcript_active_index = -1
+            self.transcript_active_index = -1
 
-        # Load audio (all formats: WAV/FLAC/OGG/AIFF via soundfile, MP3/M4A/AAC/WMA via pydub) and convert to mono float32 at app samplerate
-        data, file_sr = load_audio_file(sess.audio_path)
-        if hasattr(data, "ndim") and data.ndim > 1:
-            data = data[:, 0]
-        if file_sr != self.sr and data.size > 0:
-            duration = data.size / float(file_sr)
-            new_len = int(round(duration * self.sr))
-            x_old = np.linspace(0.0, duration, num=data.size, endpoint=False)
-            x_new = np.linspace(0.0, duration, num=new_len, endpoint=False)
-            data = np.interp(x_new, x_old, data).astype(np.float32)
-        self.audio_data = data
-        self.current_audio_path = sess.audio_path
+        # Compute and apply error highlights (script vs transcript)
+        # Helper to convert (start,end,color) spans to ExtraSelections
+        def _spans_to_selections(edit: QtWidgets.QTextEdit, spans):
+            sels = []
+            doc_len = len(edit.toPlainText())
+            for start, end, color in spans or []:
+                s = max(0, min(int(start), doc_len))
+                e = max(0, min(int(end), doc_len))
+                if e <= s:
+                    continue
+                cur = edit.textCursor()
+                cur.setPosition(s)
+                cur.setPosition(e, QtGui.QTextCursor.KeepAnchor)
+                sel = QtWidgets.QTextEdit.ExtraSelection()
+                sel.cursor = cur
+                fmt = QtGui.QTextCharFormat()
+                fmt.setBackground(QColor(color))
+                fmt.setProperty(QtGui.QTextFormat.FullWidthSelection, False)
+                sel.format = fmt
+                sels.append(sel)
+            return sels
 
-        x_env, y_env = envelope(data, self.sr)
-        self.wave_line.setData(x_env, y_env)
+        try:
+            # Ensure attributes exist for base selections
+            if not hasattr(self, "script_error_selections"):
+                self.script_error_selections = []
+            if not hasattr(self, "transcript_error_selections"):
+                self.transcript_error_selections = []
 
-        self.playhead.setPos(0)
-        self._update_time_axis(data.size)
+            script_display = self.script_txt.toPlainText()
+            transcript_display = self.transcript_txt.toPlainText()
 
-        self._replace_player(AudioPlayer(self.sr))
-        self.player.set_data(data)
+            # Use the service helper (alignment-based)
+            s_spans, t_spans = self.transcription_service.compute_error_spans(
+                script_display, transcript_display
+            )
+            self.script_error_selections = _spans_to_selections(
+                self.script_txt, s_spans
+            )
+            self.transcript_error_selections = _spans_to_selections(
+                self.transcript_txt, t_spans
+            )
+            # Apply base selections
+            try:
+                self.script_txt.setExtraSelections(
+                    self.script_error_selections
+                )
+            except Exception:
+                pass
+            try:
+                self.transcript_txt.setExtraSelections(
+                    self.transcript_error_selections
+                )
+            except Exception:
+                pass
+        except Exception:
+            # If anything fails, clear base selections
+            self.script_error_selections = []
+            self.transcript_error_selections = []
+            try:
+                self.script_txt.setExtraSelections([])
+                self.transcript_txt.setExtraSelections([])
+            except Exception:
+                pass
 
+        # Load audio (support many formats) and resample to app SR
+        try:
+            data, file_sr = load_audio_file(sess.audio_path)
+            if hasattr(data, "ndim") and data.ndim > 1:
+                data = data[:, 0]
+            if file_sr != self.sr and data.size > 0:
+                duration = data.size / float(file_sr)
+                new_len = int(round(duration * self.sr))
+                x_old = np.linspace(0.0, duration, num=data.size, endpoint=False)
+                x_new = np.linspace(0.0, duration, num=new_len, endpoint=False)
+                data = np.interp(x_new, x_old, data).astype(np.float32)
+            self.audio_data = data
+            self.current_audio_path = sess.audio_path
+
+            x_env, y_env = envelope(data, self.sr)
+            self.wave_line.setData(x_env, y_env)
+
+            self.playhead.setPos(0)
+            self._update_time_axis(data.size)
+
+            self._replace_player(AudioPlayer(self.sr))
+            self.player.set_data(data)
+        except Exception as e:
+            # Surface the error but keep UI usable
+            self.metrics_label.setText(f"Could not load audio: {e}")
+            self.audio_data = None
+            self.current_audio_path = None
+            self.wave_line.clear()
+            self.playhead.setPos(0)
+            self._update_time_axis(0)
+
+        # If we have timestamped segments, add the playhead highlight on top
+        if self.transcript_segment_ranges:
+            try:
+                self.transcript_active_index = -1
+                self.transcript_active_index = highlight_transcript_at_time(
+                    self.transcript_txt,
+                    self.transcript_segment_ranges,
+                    0.0,
+                    self.transcript_active_index,
+                    # keep base error highlights visible
+                    base_selections=self.transcript_error_selections,
+                )
+            except Exception:
+                pass
+
+        # Enable controls
         self.btn_record.setEnabled(True)
-        self.btn_play.setEnabled(True)
+        self.btn_play.setEnabled(self.audio_data is not None)
         self.btn_score.setEnabled(True)
 
     # --------------------------- settings ----------------------------------
@@ -885,7 +1436,25 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         return settings_path()
 
     def _load_settings(self) -> None:
-        self.settings = load_settings(self._default_settings(), self._settings_path())
+        self.settings = load_settings(
+            self._default_settings(), self._settings_path()
+        )
+        # Load the toggle (default True if missing)
+        self.show_error_highlights = bool(
+            self.settings.get("error_highlights", True)
+        )
+        # Sync the action and legends if UI is built
+        try:
+            self.act_error_hl.setChecked(self.show_error_highlights)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "script_legend"):
+                self.script_legend.setVisible(self.show_error_highlights)
+            if hasattr(self, "transcript_legend"):
+                self.transcript_legend.setVisible(self.show_error_highlights)
+        except Exception:
+            pass
 
     def _save_settings(self) -> None:
         save_settings(self.settings, self._settings_path())
@@ -893,11 +1462,18 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _detect_gpu(self) -> tuple[bool, str]:
         try:
             import torch
+
             if torch.cuda.is_available():
                 count = torch.cuda.device_count()
                 name = torch.cuda.get_device_name(0)
-                total_vram = int(torch.cuda.get_device_properties(0).total_memory // (1024 ** 2))
-                return True, f"{name} ({total_vram} MB VRAM, {count} device(s))"
+                total_vram = int(
+                    torch.cuda.get_device_properties(0).total_memory
+                    // (1024**2)
+                )
+                return (
+                    True,
+                    f"{name} ({total_vram} MB VRAM, {count} device(s))",
+                )
         except Exception:
             pass
         return False, "No CUDA GPU detected"
@@ -905,11 +1481,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _open_progress_tracker(self) -> None:
         """Open the progress tracker dialog."""
         open_progress_tracker(self)
-    
+
     def _open_settings(self) -> None:
         open_settings_dialog(self)
-
-
 
 
 # ────────────────────────────── main ///////////////////////////////////////
@@ -932,7 +1506,8 @@ def main() -> None:
             win.player.close()
         if hasattr(win, "stream") and win.stream is not None:
             try:
-                win.stream.stop(); win.stream.close()
+                win.stream.stop()
+                win.stream.close()
             except Exception:
                 pass
         try:

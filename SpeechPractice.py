@@ -168,7 +168,23 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.transcript_error_selections: List[QtWidgets.QTextEdit.ExtraSelection] = []
         self.show_error_highlights: bool = True
 
+        # raw spans for navigation (start, end, color)
+        self.script_error_spans = []
+        self.transcript_error_spans = []
+
+        # error navigation index (built from spans + timestamps)
+        self._error_nav_points = []  # list[(t0: float, mid_char: int, seg_idx: int)]
+        self._error_nav_idx = -1
+
         self._build_ui()
+
+        # Enable click-to-jump on the transcript (install on widget and viewport)
+        self.transcript_txt.installEventFilter(self)
+        self.transcript_txt.viewport().installEventFilter(self)
+
+        # Catch Left/Right globally so widgets can't swallow them
+        QtWidgets.QApplication.instance().installEventFilter(self)
+
         # housekeeping: remove any recording files not referenced by the DB
         try:
             self._cleanup_orphan_recordings()
@@ -393,13 +409,24 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
     # -------------------------- input hooks ------------------------------
     def keyPressEvent(self, ev: QtGui.QKeyEvent) -> None:
-        # Spacebar toggles play/pause when not typing in a text box
-        if ev.key() == QtCore.Qt.Key_Space and not (
-            self.script_txt.hasFocus() or self.transcript_txt.hasFocus()
+        # Space toggles play/pause when not typing in a text box
+        if (
+                ev.key() == QtCore.Qt.Key_Space
+                and not (self.script_txt.hasFocus() or self.transcript_txt.hasFocus())
         ):
             self._toggle_play_pause()
             ev.accept()
             return
+
+        # Arrow keys navigate errors when not typing in a text box
+        if (
+                ev.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_Right)
+                and not (self.script_txt.hasFocus() or self.transcript_txt.hasFocus())
+        ):
+            self._goto_error(-1 if ev.key() == QtCore.Qt.Key_Left else +1)
+            ev.accept()
+            return
+
         super().keyPressEvent(ev)
 
     def _spans_to_selections(
@@ -426,10 +453,14 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
     def set_error_highlights(
             self,
-            script_spans: List[Tuple[int, int, str]],
-            transcript_spans: List[Tuple[int, int, str]],
+            script_spans: list[tuple[int, int, str]],
+            transcript_spans: list[tuple[int, int, str]],
     ) -> None:
-        # Build selections (store regardless of toggle so we can re-apply later)
+        # Store raw spans for nav
+        self.script_error_spans = list(script_spans or [])
+        self.transcript_error_spans = list(transcript_spans or [])
+
+        # Build selection layers (kept even if currently hidden)
         self.script_error_selections = self._spans_to_selections(
             self.script_txt, script_spans
         )
@@ -437,8 +468,20 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.transcript_txt, transcript_spans
         )
 
-        if not self.show_error_highlights:
-            # Respect toggle: clear visuals, keep stored selections
+        # Apply visuals if toggle is on
+        if getattr(self, "show_error_highlights", True):
+            try:
+                self.script_txt.setExtraSelections(self.script_error_selections)
+            except Exception:
+                pass
+            try:
+                self.transcript_txt.setExtraSelections(
+                    self.transcript_error_selections
+                )
+            except Exception:
+                pass
+        else:
+            # Clear visuals, keep data
             try:
                 self.script_txt.setExtraSelections([])
             except Exception:
@@ -447,19 +490,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 self.transcript_txt.setExtraSelections([])
             except Exception:
                 pass
-            return
 
-        # Apply base selections
-        try:
-            self.script_txt.setExtraSelections(self.script_error_selections)
-        except Exception:
-            pass
-        try:
-            self.transcript_txt.setExtraSelections(
-                self.transcript_error_selections
-            )
-        except Exception:
-            pass
+        # Rebuild error navigation anchors
+        self._rebuild_error_nav_points()
 
     def _clear_error_highlights(self) -> None:
         self.script_error_selections = []
@@ -990,6 +1023,157 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     pass
         except Exception:
             pass
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        # Clicks in the transcript jump to that segment
+        if obj in (
+                self.transcript_txt,
+                getattr(self.transcript_txt, "viewport", lambda: None)(),
+        ) and event.type() in (
+                QtCore.QEvent.MouseButtonRelease,
+                QtCore.QEvent.MouseButtonDblClick,
+        ):
+            try:
+                me = event  # type: ignore
+                if me.button() == QtCore.Qt.LeftButton:
+                    QtCore.QTimer.singleShot(0, self._handle_transcript_click)
+            except Exception:
+                pass
+            return False  # let QTextEdit also handle caret movement
+
+        # Global Left/Right error navigation
+        if event.type() == QtCore.QEvent.KeyPress:
+            ke = event  # type: ignore
+            if ke.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_Right):
+                fw = QtWidgets.QApplication.focusWidget()
+                # Don't steal arrows from text inputs or sliders
+                if isinstance(
+                        fw,
+                        (
+                                QtWidgets.QLineEdit,
+                                QtWidgets.QTextEdit,
+                                QtWidgets.QPlainTextEdit,
+                                QtWidgets.QSlider,
+                                QtWidgets.QSpinBox,
+                                QtWidgets.QComboBox,
+                        ),
+                ):
+                    return False
+                self._goto_error(+1 if ke.key() == QtCore.Qt.Key_Right else -1)
+                ke.accept()
+                return True  # consumed
+
+        return super().eventFilter(obj, event)
+
+    def _handle_transcript_click(self) -> None:
+        # Only jump if not selecting (or Ctrl held)
+        cur = self.transcript_txt.textCursor()
+        mods = QtWidgets.QApplication.keyboardModifiers()
+        if cur.hasSelection() and not (mods & QtCore.Qt.ControlModifier):
+            return
+        self._jump_to_transcript_char(cur.position(), play=True)
+
+    def _jump_to_transcript_char(self, char_pos: int, play: bool = True) -> None:
+        if not self.transcript_segment_ranges or self.audio_data is None:
+            return
+        # find segment containing or nearest to char_pos
+        idx = -1
+        for i, (s_char, e_char, _t0, _t1) in enumerate(
+                self.transcript_segment_ranges
+        ):
+            if s_char <= char_pos <= e_char:
+                idx = i
+                break
+        if idx == -1:
+            # nearest by midpoint distance
+            candidates = [
+                (abs(((s + e) // 2) - char_pos), i)
+                for i, (s, e, _t0, _t1) in enumerate(self.transcript_segment_ranges)
+            ]
+            if not candidates:
+                return
+            idx = min(candidates)[1]
+        t = float(self.transcript_segment_ranges[idx][2])
+        self._jump_to_time(t, play=play)
+
+    def _jump_to_time(self, t: float, play: bool = True) -> None:
+        if self.audio_data is None:
+            return
+        dur = self.audio_data.size / self.sr
+        t = max(0.0, min(t, dur))
+        idx = int(t * self.sr)
+
+        # Move playhead and audio
+        self.playhead.setPos(t)
+        self.player.set_data(self.audio_data)
+        if play:
+            self.player.play(idx)
+            self.play_timer.start()
+            self.btn_play.setIcon(self.ic_pause)
+        else:
+            self.player.pause()
+            self.play_timer.stop()
+            self.btn_play.setIcon(self.ic_play)
+
+        # Sync transcript highlight right away
+        try:
+            base = (
+                self.transcript_error_selections
+                if getattr(self, "show_error_highlights", True)
+                else []
+            )
+            self.transcript_active_index = highlight_transcript_at_time(
+                self.transcript_txt,
+                self.transcript_segment_ranges,
+                t,
+                self.transcript_active_index,
+                base_selections=base,
+            )
+        except Exception:
+            pass
+
+    def _rebuild_error_nav_points(self) -> None:
+        """Build list of error anchors mapped to segment start times."""
+        self._error_nav_points = []
+        self._error_nav_idx = -1
+        if not self.transcript_segment_ranges or not self.transcript_error_spans:
+            return
+        for s, e, _col in self.transcript_error_spans:
+            mid = (int(s) + int(e)) // 2
+            for i, (cs, ce, t0, _t1) in enumerate(self.transcript_segment_ranges):
+                if cs <= mid <= ce:
+                    self._error_nav_points.append((float(t0), mid, i))
+                    break
+        self._error_nav_points.sort(key=lambda x: x[0])
+
+    def _goto_error(self, direction: int) -> None:
+        """direction: +1 next, -1 previous."""
+        if not getattr(self, "_error_nav_points", None):
+            self._rebuild_error_nav_points()
+        if not self._error_nav_points:
+            return
+
+        if not self._error_nav_points or self.audio_data is None:
+            return
+        # current time from playhead
+        try:
+            cur_t = float(self.playhead.value())
+        except Exception:
+            cur_t = (self.player.idx / self.sr) if self.player else 0.0
+
+        eps = 1e-3
+        if direction > 0:
+            candidates = [p for p in self._error_nav_points if p[0] > cur_t + eps]
+            target = candidates[0] if candidates else self._error_nav_points[0]
+        else:
+            candidates = [p for p in self._error_nav_points if p[0] < cur_t - eps]
+            target = candidates[-1] if candidates else self._error_nav_points[-1]
+
+        self._jump_to_time(target[0], play=True)
+        try:
+            self._error_nav_idx = self._error_nav_points.index(target)
+        except Exception:
+            self._error_nav_idx = -1
 
     # --------------------------- scoring ----------------------------------
 

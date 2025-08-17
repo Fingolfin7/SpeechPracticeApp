@@ -9,7 +9,10 @@ import subprocess
 import soundfile as sf
 from pydub import AudioSegment
 import tempfile
-
+import queue
+import threading
+import time
+import gc
 import numpy as np
 import sounddevice as sd
 
@@ -152,6 +155,17 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.player = AudioPlayer(self.sr)
         # live waveform tail window (seconds) to avoid repeated O(n) concatenations
         self._live_tail_seconds: int = 1
+
+        # Robust recorder state (ring buffer + writer thread)
+        self._tail_nsamples = int(self.sr * self._live_tail_seconds)
+        self._live_ring = np.zeros(self._tail_nsamples, dtype=np.float32)
+        self._live_write = 0
+
+        self._rec_queue: queue.Queue[np.ndarray] | None = None
+        self._rec_writer: threading.Thread | None = None
+        self._writer_stop: threading.Event | None = None
+        self._rec_blocks: list[np.ndarray] = []
+        self._xrun_count: int = 0
 
         # modes/state
         self.free_speak_mode: bool = False
@@ -753,23 +767,79 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_record.setIcon(self.ic_record)
 
     def _start_record(self) -> None:
+        # Pause anything playing and prep recorder
         self.player.pause()
         self.play_timer.stop()
 
+        # Clear legacy buffer (not used by robust path) and reset robust state
         self.audio_buffer.clear()
+        self._rec_blocks = []
+        self._xrun_count = 0
         self.is_recording = True
 
+        # Reset live ring buffer for the UI tail
+        self._tail_nsamples = int(self.sr * self._live_tail_seconds)
+        self._live_ring = np.zeros(self._tail_nsamples, dtype=np.float32)
+        self._live_write = 0
+
+        # Queue + writer thread decouple the RT callback from Python work
+        self._rec_queue = queue.Queue(maxsize=256)
+        self._writer_stop = threading.Event()
+
+        def _writer():
+            while not self._writer_stop.is_set():
+                try:
+                    block = self._rec_queue.get(timeout=0.25)
+                except queue.Empty:
+                    continue
+                if block is None:
+                    break
+                # Append for final assembly
+                self._rec_blocks.append(block)
+                # Update the small ring buffer for the UI
+                b = block.reshape(-1)
+                L = self._tail_nsamples
+                if L <= 0:
+                    continue
+                w = self._live_write
+                n = b.size
+                if n >= L:
+                    self._live_ring[:] = b[-L:]
+                    self._live_write = 0
+                else:
+                    m = min(L - w, n)
+                    self._live_ring[w: w + m] = b[:m]
+                    r = n - m
+                    if r:
+                        self._live_ring[:r] = b[m:]
+                    self._live_write = (w + n) % L
+
+        self._rec_writer = threading.Thread(
+            target=_writer, name="rec-writer", daemon=True
+        )
+        self._rec_writer.start()
+
+        # Give the writer a moment to get scheduled
+        time.sleep(0.02)
+
+        gc.disable()  # reduce GC hiccups during recording
+
+        # Input stream with bigger blocks and higher latency for robustness
         self.stream = sd.InputStream(
             samplerate=self.sr,
             channels=1,
-            callback=lambda indata, *_: self.audio_buffer.append(
-                indata.copy()
-            ),
+            dtype="float32",
+            blocksize=2048,
+            latency="high",
+            callback=self._record_callback,
         )
         self.stream.start()
 
+        # Lighter UI update while recording (100 FPS is plenty)
+        if self.rec_timer is not None:
+            self.rec_timer.stop()
         self.rec_timer = QtCore.QTimer(self)
-        self.rec_timer.setInterval(50)
+        self.rec_timer.setInterval(100)
         self.rec_timer.timeout.connect(self._update_waveform)
         self.rec_timer.start()
 
@@ -777,32 +847,69 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_score.setEnabled(False)
 
     def _stop_record(self) -> None:
+        # Stop audio stream and UI timer
         if self.stream is not None:
-            self.stream.stop()
-            self.stream.close()
+            try:
+                self.stream.stop()
+            except Exception:
+                pass
+            try:
+                self.stream.close()
+            except Exception:
+                pass
             self.stream = None
         if self.rec_timer is not None:
             self.rec_timer.stop()
             self.rec_timer = None
 
+        # Stop writer thread cleanly
+        if self._rec_queue is not None:
+            try:
+                self._rec_queue.put_nowait(None)  # sentinel
+            except Exception:
+                pass
+        if self._writer_stop is not None:
+            self._writer_stop.set()
+        if self._rec_writer is not None:
+            try:
+                self._rec_writer.join(timeout=1.0)
+            except Exception:
+                pass
+        self._rec_writer = None
+        self._writer_stop = None
+
         self.is_recording = False
 
-        # Ensure we have something to save even if recording was too short to capture
-        if not self.audio_buffer:
-            # create a brief silent clip (0.5s) so a session can still be saved
+        gc.enable()  # re-enable GC after recording
+
+        # Assemble full recording
+        if self._rec_blocks:
+            raw = np.concatenate(self._rec_blocks, axis=0).flatten()
+        else:
+            raw = np.zeros(0, dtype=np.float32)
+
+        # Fall back to a tiny silent clip if nothing captured
+        if raw.size == 0:
             trimmed = np.zeros(int(self.sr * 0.5), dtype=np.float32)
         else:
-            raw = np.concatenate(self.audio_buffer, axis=0).flatten()
             trimmed = trim_silence(raw, self.sr)
+            # If trimming nuked almost everything, keep the raw take
             if trimmed.size < self.sr // 10:
                 trimmed = raw
+
         self.audio_data = trimmed
 
-        # In Free Speak mode, do not write to disk unless the user chooses Save later
+        # Report any overflows to console (keeps UI text free)
+        if getattr(self, "_xrun_count", 0):
+            try:
+                print(f"Input overflows / queue drops: {self._xrun_count}")
+            except Exception:
+                pass
+
+        # In Free Speak mode, do not write to disk unless user saves later
         if not self.free_speak_mode:
             os.makedirs("recordings", exist_ok=True)
             base = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # Prefer FLAC to save disk; fallback to WAV for broader codec support
             flac_path = os.path.join("recordings", base + ".flac")
             wav_path = os.path.join("recordings", base + ".wav")
             wrote = False
@@ -832,6 +939,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         else:
             self.current_audio_path = None
 
+        # Prep player and UI
         self._replace_player(AudioPlayer(self.sr))
         self.player.set_data(trimmed)
 
@@ -843,30 +951,62 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.btn_play.setEnabled(True)
         self.btn_score.setEnabled(True)
+
         if self.free_speak_mode:
-            # In Free Speak, do not auto-save; auto-transcribe instead
+            # Do not auto-save; auto-transcribe for convenience
             self.btn_score.setText("Transcribe")
             self.btn_save.setVisible(True)
             self.btn_save.setEnabled(False)
             self.metrics_label.setText("Free Speak: ready to transcribe")
-            # Auto-start transcription for convenience
             QtCore.QTimer.singleShot(
                 100, self.transcription_service.transcribe_free
             )
             return
 
-        if not self.free_speak_mode:
-            # Create a DB entry immediately after stopping, with empty scores
+        # Not Free Speak: create a DB entry immediately (same logic as before)
+        try:
+            sess = db.add_session(
+                self.db,
+                self.current_script_name,
+                self.current_script_text,
+                self.current_audio_path or "",
+                transcript=None,
+                wer=None,
+                clarity=None,
+                score=None,
+            )
+            self.current_session_id = sess.id
+            formatted_timestamp = datetime.strptime(
+                sess.timestamp, "%Y-%m-%dT%H:%M:%S"
+            ).strftime("%d %b %Y %H:%M")
+            label = f"{formatted_timestamp} — {sess.script_name}"
+            it = QListWidgetItem(label)
+            it.setData(QtCore.Qt.UserRole, sess.id)
+            # remove placeholder if present
+            if self.history_list.count() == 1 and not isinstance(
+                    self.history_list.item(0).data(QtCore.Qt.UserRole), int
+            ):
+                self.history_list.takeItem(0)
+            self.history_list.addItem(it)
+            self.metrics_label.setText(
+                "Saved session; scores pending. Run Score when ready."
+            )
+        except Exception as e:
+            # Fallback for legacy DBs with NOT NULL constraints
             try:
+                try:
+                    self.db.rollback()
+                except Exception:
+                    pass
                 sess = db.add_session(
                     self.db,
                     self.current_script_name,
                     self.current_script_text,
-                    self.current_audio_path or "",
-                    transcript=None,
-                    wer=None,
-                    clarity=None,
-                    score=None,
+                    self.current_audio_path,
+                    transcript="",
+                    wer=0.0,
+                    clarity=0.0,
+                    score=0.0,
                 )
                 self.current_session_id = sess.id
                 formatted_timestamp = datetime.strptime(
@@ -875,82 +1015,53 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 label = f"{formatted_timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
-                # remove placeholder if present
                 if self.history_list.count() == 1 and not isinstance(
-                    self.history_list.item(0).data(QtCore.Qt.UserRole), int
+                        self.history_list.item(0).data(QtCore.Qt.UserRole), int
                 ):
                     self.history_list.takeItem(0)
                 self.history_list.addItem(it)
                 self.metrics_label.setText(
-                    "Saved session; scores pending. Run Score when ready."
+                    "Saved session (legacy DB); scores pending."
                 )
-            except Exception as e:
-                # Fallback for legacy DBs with NOT NULL constraints: store placeholders
+            except Exception as e2:
+                self.metrics_label.setText(
+                    f"Could not save session. DB error: {e2}"
+                )
                 try:
-                    # reset the transaction after the failed flush/commit
-                    try:
-                        self.db.rollback()
-                    except Exception:
-                        pass
-                    sess = db.add_session(
-                        self.db,
-                        self.current_script_name,
-                        self.current_script_text,
-                        self.current_audio_path,
-                        transcript="",
-                        wer=0.0,
-                        clarity=0.0,
-                        score=0.0,
-                    )
-                    self.current_session_id = sess.id
-                    formatted_timestamp = datetime.strptime(
-                        sess.timestamp, "%Y-%m-%dT%H:%M:%S"
-                    ).strftime("%d %b %Y %H:%M")
-                    label = f"{formatted_timestamp} — {sess.script_name}"
-                    it = QListWidgetItem(label)
-                    it.setData(QtCore.Qt.UserRole, sess.id)
-                    if self.history_list.count() == 1 and not isinstance(
-                        self.history_list.item(0).data(QtCore.Qt.UserRole), int
-                    ):
-                        self.history_list.takeItem(0)
-                    self.history_list.addItem(it)
-                    self.metrics_label.setText(
-                        "Saved session (legacy DB); scores pending."
-                    )
-                except Exception as e2:
-                    # Surface the specific error for troubleshooting
-                    self.metrics_label.setText(
-                        f"Could not save session. DB error: {e2}"
-                    )
-                    try:
-                        print("DB save error (first):", repr(e))
-                        print("DB save error (fallback):", repr(e2))
-                    except Exception:
-                        pass
+                    print("DB save error (first):", repr(e))
+                    print("DB save error (fallback):", repr(e2))
+                except Exception:
+                    pass
+
+    def _record_callback(self, indata, frames, time_info, status):
+        # Minimal work in the real-time callback
+        if status and getattr(status, "input_overflow", False):
+            self._xrun_count += 1
+        try:
+            # Copy is required; PortAudio reuses the buffer
+            if self._rec_queue is not None:
+                self._rec_queue.put_nowait(indata.copy())
+        except queue.Full:
+            # If the queue overflows, count it as an XRUN-equivalent
+            self._xrun_count += 1
 
     def _update_waveform(self) -> None:
-        if not self.audio_buffer:
+        # Build a contiguous 1s tail from the ring buffer without touching history
+        L = self._tail_nsamples
+        if L <= 0:
             return
-        # Concatenate only the trailing blocks required for the last N seconds
-        needed = int(self.sr * self._live_tail_seconds)
-        total = 0
-        parts: list[np.ndarray] = []
-        for block in reversed(self.audio_buffer):
-            parts.append(block)
-            total += int(block.shape[0])
-            if total >= needed:
-                break
-        snippet = (
-            np.concatenate(list(reversed(parts)), axis=0).flatten()
-            if parts
-            else np.zeros(0, dtype=np.float32)
-        )
-        snippet = snippet[-needed:]
-        x_env, y_env = envelope(snippet, self.sr)
+        w = self._live_write
+        if w == 0:
+            tail = self._live_ring.copy()
+        else:
+            tail = np.concatenate((self._live_ring[w:], self._live_ring[:w]), axis=0)
+
+        # Plot fewer points during recording to keep UI light
+        x_env, y_env = envelope(tail, self.sr, max_points=1200)
         self.wave_line.setData(x_env, y_env)
         if x_env.size:
             self.playhead.setPos(x_env[-1])
-        self._update_time_axis(snippet.size)
+        self._update_time_axis(tail.size)
 
     # --------------------------- playback ---------------------------------
 

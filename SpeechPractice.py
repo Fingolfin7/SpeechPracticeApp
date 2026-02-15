@@ -169,6 +169,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         # modes/state
         self.free_speak_mode: bool = False
+        self.quick_practice_mode: bool = False
         self.last_transcript_text: str = ""
         # transcript timestamp sync state
         self.transcript_segments: list[dict] | None = None
@@ -225,6 +226,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             lambda checked: on_toggle_free_mode(self, checked)
         )
         mb.addAction(self.act_free_mode)
+        # Quick Practice action
+        act_quick = mb.addAction("Quick Practice")
+        act_quick.triggered.connect(self._enter_quick_practice)
         # Progress Tracker action
         act_progress = mb.addAction("Progress Tracker")
         act_progress.triggered.connect(self._open_progress_tracker)
@@ -711,6 +715,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     # --------------------------- script -----------------------------------
 
     def load_next_script(self) -> None:
+        self.quick_practice_mode = False
+        self.script_txt.setReadOnly(True)
+        self.script_txt.setPlaceholderText("")
         name, text = pick_next_script()
         self.current_script_name = name
         self.current_script_text = text
@@ -755,6 +762,43 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_score.setEnabled(False)
         self.btn_save.setEnabled(False)
         self.btn_save.setVisible(self.free_speak_mode)
+
+    def _enter_quick_practice(self) -> None:
+        # Exit free-speak mode if active
+        if self.free_speak_mode:
+            self.act_free_mode.setChecked(False)
+
+        self.quick_practice_mode = True
+        self.current_script_name = "Quick Practice"
+        self.current_script_text = ""
+        self.current_session_id = None
+
+        self.script_txt.setReadOnly(False)
+        self.script_txt.clear()
+        self.script_txt.setPlaceholderText(
+            "Type or paste your reference text here..."
+        )
+
+        self.player.stop()
+        self.play_timer.stop()
+        self.wave_line.clear()
+        self.playhead.setPos(0)
+        self._update_time_axis(0)
+
+        self.metrics_label.setText("Quick Practice: enter text, then record")
+        self.transcript_txt.clear()
+        self._clear_error_highlights()
+        self.transcript_segments = None
+        self.transcript_segment_ranges = []
+        self.transcript_active_index = -1
+        self.audio_data = None
+        self.current_audio_path = None
+
+        self.btn_record.setEnabled(True)
+        self.btn_play.setEnabled(False)
+        self.btn_score.setEnabled(False)
+        self.btn_score.setText("Score")
+        self.btn_save.setVisible(False)
 
     # --------------------------- recording --------------------------------
 
@@ -962,6 +1006,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 100, self.transcription_service.transcribe_free
             )
             return
+
+        # In Quick Practice mode, read reference text from the editable pane
+        if self.quick_practice_mode:
+            self.current_script_text = self.script_txt.toPlainText().strip()
 
         # Not Free Speak: create a DB entry immediately (same logic as before)
         try:

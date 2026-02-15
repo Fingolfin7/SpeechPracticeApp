@@ -15,6 +15,9 @@ import db
 
 def on_toggle_free_mode(window, checked: bool) -> None:
     window.free_speak_mode = bool(checked)
+    window.quick_practice_mode = False
+    window.script_txt.setReadOnly(True)
+    window.script_txt.setPlaceholderText("")
     if window.free_speak_mode:
         try:
             window.act_free_mode.setText("Script Mode")

@@ -30,6 +30,8 @@ def on_toggle_free_mode(window, checked: bool) -> None:
         window.metrics_label.setText("Free Speak: not scoring")
         window.script_txt.setText("Free Speak Mode — Talk, then Transcribe.")
         window.current_session_id = None
+        window.script_pane_label.setText("Free Speak")
+        window._update_script_border()
     else:
         try:
             window.act_free_mode.setText("Free Speak Mode")
@@ -99,6 +101,7 @@ def save_free_speak_session(window) -> None:
         label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
         it = QListWidgetItem(label)
         it.setData(QtCore.Qt.UserRole, sess.id)
+        it.setIcon(window._session_type_icon(sess.script_name))
         if window.history_list.count() == 1 and not isinstance(
             window.history_list.item(0).data(QtCore.Qt.UserRole), int
         ):

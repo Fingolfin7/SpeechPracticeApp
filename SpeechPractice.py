@@ -217,7 +217,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         act_next = mb.addAction("Next Script")
         act_next.triggered.connect(self.load_next_script)
-        # Free Speak mode toggle directly on the menubar
+
+        # "Mode" menu
+        mode_menu = mb.addMenu("Mode")
+        act_quick = mode_menu.addAction("Quick Practice")
+        act_quick.triggered.connect(self._enter_quick_practice)
         self.act_free_mode = QAction("Free Speak Mode", self, checkable=True)
         self.act_free_mode.setStatusTip(
             "Transcribe without scoring or auto-saving"
@@ -225,22 +229,20 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.act_free_mode.toggled.connect(
             lambda checked: on_toggle_free_mode(self, checked)
         )
-        mb.addAction(self.act_free_mode)
-        # Quick Practice action
-        act_quick = mb.addAction("Quick Practice")
-        act_quick.triggered.connect(self._enter_quick_practice)
-        # Progress Tracker action
-        act_progress = mb.addAction("Progress Tracker")
+        mode_menu.addAction(self.act_free_mode)
+
+        # "View" menu
+        view_menu = mb.addMenu("View")
+        act_progress = view_menu.addAction("Progress Tracker")
         act_progress.triggered.connect(self._open_progress_tracker)
-        # Settings dialog action
-        act_settings = mb.addAction("Settings")
-        act_settings.triggered.connect(self._open_settings)
-        # Toggle for error highlights
         self.act_error_hl = QAction("Error Highlights", self, checkable=True)
         self.act_error_hl.setStatusTip("Toggle word/character error highlights")
         self.act_error_hl.setChecked(True)
         self.act_error_hl.toggled.connect(self._toggle_error_highlights)
-        mb.addAction(self.act_error_hl)
+        view_menu.addAction(self.act_error_hl)
+        view_menu.addSeparator()
+        act_settings = view_menu.addAction("Settings")
+        act_settings.triggered.connect(self._open_settings)
 
         splitter = QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(splitter)
@@ -262,7 +264,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # middle: current script
         scr_w = QWidget()
         sl = QVBoxLayout(scr_w)
-        sl.addWidget(QLabel("Current Script"))
+        self.script_pane_label = QLabel("Current Script")
+        sl.addWidget(self.script_pane_label)
 
         # Legend for script highlights
         self.script_legend = QLabel(parent=scr_w)
@@ -416,6 +419,39 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         splitter.setStretchFactor(2, 3)
 
     # --------------------------- helpers ---------------------------------
+
+    def _update_script_border(self) -> None:
+        """Set a left-border style on the script pane based on current mode."""
+        if self.quick_practice_mode:
+            self.script_txt.setStyleSheet(
+                "border-left: 4px solid #00d0ff;"
+            )
+        elif self.free_speak_mode:
+            self.script_txt.setStyleSheet(
+                "border-left: 4px solid #f0a030;"
+            )
+        else:
+            self.script_txt.setStyleSheet("")
+
+    @staticmethod
+    def _session_type_icon(script_name: str) -> QtGui.QIcon:
+        """Return a colored dot QIcon based on session type."""
+        size = 12
+        pix = QPixmap(size, size)
+        pix.fill(QtCore.Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        if script_name == "Quick Practice":
+            color = QColor("#30c060")
+        elif script_name == "Free Speak":
+            color = QColor("#f0a030")
+        else:
+            color = QColor("#00d0ff")
+        p.setBrush(color)
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawEllipse(1, 1, size - 2, size - 2)
+        p.end()
+        return QtGui.QIcon(pix)
 
     def _replace_player(self, new_player: AudioPlayer) -> None:
         try:
@@ -701,6 +737,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 label = f"{formatted_timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
+                it.setIcon(self._session_type_icon(sess.script_name))
                 self.history_list.addItem(it)
         self.history_list.itemClicked.connect(self._load_session)
 
@@ -724,6 +761,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # clear any active session id when switching scripts
         self.current_session_id = None
         self.script_txt.setText(f"{name}\n\n{text}")
+        self.script_pane_label.setText(f"Script: {name}")
+        self._update_script_border()
 
         self.player.stop()
         self.play_timer.stop()
@@ -772,6 +811,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.current_script_name = "Quick Practice"
         self.current_script_text = ""
         self.current_session_id = None
+
+        self.script_pane_label.setText("Quick Practice")
+        self._update_script_border()
 
         self.script_txt.setReadOnly(False)
         self.script_txt.clear()
@@ -1030,6 +1072,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             label = f"{formatted_timestamp} — {sess.script_name}"
             it = QListWidgetItem(label)
             it.setData(QtCore.Qt.UserRole, sess.id)
+            it.setIcon(self._session_type_icon(sess.script_name))
             # remove placeholder if present
             if self.history_list.count() == 1 and not isinstance(
                     self.history_list.item(0).data(QtCore.Qt.UserRole), int
@@ -1063,6 +1106,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 label = f"{formatted_timestamp} — {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
+                it.setIcon(self._session_type_icon(sess.script_name))
                 if self.history_list.count() == 1 and not isinstance(
                         self.history_list.item(0).data(QtCore.Qt.UserRole), int
                 ):
@@ -1396,6 +1440,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.current_script_name = sess.script_name
         self.current_script_text = sess.script_text
         self.script_txt.setText(sess.script_text)
+        self.script_pane_label.setText(f"Script: {sess.script_name}")
 
         # Metrics formatting (handle missing values gracefully)
         no_scores = (sess.transcript is None) or (sess.transcript == "")

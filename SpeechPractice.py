@@ -397,6 +397,13 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         f.setBold(True)
         self.metrics_label.setFont(f)
         rl.addWidget(self.metrics_label)
+        self.timing_label = QLabel("Timing: -")
+        self.timing_label.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse
+            | QtCore.Qt.TextSelectableByKeyboard
+        )
+        self.timing_label.setStyleSheet("color:#9fb0c0; font-size:11px;")
+        rl.addWidget(self.timing_label)
 
         # transcript pane --------------------------------------------------
         rl.addWidget(QLabel("Transcript"))
@@ -549,8 +556,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self._rebuild_error_nav_points()
 
     def _clear_error_highlights(self) -> None:
+        self.script_error_spans = []
+        self.transcript_error_spans = []
         self.script_error_selections = []
         self.transcript_error_selections = []
+        self._error_nav_points = []
+        self._error_nav_idx = -1
         try:
             self.script_txt.setExtraSelections([])
         except Exception:
@@ -1078,7 +1089,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     self.history_list.item(0).data(QtCore.Qt.UserRole), int
             ):
                 self.history_list.takeItem(0)
-            self.history_list.addItem(it)
+            self.history_list.insertItem(0, it)
+            self.history_list.setCurrentItem(it)
+            self.history_list.scrollToItem(it)
             self.metrics_label.setText(
                 "Saved session; scores pending. Run Score when ready."
             )
@@ -1111,7 +1124,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                         self.history_list.item(0).data(QtCore.Qt.UserRole), int
                 ):
                     self.history_list.takeItem(0)
-                self.history_list.addItem(it)
+                self.history_list.insertItem(0, it)
+                self.history_list.setCurrentItem(it)
+                self.history_list.scrollToItem(it)
                 self.metrics_label.setText(
                     "Saved session (legacy DB); scores pending."
                 )
@@ -1168,7 +1183,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         start = (
             self.player.idx if 0 <= self.player.idx < self.audio_data.size else 0
         )
-        self.player.set_data(self.audio_data)
         self.player.play(start)
         self.play_timer.start()
         self.btn_play.setIcon(self.ic_pause)
@@ -1184,7 +1198,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         idx = int(t * self.sr)
 
         self.playhead.setPos(t)
-        self.player.set_data(self.audio_data)
         self.player.play(idx)
         self.play_timer.start()
         self.btn_play.setIcon(self.ic_pause)
@@ -1308,12 +1321,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         # Move playhead and audio
         self.playhead.setPos(t)
-        self.player.set_data(self.audio_data)
         if play:
             self.player.play(idx)
             self.play_timer.start()
             self.btn_play.setIcon(self.ic_pause)
         else:
+            self.player.seek(idx)
             self.player.pause()
             self.play_timer.stop()
             self.btn_play.setIcon(self.ic_play)
@@ -1433,7 +1446,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         # Stop any playback
         if hasattr(self, "player"):
-            self.player.pause()
+            self.player.stop()
         self.play_timer.stop()
 
         # Populate script pane
@@ -1516,69 +1529,17 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.transcript_active_index = -1
 
         # Compute and apply error highlights (script vs transcript)
-        # Helper to convert (start,end,color) spans to ExtraSelections
-        def _spans_to_selections(edit: QtWidgets.QTextEdit, spans):
-            sels = []
-            doc_len = len(edit.toPlainText())
-            for start, end, color in spans or []:
-                s = max(0, min(int(start), doc_len))
-                e = max(0, min(int(end), doc_len))
-                if e <= s:
-                    continue
-                cur = edit.textCursor()
-                cur.setPosition(s)
-                cur.setPosition(e, QtGui.QTextCursor.KeepAnchor)
-                sel = QtWidgets.QTextEdit.ExtraSelection()
-                sel.cursor = cur
-                fmt = QtGui.QTextCharFormat()
-                fmt.setBackground(QColor(color))
-                fmt.setProperty(QtGui.QTextFormat.FullWidthSelection, False)
-                sel.format = fmt
-                sels.append(sel)
-            return sels
-
+        # through the shared pathway used during scoring, so behavior
+        # is consistent across freshly scored vs loaded sessions.
         try:
-            # Ensure attributes exist for base selections
-            if not hasattr(self, "script_error_selections"):
-                self.script_error_selections = []
-            if not hasattr(self, "transcript_error_selections"):
-                self.transcript_error_selections = []
-
             script_display = self.script_txt.toPlainText()
             transcript_display = self.transcript_txt.toPlainText()
-
-            # Use the service helper (alignment-based)
             s_spans, t_spans = self.transcription_service.compute_error_spans(
                 script_display, transcript_display
             )
-            self.script_error_selections = _spans_to_selections(
-                self.script_txt, s_spans
-            )
-            self.transcript_error_selections = _spans_to_selections(
-                self.transcript_txt, t_spans
-            )
-            # Apply base selections
-            try:
-                self.script_txt.setExtraSelections(
-                    self.script_error_selections
-                )
-            except Exception:
-                pass
-            try:
-                self.transcript_txt.setExtraSelections(
-                    self.transcript_error_selections
-                )
-            except Exception:
-                pass
+            self.set_error_highlights(s_spans, t_spans)
         except Exception:
-            # If anything fails, clear base selections
-            self.script_error_selections = []
-            self.transcript_error_selections = []
-            try:
-                self.script_txt.setExtraSelections([])
-                self.transcript_txt.setExtraSelections([])
-            except Exception:
-                pass
+            self._clear_error_highlights()
 
         # Load audio (support many formats) and resample to app SR
         try:

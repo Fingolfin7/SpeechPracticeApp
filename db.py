@@ -33,6 +33,32 @@ class PracticeSession(Base):
     avg_conf = Column(Float, nullable=True)  # 0..1 normalized from avg_logprob
 
 
+class SessionError(Base):
+    __tablename__ = "session_errors"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, nullable=False, index=True)
+    timestamp = Column(String, nullable=False, index=True)
+    script_name = Column(String, nullable=True)
+    ref_token = Column(String, nullable=True, index=True)
+    hyp_token = Column(String, nullable=True)
+    op = Column(String, nullable=False, index=True)  # sub | del | ins
+    error_kind = Column(String, nullable=False, index=True)
+    ref_start = Column(Integer, nullable=True)
+    ref_end = Column(Integer, nullable=True)
+    hyp_start = Column(Integer, nullable=True)
+    hyp_end = Column(Integer, nullable=True)
+    ref_local_start = Column(Integer, nullable=True)
+    ref_local_end = Column(Integer, nullable=True)
+    hyp_local_start = Column(Integer, nullable=True)
+    hyp_local_end = Column(Integer, nullable=True)
+    ref_token_len = Column(Integer, nullable=True)
+    hyp_token_len = Column(Integer, nullable=True)
+    confidence = Column(Float, nullable=True)
+    segment_start = Column(Float, nullable=True)
+    segment_end = Column(Float, nullable=True)
+
+
 def get_engine(db_path: str = "sessions.db"):
     full = os.path.abspath(db_path)
     return create_engine(f"sqlite:///{full}", echo=False)
@@ -62,6 +88,25 @@ def init_db(engine=None):
             add_col("pause_ratio", "FLOAT")
             add_col("filled_pauses", "FLOAT")
             add_col("avg_conf", "FLOAT")
+
+            # session_errors migration for older DBs
+            err_cols = conn.exec_driver_sql(
+                "PRAGMA table_info(session_errors)"
+            ).fetchall()
+            err_names = {row[1] for row in err_cols}
+
+            def add_err_col(name: str, ddl: str) -> None:
+                if name not in err_names:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE session_errors ADD COLUMN {name} {ddl}"
+                    )
+
+            add_err_col("ref_local_start", "INTEGER")
+            add_err_col("ref_local_end", "INTEGER")
+            add_err_col("hyp_local_start", "INTEGER")
+            add_err_col("hyp_local_end", "INTEGER")
+            add_err_col("ref_token_len", "INTEGER")
+            add_err_col("hyp_token_len", "INTEGER")
     except Exception:
         # best-effort; ignore if migration not applicable
         pass
@@ -76,7 +121,7 @@ def get_session(db_path: str = "sessions.db"):
 def get_all_sessions(db):
     return (
         db.query(PracticeSession)
-        .order_by(PracticeSession.timestamp.desc())
+        .order_by(PracticeSession.timestamp.desc(), PracticeSession.id.desc())
         .all()
     )
 
@@ -166,6 +211,10 @@ def delete_session(db, sess_id: int):
     sess = db.query(PracticeSession).get(sess_id)
     if not sess:
         return
+    try:
+        db.query(SessionError).filter(SessionError.session_id == sess.id).delete()
+    except Exception:
+        pass
     exists = (
         db.query(PracticeSession)
         .filter(
@@ -181,3 +230,49 @@ def delete_session(db, sess_id: int):
             pass
     db.delete(sess)
     db.commit()
+
+
+def replace_session_errors(
+    db,
+    sess_id: int,
+    timestamp: str,
+    script_name: str | None,
+    events: list[dict],
+):
+    """
+    Replace all error events for a session.
+    """
+    db.query(SessionError).filter(SessionError.session_id == sess_id).delete()
+    if not events:
+        db.commit()
+        return 0
+
+    rows = []
+    for ev in events:
+        rows.append(
+            SessionError(
+                session_id=sess_id,
+                timestamp=timestamp,
+                script_name=script_name,
+                ref_token=ev.get("ref_token"),
+                hyp_token=ev.get("hyp_token"),
+                op=ev.get("op", ""),
+                error_kind=ev.get("error_kind", ""),
+                ref_start=ev.get("ref_start"),
+                ref_end=ev.get("ref_end"),
+                hyp_start=ev.get("hyp_start"),
+                hyp_end=ev.get("hyp_end"),
+                ref_local_start=ev.get("ref_local_start"),
+                ref_local_end=ev.get("ref_local_end"),
+                hyp_local_start=ev.get("hyp_local_start"),
+                hyp_local_end=ev.get("hyp_local_end"),
+                ref_token_len=ev.get("ref_token_len"),
+                hyp_token_len=ev.get("hyp_token_len"),
+                confidence=ev.get("confidence"),
+                segment_start=ev.get("segment_start"),
+                segment_end=ev.get("segment_end"),
+            )
+        )
+    db.add_all(rows)
+    db.commit()
+    return len(rows)

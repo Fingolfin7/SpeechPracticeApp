@@ -4,9 +4,10 @@ from typing import Dict, Optional, Union
 
 import numpy as np
 from PyQt5 import QtCore
-from jiwer import wer
 import math
 import re
+import time
+from alignment_utils import compute_flexible_wer
 
 
 class TranscribeWorker(QtCore.QThread):
@@ -35,6 +36,7 @@ class TranscribeWorker(QtCore.QThread):
         self._ref = self.clean_text(ref_text)
         self._audio_path = audio_path
         self._options = options or {}
+        self.last_timing: Dict[str, float] = {}
 
     @staticmethod
     def _scale_score(clarity: float) -> float:
@@ -51,11 +53,29 @@ class TranscribeWorker(QtCore.QThread):
 
     def run(self) -> None:
         try:
-            result = self._model.transcribe(self._audio_path, **self._options)
+            t0 = time.perf_counter()
+            try:
+                import torch
+
+                with torch.inference_mode():
+                    result = self._model.transcribe(
+                        self._audio_path, **self._options
+                    )
+            except Exception:
+                result = self._model.transcribe(
+                    self._audio_path, **self._options
+                )
+            t_asr = time.perf_counter()
             hyp = self.clean_text(result["text"])
-            err = wer(reference=self._ref, hypothesis=hyp)
+            err = compute_flexible_wer(self._ref, hyp)
             clar = 1.0 - err
             score = self._scale_score(clar)
+            t_done = time.perf_counter()
+            self.last_timing = {
+                "asr_s": float(t_asr - t0),
+                "worker_post_s": float(t_done - t_asr),
+                "worker_total_s": float(t_done - t0),
+            }
 
             segments = result.get("segments") if isinstance(result, dict) else None
             if segments is not None:
@@ -95,12 +115,31 @@ class FreeTranscribeWorker(QtCore.QThread):
         self._model = model
         self._audio_source: Union[str, np.ndarray] = audio_source
         self._options = options or {}
+        self.last_timing: Dict[str, float] = {}
 
     def run(self) -> None:
         try:
-            result = self._model.transcribe(self._audio_source, **self._options)
+            t0 = time.perf_counter()
+            try:
+                import torch
+
+                with torch.inference_mode():
+                    result = self._model.transcribe(
+                        self._audio_source, **self._options
+                    )
+            except Exception:
+                result = self._model.transcribe(
+                    self._audio_source, **self._options
+                )
+            t_asr = time.perf_counter()
             hyp = str(result["text"]).strip()
             segments = result.get("segments") if isinstance(result, dict) else None
+            t_done = time.perf_counter()
+            self.last_timing = {
+                "asr_s": float(t_asr - t0),
+                "worker_post_s": float(t_done - t_asr),
+                "worker_total_s": float(t_done - t0),
+            }
             if segments is not None:
                 try:
                     self.completed_with_segments.emit(hyp, segments)

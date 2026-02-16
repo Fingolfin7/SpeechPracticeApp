@@ -192,8 +192,21 @@ def open_settings_dialog(window) -> None:
         window.settings["timestamps"] = bool(ts_ck.isChecked())
         window.settings["no_speech_threshold"] = float(ns_sb.value())
         window.settings["language"] = lang_cb.currentText()
-        # Reset model so it will be recreated with new settings
-        window.model = None
+        # Reset any loaded Whisper model so it is recreated with new settings.
+        # The active model cache is owned by TranscriptionService.
+        try:
+            if hasattr(window, "transcription_service") and window.transcription_service is not None:
+                if hasattr(window.transcription_service, "unload_model"):
+                    window.transcription_service.unload_model()
+                else:
+                    window.transcription_service.model = None
+        except Exception:
+            pass
+        # Backward compatibility for any legacy window-level model attribute.
+        try:
+            window.model = None
+        except Exception:
+            pass
         save_settings(window.settings, settings_path())
 
 
@@ -208,6 +221,7 @@ def whisper_options(settings: Dict, free_speak: bool = False) -> Dict:
         task="transcribe",
         temperature=temperature,
         beam_size=beam_size,
+        best_of=1,
         without_timestamps=without_ts,
         condition_on_previous_text=bool(settings.get("condition_on_previous_text", True)),
         compression_ratio_threshold=2.4,
@@ -238,6 +252,14 @@ def whisper_options(settings: Dict, free_speak: bool = False) -> Dict:
     elif preset == "accurate_gpu":
         opts.update(dict(beam_size=5, temperature=0.0, fp16=True))
     elif preset == "---":
+        pass
+
+    # Use greedy decode when beam size is 1; avoids beam-search overhead.
+    try:
+        if int(opts.get("beam_size", 1)) <= 1:
+            opts["beam_size"] = None
+            opts["best_of"] = 1
+    except Exception:
         pass
 
     return opts

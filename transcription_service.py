@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import gc
 from datetime import datetime
 from typing import Optional, Any, Dict, Tuple, List
 
@@ -18,6 +20,7 @@ from transcript_utils import (
 )
 from settings_ui import whisper_options
 from alignment_utils import compute_error_spans_for_display
+from error_analytics import extract_error_events
 
 
 class TranscriptionService(QtCore.QObject):
@@ -34,18 +37,111 @@ class TranscriptionService(QtCore.QObject):
 
     # ------------------------ model/options ------------------------
 
+    def _resolve_model_device(self) -> str:
+        """
+        Resolve Whisper model device from settings:
+        - gpu  -> cuda (fallback cpu if unavailable)
+        - cpu  -> cpu
+        - auto -> cuda if available else cpu
+        """
+        pref = (
+            getattr(self.window, "settings", {}).get("device", "auto")
+            if hasattr(self.window, "settings")
+            and isinstance(self.window.settings, dict)
+            else "auto"
+        )
+        if pref == "cpu":
+            return "cpu"
+        try:
+            import torch
+
+            has_cuda = bool(torch.cuda.is_available())
+        except Exception:
+            has_cuda = False
+        if pref == "gpu":
+            return "cuda" if has_cuda else "cpu"
+        return "cuda" if has_cuda else "cpu"
+
     def ensure_model(self) -> None:
         if self.model is None:
+            self._release_finished_workers()
+            gc.collect()
+            self._clear_cuda_cache()
             model_name = (
                 getattr(self.window, "settings", {}).get("model_name")
                 if hasattr(self.window, "settings")
                 and isinstance(self.window.settings, dict)
                 else None
             ) or os.getenv("WHISPER_MODEL", "base.en")
-            self.model = whisper.load_model(model_name)
+            device = self._resolve_model_device()
+            try:
+                self.model = whisper.load_model(model_name, device=device)
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    self._clear_cuda_cache()
+                    gc.collect()
+                    raise RuntimeError(
+                        "CUDA out of memory while loading Whisper model. "
+                        "Try a smaller model or wait for current transcriptions "
+                        "to finish before switching models."
+                    ) from e
+                raise
+            try:
+                self.model.eval()
+            except Exception:
+                pass
 
     def get_whisper_options(self, free_speak: bool = False) -> dict:
         return whisper_options(self.window.settings, free_speak=free_speak)
+
+    def _get_worker_timing(self, free_speak: bool = False) -> Dict[str, float]:
+        worker_attr = "free_worker" if free_speak else "worker"
+        worker = getattr(self.window, worker_attr, None)
+        timing = getattr(worker, "last_timing", None)
+        return dict(timing) if isinstance(timing, dict) else {}
+
+    @staticmethod
+    def _format_timing_text(timing: Dict[str, float], ui_post_s: float) -> str:
+        asr_s = float(timing.get("asr_s", 0.0))
+        worker_post_s = float(timing.get("worker_post_s", 0.0))
+        post_s = max(0.0, worker_post_s) + max(0.0, ui_post_s)
+        total_s = max(0.0, asr_s) + post_s
+        return f"Timing: ASR {asr_s:.2f}s | Post {post_s:.2f}s | Total {total_s:.2f}s"
+
+    def _set_timing_text(self, text: str) -> None:
+        try:
+            if hasattr(self.window, "timing_label") and self.window.timing_label is not None:
+                self.window.timing_label.setText(str(text))
+        except Exception:
+            pass
+
+    def _clear_cuda_cache(self) -> None:
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                try:
+                    torch.cuda.ipc_collect()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _release_finished_workers(self) -> None:
+        for attr in ("worker", "free_worker"):
+            try:
+                w = getattr(self.window, attr, None)
+                if w is not None and not w.isRunning():
+                    setattr(self.window, attr, None)
+            except Exception:
+                pass
+
+    def unload_model(self) -> None:
+        self.model = None
+        self._release_finished_workers()
+        gc.collect()
+        self._clear_cuda_cache()
 
     # ------------------------ metrics helpers ----------------------
 
@@ -55,8 +151,8 @@ class TranscriptionService(QtCore.QObject):
         return TranscribeWorker.clean_text(text)
 
     def _compute_cer(self, ref_text: str, hyp_text: str) -> float:
-        ref = self._clean_text_for_metrics(ref_text)
-        hyp = self._clean_text_for_metrics(hyp_text)
+        ref = self._clean_text_for_metrics(ref_text).replace(" ", "")
+        hyp = self._clean_text_for_metrics(hyp_text).replace(" ", "")
         try:
             return float(jiwer_cer(ref, hyp))
         except Exception:
@@ -66,7 +162,7 @@ class TranscriptionService(QtCore.QObject):
     def _norm_conf_from_logprob(lp: Optional[float]) -> Optional[float]:
         if lp is None:
             return None
-        # Whisper avg_logprob is typically in [-1, 0] → map to [0, 1]
+        # Whisper avg_logprob is typically in [-1, 0]; map to [0, 1].
         conf = (float(lp) + 1.0) / 1.0
         return max(0.0, min(1.0, conf))
 
@@ -161,6 +257,7 @@ class TranscriptionService(QtCore.QObject):
         """
         if self.window.current_audio_path is None:
             self.window.metrics_label.setText("No audio to score.")
+            self._set_timing_text("Timing: -")
             return
 
         if self.window.free_speak_mode:
@@ -168,7 +265,8 @@ class TranscriptionService(QtCore.QObject):
             return
 
         self.window.btn_score.setEnabled(False)
-        self.window.metrics_label.setText("Scoring… please wait")
+        self.window.metrics_label.setText("Scoring... please wait")
+        self._set_timing_text("Timing: running...")
         self.ensure_model()
 
         self.window.worker = TranscribeWorker(
@@ -201,10 +299,12 @@ class TranscriptionService(QtCore.QObject):
             and self.window.current_audio_path is None
         ):
             self.window.metrics_label.setText("Nothing to transcribe.")
+            self._set_timing_text("Timing: -")
             return
 
         self.window.btn_score.setEnabled(False)
-        self.window.metrics_label.setText("Transcribing… (Free Speak)")
+        self.window.metrics_label.setText("Transcribing... (Free Speak)")
+        self._set_timing_text("Timing: running...")
 
         audio_input = (
             self.window.audio_data
@@ -244,6 +344,7 @@ class TranscriptionService(QtCore.QObject):
         Completion without segments. Show WER/CER/Clarity/Score,
         compute error spans (no timing metrics available).
         """
+        t_ui0 = time.perf_counter()
         cer_val = self._compute_cer(self.window.current_script_text, hyp)
 
         if not self._received_segments_this_run:
@@ -257,14 +358,9 @@ class TranscriptionService(QtCore.QObject):
             )
             self.window.set_error_highlights(s_spans, t_spans)
 
-            self.window.metrics_label.setText(
-                f"Score: {score:.2f}/5 | WER: {err:.2%} | "
-                f"CER: {cer_val:.2%} | Clarity: {clar:.2%}"
-            )
-
             # Persist if session exists
             if getattr(self.window, "current_session_id", None) is not None:
-                db.update_session_scores(
+                sess = db.update_session_scores(
                     self.window.db,
                     self.window.current_session_id,
                     hyp,
@@ -292,7 +388,7 @@ class TranscriptionService(QtCore.QObject):
                 formatted_timestamp = datetime.strptime(
                     sess.timestamp, "%Y-%m-%dT%H:%M:%S"
                 ).strftime("%d %b %Y %H:%M")
-                label = f"{formatted_timestamp} — {sess.script_name}"
+                label = f"{formatted_timestamp} - {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
                 if (
@@ -306,8 +402,33 @@ class TranscriptionService(QtCore.QObject):
                 ):
                     self.window.history_list.takeItem(0)
                 self.window.history_list.addItem(it)
+            try:
+                if sess is not None:
+                    events = extract_error_events(
+                        self.window.current_script_text, hyp
+                    )
+                    db.replace_session_errors(
+                        self.window.db,
+                        sess.id,
+                        sess.timestamp,
+                        sess.script_name,
+                        events,
+                    )
+            except Exception:
+                pass
+
+            timing = self._get_worker_timing(free_speak=False)
+            timing_text = self._format_timing_text(
+                timing, time.perf_counter() - t_ui0
+            )
+            self.window.metrics_label.setText(
+                f"Score: {score:.2f}/5 | WER: {err:.2%} | "
+                f"CER: {cer_val:.2%} | Clarity: {clar:.2%}"
+            )
+            self._set_timing_text(timing_text)
 
         self.window.btn_score.setEnabled(True)
+        self._release_finished_workers()
 
     @QtCore.pyqtSlot(str, float, float, float, object)
     def on_transcription_done_with_segments(
@@ -317,6 +438,7 @@ class TranscriptionService(QtCore.QObject):
         Completion with segments: compute extended metrics + spans,
         update UI, and persist.
         """
+        t_ui0 = time.perf_counter()
         try:
             self._received_segments_this_run = True
 
@@ -345,7 +467,7 @@ class TranscriptionService(QtCore.QObject):
             self.window.set_error_highlights(s_spans, t_spans)
 
             # Label with extended metrics
-            avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "–"
+            avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
             self.window.metrics_label.setText(
                 "Score: "
                 f"{score:.2f}/5 | WER: {err:.2%} | CER: {cer_val:.2%} | "
@@ -366,7 +488,7 @@ class TranscriptionService(QtCore.QObject):
             # Persist
             segments_json = json.dumps(segs_aug)
             if getattr(self.window, "current_session_id", None) is not None:
-                db.update_session_scores(
+                sess = db.update_session_scores(
                     self.window.db,
                     self.window.current_session_id,
                     hyp,
@@ -401,7 +523,7 @@ class TranscriptionService(QtCore.QObject):
                 formatted_timestamp = datetime.strptime(
                     sess.timestamp, "%Y-%m-%dT%H:%M:%S"
                 ).strftime("%d %b %Y %H:%M")
-                label = f"{formatted_timestamp} — {sess.script_name}"
+                label = f"{formatted_timestamp} - {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
                 if (
@@ -415,6 +537,33 @@ class TranscriptionService(QtCore.QObject):
                 ):
                     self.window.history_list.takeItem(0)
                 self.window.history_list.addItem(it)
+            try:
+                if sess is not None:
+                    events = extract_error_events(
+                        self.window.current_script_text, hyp
+                    )
+                    db.replace_session_errors(
+                        self.window.db,
+                        sess.id,
+                        sess.timestamp,
+                        sess.script_name,
+                        events,
+                    )
+            except Exception:
+                pass
+
+            timing = self._get_worker_timing(free_speak=False)
+            timing_text = self._format_timing_text(
+                timing, time.perf_counter() - t_ui0
+            )
+            avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
+            self.window.metrics_label.setText(
+                "Score: "
+                f"{score:.2f}/5 | WER: {err:.2%} | CER: {cer_val:.2%} | "
+                f"Clarity: {clar:.2%} | Rate: {artic_rate:.0f} wpm | "
+                f"Pauses: {pause_ratio:.0%} | Conf: {avg_conf_txt}"
+            )
+            self._set_timing_text(timing_text)
 
         except Exception:
             # Fallback: show plain hypothesis if anything goes wrong
@@ -422,6 +571,7 @@ class TranscriptionService(QtCore.QObject):
             self._clear_transcript_sync()
         finally:
             self.window.btn_score.setEnabled(True)
+            self._release_finished_workers()
 
     # ------------------------ slots: free speak ---------------------
 
@@ -430,15 +580,23 @@ class TranscriptionService(QtCore.QObject):
         """
         Free Speak without segments. No WER/CER. Keep transcript visible.
         """
+        t_ui0 = time.perf_counter()
         self.window.last_transcript_text = hyp
 
         if not self._received_segments_this_run:
             self.window.transcript_txt.setText(hyp)
             self._clear_transcript_sync()
-
-        self.window.metrics_label.setText("Transcript ready (Free Speak)")
+            timing = self._get_worker_timing(free_speak=True)
+            timing_text = self._format_timing_text(
+                timing, time.perf_counter() - t_ui0
+            )
+            self.window.metrics_label.setText(
+                "Transcript ready (Free Speak)"
+            )
+            self._set_timing_text(timing_text)
         self.window.btn_score.setEnabled(True)
         self.window.btn_save.setEnabled(True)
+        self._release_finished_workers()
 
     @QtCore.pyqtSlot(str, object)
     def on_free_transcription_done_with_segments(
@@ -447,6 +605,7 @@ class TranscriptionService(QtCore.QObject):
         """
         Free Speak with segments: compute fluency/confidence only.
         """
+        t_ui0 = time.perf_counter()
         try:
             self._received_segments_this_run = True
             self.window.last_transcript_text = hyp
@@ -465,13 +624,18 @@ class TranscriptionService(QtCore.QObject):
             self.window.transcript_txt.setPlainText(txt)
 
             avg_conf_txt = (
-                f"{avg_conf:.0%}" if avg_conf is not None else "–"
+                f"{avg_conf:.0%}" if avg_conf is not None else "-"
             )
             self.window.metrics_label.setText(
                 "Transcript ready (Free Speak) | "
                 f"Rate: {artic_rate:.0f} wpm | "
                 f"Pauses: {pause_ratio:.0%} | Conf: {avg_conf_txt}"
             )
+            timing = self._get_worker_timing(free_speak=True)
+            timing_text = self._format_timing_text(
+                timing, time.perf_counter() - t_ui0
+            )
+            self._set_timing_text(timing_text)
 
             self.window.transcript_active_index = -1
             self.window.transcript_active_index = highlight_transcript_at_time(
@@ -488,22 +652,27 @@ class TranscriptionService(QtCore.QObject):
         finally:
             self.window.btn_score.setEnabled(True)
             self.window.btn_save.setEnabled(True)
+            self._release_finished_workers()
 
     # ------------------------ error handling -----------------------
 
     @QtCore.pyqtSlot(str)
     def on_worker_failed(self, msg: str) -> None:
         self.window.metrics_label.setText(f"Scoring failed: {msg}")
+        self._set_timing_text("Timing: failed")
         self.window.btn_score.setEnabled(True)
+        self._release_finished_workers()
 
     @QtCore.pyqtSlot(str)
     def on_free_worker_failed(self, msg: str) -> None:
         self.window.metrics_label.setText(f"Transcription failed: {msg}")
+        self._set_timing_text("Timing: failed")
         self.window.btn_score.setEnabled(True)
         try:
             self.window.btn_save.setEnabled(False)
         except Exception:
             pass
+        self._release_finished_workers()
 
     # ------------------------ utilities ----------------------------
 

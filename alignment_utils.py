@@ -19,12 +19,24 @@ Token = Tuple[str, int, int]  # (text, start_char, end_char)
 Span = Tuple[int, int, str]  # (start, end, color_hex)
 
 VOWELS = set("aeiou")
+TOKEN_RE = re.compile(
+    r"[A-Za-z0-9]+(?:[\u2019'`-][A-Za-z0-9]+)*", flags=re.UNICODE
+)
+
+
+def _normalize_token_text(token: str) -> str:
+    t = token.lower()
+    # Treat intra-word apostrophes/hyphens as equivalent variants.
+    t = re.sub(r"[\u2019'`-]", "", t)
+    return t
 
 
 def tokenize_with_spans(text: str) -> List[Token]:
     tokens: List[Token] = []
-    for m in re.finditer(r"\b\w+\b", text, flags=re.UNICODE):
-        tokens.append((m.group(0), int(m.start()), int(m.end())))
+    for m in TOKEN_RE.finditer(text):
+        norm = _normalize_token_text(m.group(0))
+        if norm:
+            tokens.append((norm, int(m.start()), int(m.end())))
     return tokens
 
 
@@ -32,51 +44,60 @@ def _align_tokens(
     ref: List[str], hyp: List[str]
 ) -> List[Tuple[str, int | None, int | None]]:
     n, m = len(ref), len(hyp)
-    dp = [[0] * (m + 1) for _ in range(n + 1)]
-    bt: List[List[Tuple[str, int, int]]] = [[("", 0, 0)] * (m + 1) for _ in range(n + 1)]
+    inf = 10**9
+    dp = [[inf] * (m + 1) for _ in range(n + 1)]
+    bt: List[List[Tuple[str, int, int]]] = [[("", -1, -1) for _ in range(m + 1)] for _ in range(n + 1)]
+    dp[0][0] = 0
 
-    for i in range(1, n + 1):
-        dp[i][0] = i
-        bt[i][0] = ("del", i - 1, 0)
-    for j in range(1, m + 1):
-        dp[0][j] = j
-        bt[0][j] = ("ins", 0, j - 1)
+    def relax(ni: int, nj: int, cost: int, op: str, pi: int, pj: int) -> None:
+        cand = dp[pi][pj] + cost
+        if cand < dp[ni][nj]:
+            dp[ni][nj] = cand
+            bt[ni][nj] = (op, pi, pj)
 
-    for i in range(1, n + 1):
-        ri = ref[i - 1].lower()
-        for j in range(1, m + 1):
-            hj = hyp[j - 1].lower()
-            cost_sub = 0 if ri == hj else 1
-
-            a = dp[i - 1][j] + 1  # del
-            b = dp[i][j - 1] + 1  # ins
-            c = dp[i - 1][j - 1] + cost_sub  # sub/equal
-
-            best = min(a, b, c)
-            dp[i][j] = best
-            if best == c:
-                bt[i][j] = ("equal" if cost_sub == 0 else "sub", i - 1, j - 1)
-            elif best == a:
-                bt[i][j] = ("del", i - 1, j)
-            else:
-                bt[i][j] = ("ins", i, j - 1)
+    for i in range(n + 1):
+        for j in range(m + 1):
+            if dp[i][j] >= inf:
+                continue
+            if i < n:
+                relax(i + 1, j, 1, "del", i, j)
+            if j < m:
+                relax(i, j + 1, 1, "ins", i, j)
+            if i < n and j < m:
+                same = ref[i] == hyp[j]
+                relax(i + 1, j + 1, 0 if same else 1, "equal" if same else "sub", i, j)
+            # zero-cost join/split equivalence: one word vs two words
+            if i < n and j + 1 < m and ref[i] == (hyp[j] + hyp[j + 1]):
+                relax(i + 1, j + 2, 0, "equal_join_hyp", i, j)
+            if i + 1 < n and j < m and (ref[i] + ref[i + 1]) == hyp[j]:
+                relax(i + 2, j + 1, 0, "equal_join_ref", i, j)
 
     i, j = n, m
     ops: List[Tuple[str, int | None, int | None]] = []
     while i > 0 or j > 0:
         op, pi, pj = bt[i][j]
-        if op == "equal" or op == "sub":
+        if pi < 0 or pj < 0:
+            # Fallback guard for malformed backtracking state.
+            if i > 0:
+                ops.append(("del", i - 1, None))
+                i -= 1
+            elif j > 0:
+                ops.append(("ins", None, j - 1))
+                j -= 1
+            continue
+        if op in ("equal", "sub"):
             ops.append((op, pi, pj))
-            i, j = i - 1, j - 1
         elif op == "del":
             ops.append(("del", i - 1, None))
-            i -= 1
         elif op == "ins":
             ops.append(("ins", None, j - 1))
-            j -= 1
-        else:
-            ops.append(("del", i - 1, None))
-            i -= 1
+        elif op == "equal_join_hyp":
+            # ref[pi] matches hyp[pj] + hyp[pj+1]
+            ops.append(("equal_join_hyp", pi, pj))
+        elif op == "equal_join_ref":
+            # ref[pi] + ref[pi+1] matches hyp[pj]
+            ops.append(("equal_join_ref", pi, pj))
+        i, j = pi, pj
     ops.reverse()
     return ops
 
@@ -138,7 +159,7 @@ def compute_error_spans_for_display(
     transcript_spans: List[Span] = []
 
     for op, ri, hj in ops:
-        if op == "equal":
+        if op in ("equal", "equal_join_hyp", "equal_join_ref"):
             continue
         if op == "del" and ri is not None:
             _, rs, re = ref_tokens[ri]
@@ -154,3 +175,41 @@ def compute_error_spans_for_display(
             transcript_spans.extend(hs_list)
 
     return script_spans, transcript_spans
+
+
+def compute_flexible_wer(ref_text: str, hyp_text: str) -> float:
+    """
+    WER with tolerance for common formatting/segmentation variants:
+    - apostrophes/hyphens inside tokens
+    - split/join compounds (e.g., battlefleets vs battle fleets)
+    """
+    ref_tokens = [t[0] for t in tokenize_with_spans(ref_text)]
+    hyp_tokens = [t[0] for t in tokenize_with_spans(hyp_text)]
+    if not ref_tokens:
+        return 0.0 if not hyp_tokens else 1.0
+    ops = _align_tokens(ref_tokens, hyp_tokens)
+    errors = sum(1 for op, _ri, _hj in ops if op in ("sub", "del", "ins"))
+    return float(errors) / float(len(ref_tokens))
+
+
+def align_tokens(
+    ref_words: List[str], hyp_words: List[str]
+) -> List[Tuple[str, int | None, int | None]]:
+    """
+    Public wrapper for token alignment operations.
+    """
+    return _align_tokens(ref_words, hyp_words)
+
+
+def char_level_spans_for_substitution(
+    ref_word: str,
+    hyp_word: str,
+    ref_start: int,
+    hyp_start: int,
+) -> Tuple[List[Span], List[Span]]:
+    """
+    Public wrapper for character-level substitution span extraction.
+    """
+    return _char_level_spans_for_substitution(
+        ref_word, hyp_word, ref_start, hyp_start
+    )

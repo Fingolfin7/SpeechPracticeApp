@@ -2,16 +2,22 @@
 # Progress tracking and visualization for Speech Practice app
 
 import db
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Tuple
 import pyqtgraph as pg
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-    QComboBox, QPushButton, QGridLayout, QWidget,
-    QSizePolicy
+    QComboBox, QPushButton, QGridLayout, QWidget, QDateEdit
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QDate
+from error_analytics import (
+    generate_feedback_summary,
+    get_character_trend_summary,
+    get_phoneme_trend_summary,
+    get_position_trend_summary,
+    get_word_trend_summary,
+)
 
 
 class ProgressTrackerDialog(QDialog):
@@ -31,22 +37,131 @@ class ProgressTrackerDialog(QDialog):
         header_layout = QHBoxLayout()
         header_layout.addWidget(QLabel("Progress Tracker - View your improvement over time"))
         
-        # Time period selector
-        self.period_combo = QComboBox()
-        self.period_combo.addItems(["Last 7 days", "Last 30 days", "Last 90 days", "All time"])
-        self.period_combo.setCurrentText("Last 30 days")
-        self.period_combo.currentTextChanged.connect(self.update_charts)
+        # Date range selector
+        self.start_date_edit = QDateEdit()
+        self.start_date_edit.setCalendarPopup(True)
+        self.start_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.start_date_edit.setDate(QDate.currentDate().addDays(-30))
+        self.start_date_edit.dateChanged.connect(self.update_charts)
+
+        self.end_date_edit = QDateEdit()
+        self.end_date_edit.setCalendarPopup(True)
+        self.end_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.end_date_edit.setDate(QDate.currentDate())
+        self.end_date_edit.dateChanged.connect(self.update_charts)
+
+        # Script filter
+        self.script_combo = QComboBox()
+        self.script_combo.addItem("All scripts")
+        self.script_combo.currentTextChanged.connect(self.update_charts)
         
         # Refresh button
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self.update_charts)
         
         header_layout.addStretch()
-        header_layout.addWidget(QLabel("Time period:"))
-        header_layout.addWidget(self.period_combo)
+        header_layout.addWidget(QLabel("From:"))
+        header_layout.addWidget(self.start_date_edit)
+        header_layout.addWidget(QLabel("To:"))
+        header_layout.addWidget(self.end_date_edit)
+        header_layout.addWidget(QLabel("Script:"))
+        header_layout.addWidget(self.script_combo)
         header_layout.addWidget(refresh_btn)
         
         layout.addLayout(header_layout)
+
+        # Word-level trend summary block
+        trends_group = QtWidgets.QGroupBox("Word Trends")
+        trends_layout = QGridLayout(trends_group)
+        self.trouble_words_label = QLabel("No trend data yet.")
+        self.improved_words_label = QLabel("No trend data yet.")
+        self.regressed_words_label = QLabel("No trend data yet.")
+        for lbl in [
+            self.trouble_words_label,
+            self.improved_words_label,
+            self.regressed_words_label,
+        ]:
+            lbl.setWordWrap(True)
+            lbl.setTextInteractionFlags(
+                Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+            )
+        trends_layout.addWidget(QLabel("Top Troublesome Words"), 0, 0)
+        trends_layout.addWidget(QLabel("Most Improved"), 0, 1)
+        trends_layout.addWidget(QLabel("Most Regressed"), 0, 2)
+        trends_layout.addWidget(self.trouble_words_label, 1, 0)
+        trends_layout.addWidget(self.improved_words_label, 1, 1)
+        trends_layout.addWidget(self.regressed_words_label, 1, 2)
+        layout.addWidget(trends_group)
+
+        # Character / position / phoneme trend blocks
+        lower_trends = QWidget()
+        lower_trends_layout = QGridLayout(lower_trends)
+
+        char_group = QtWidgets.QGroupBox("Character Trends")
+        char_layout = QVBoxLayout(char_group)
+        self.char_kinds_label = QLabel("No character trend data yet.")
+        self.char_confusions_label = QLabel("No character confusion data yet.")
+        self.char_kinds_label.setWordWrap(True)
+        self.char_confusions_label.setWordWrap(True)
+        self.char_kinds_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        self.char_confusions_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        char_layout.addWidget(QLabel("Top Error Kinds"))
+        char_layout.addWidget(self.char_kinds_label)
+        char_layout.addWidget(QLabel("Top Character Confusions"))
+        char_layout.addWidget(self.char_confusions_label)
+
+        pos_group = QtWidgets.QGroupBox("Position Trends")
+        pos_layout = QVBoxLayout(pos_group)
+        self.position_label = QLabel("No position trend data yet.")
+        self.position_improved_label = QLabel("No position delta data yet.")
+        self.position_label.setWordWrap(True)
+        self.position_improved_label.setWordWrap(True)
+        self.position_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        self.position_improved_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        pos_layout.addWidget(QLabel("Top Error Positions"))
+        pos_layout.addWidget(self.position_label)
+        pos_layout.addWidget(QLabel("Improvement/Regr."))
+        pos_layout.addWidget(self.position_improved_label)
+
+        phon_group = QtWidgets.QGroupBox("Phoneme Trends")
+        phon_layout = QVBoxLayout(phon_group)
+        self.phoneme_label = QLabel("No phoneme trend data yet.")
+        self.phoneme_confusions_label = QLabel("No phoneme confusion data yet.")
+        self.phoneme_label.setWordWrap(True)
+        self.phoneme_confusions_label.setWordWrap(True)
+        self.phoneme_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        self.phoneme_confusions_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        phon_layout.addWidget(QLabel("Top Trouble Symbols"))
+        phon_layout.addWidget(self.phoneme_label)
+        phon_layout.addWidget(QLabel("Top Symbol Confusions"))
+        phon_layout.addWidget(self.phoneme_confusions_label)
+
+        lower_trends_layout.addWidget(char_group, 0, 0)
+        lower_trends_layout.addWidget(pos_group, 0, 1)
+        lower_trends_layout.addWidget(phon_group, 0, 2)
+        layout.addWidget(lower_trends)
+
+        feedback_group = QtWidgets.QGroupBox("Coaching Focus")
+        feedback_layout = QVBoxLayout(feedback_group)
+        self.feedback_label = QLabel("No coaching feedback yet.")
+        self.feedback_label.setWordWrap(True)
+        self.feedback_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        feedback_layout.addWidget(self.feedback_label)
+        layout.addWidget(feedback_group)
         
         # Charts grid
         charts_widget = QWidget()
@@ -98,20 +213,42 @@ class ProgressTrackerDialog(QDialog):
         
         return chart
     
-    def _get_date_range(self, period: str) -> Tuple[datetime, datetime]:
-        """Get start and end dates based on selected period."""
-        end_date = datetime.now()
-        
-        if period == "Last 7 days":
-            start_date = end_date - timedelta(days=7)
-        elif period == "Last 30 days":
-            start_date = end_date - timedelta(days=30)
-        elif period == "Last 90 days":
-            start_date = end_date - timedelta(days=90)
-        else:  # All time
-            start_date = datetime(2020, 1, 1)  # Far back date
-            
+    def _selected_date_range(self) -> Tuple[datetime, datetime]:
+        start_qd = self.start_date_edit.date()
+        end_qd = self.end_date_edit.date()
+        start_date = datetime(start_qd.year(), start_qd.month(), start_qd.day(), 0, 0, 0)
+        end_date = datetime(end_qd.year(), end_qd.month(), end_qd.day(), 23, 59, 59)
+        if end_date < start_date:
+            start_date, end_date = end_date, start_date
         return start_date, end_date
+
+    def _selected_script(self) -> str | None:
+        script_name = self.script_combo.currentText().strip()
+        if not script_name or script_name == "All scripts":
+            return None
+        return script_name
+
+    def _current_filters(self) -> tuple[datetime, datetime, str | None]:
+        start_dt, end_dt = self._selected_date_range()
+        return start_dt, end_dt, self._selected_script()
+
+    def _refresh_script_options(self) -> None:
+        if not hasattr(self.parent_app, "db"):
+            return
+        try:
+            sessions = db.get_all_sessions(self.parent_app.db)
+            names = sorted({(s.script_name or "").strip() for s in sessions if (s.script_name or "").strip()})
+            current = self.script_combo.currentText().strip() if self.script_combo.count() else "All scripts"
+            self.script_combo.blockSignals(True)
+            self.script_combo.clear()
+            self.script_combo.addItem("All scripts")
+            for name in names:
+                self.script_combo.addItem(name)
+            idx = self.script_combo.findText(current)
+            self.script_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.script_combo.blockSignals(False)
+        except Exception:
+            pass
     
     def _get_progress_data(self) -> List[Tuple[datetime, float, float, float]]:
         """Retrieve progress data from database."""
@@ -120,7 +257,8 @@ class ProgressTrackerDialog(QDialog):
         
         try:
             sessions = db.get_all_sessions(self.parent_app.db)
-            start_date, end_date = self._get_date_range(self.period_combo.currentText())
+            start_date, end_date = self._selected_date_range()
+            selected_script = self._selected_script()
             
             progress_data = []
             for session in sessions:
@@ -132,6 +270,8 @@ class ProgressTrackerDialog(QDialog):
                 
                 # Filter by date range
                 if session_date < start_date or session_date > end_date:
+                    continue
+                if selected_script is not None and (session.script_name or "") != selected_script:
                     continue
                 
                 # Only include sessions with complete metrics
@@ -150,7 +290,9 @@ class ProgressTrackerDialog(QDialog):
     
     def update_charts(self):
         """Update all charts with latest data."""
+        self._refresh_script_options()
         progress_data = self._get_progress_data()
+        self._update_trend_summary()
         
         if not progress_data:
             # Clear charts and show "no data" message
@@ -210,6 +352,164 @@ class ProgressTrackerDialog(QDialog):
         # Auto-range the x-axis
         if timestamps:
             chart.setXRange(min(timestamps), max(timestamps), padding=0.05)
+
+    def _format_trouble_words(self, rows: List[dict]) -> str:
+        if not rows:
+            return "No data for selected period."
+        lines = []
+        for i, r in enumerate(rows, start=1):
+            word = r.get("word", "")
+            rate = float(r.get("error_rate", 0.0))
+            errs = int(r.get("errors", 0))
+            atts = int(r.get("attempts", 0))
+            lines.append(f"{i}. {word} - {rate:.0%} ({errs}/{atts})")
+        return "\n".join(lines)
+
+    def _format_delta_words(self, rows: List[dict], reverse: bool = False) -> str:
+        if not rows:
+            return "Not enough prior-window data."
+        lines = []
+        for i, r in enumerate(rows, start=1):
+            word = r.get("word", "")
+            delta = float(r.get("delta", 0.0))
+            recent = float(r.get("recent_rate", 0.0))
+            prev = float(r.get("previous_rate", 0.0))
+            arrow = "up" if delta > 0 else "down"
+            if reverse:
+                arrow = "down" if delta < 0 else "up"
+            lines.append(
+                f"{i}. {word} - {recent:.0%} vs {prev:.0%} ({arrow} {abs(delta):.0%})"
+            )
+        return "\n".join(lines)
+
+    def _format_simple_rate_rows(self, rows: List[dict], key: str) -> str:
+        if not rows:
+            return "No data for selected period."
+        lines = []
+        for i, r in enumerate(rows, start=1):
+            name = str(r.get(key, ""))
+            rate = float(r.get("error_rate", 0.0))
+            errs = int(r.get("errors", 0))
+            atts = int(r.get("attempts", 0))
+            lines.append(f"{i}. {name} - {rate:.1%} ({errs}/{atts})")
+        return "\n".join(lines)
+
+    def _format_confusions(self, rows: List[dict], top_n: int = 5) -> str:
+        if not rows:
+            return "No confusion pairs yet."
+        lines = []
+        for i, r in enumerate(rows[:top_n], start=1):
+            src = r.get("from", "?")
+            dst = r.get("to", "?")
+            cnt = int(r.get("count", 0))
+            lines.append(f"{i}. {src} -> {dst} ({cnt})")
+        return "\n".join(lines)
+
+    def _update_trend_summary(self):
+        trend_labels = [
+            self.trouble_words_label,
+            self.improved_words_label,
+            self.regressed_words_label,
+            self.char_kinds_label,
+            self.char_confusions_label,
+            self.position_label,
+            self.position_improved_label,
+            self.phoneme_label,
+            self.phoneme_confusions_label,
+            self.feedback_label,
+        ]
+        if not hasattr(self.parent_app, "db"):
+            for lbl in trend_labels:
+                lbl.setText("No DB connection.")
+            return
+        try:
+            start_dt, end_dt, script_name = self._current_filters()
+            summary = get_word_trend_summary(
+                self.parent_app.db,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                script_name=script_name,
+                top_n=5,
+                min_attempts=3,
+            )
+            char_summary = get_character_trend_summary(
+                self.parent_app.db,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                script_name=script_name,
+                top_n=5,
+            )
+            pos_summary = get_position_trend_summary(
+                self.parent_app.db,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                script_name=script_name,
+                top_n=4,
+            )
+            phon_summary = get_phoneme_trend_summary(
+                self.parent_app.db,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                script_name=script_name,
+                top_n=5,
+                min_attempts=4,
+            )
+            feedback = generate_feedback_summary(
+                summary, char_summary, pos_summary, phon_summary
+            )
+            self.trouble_words_label.setText(
+                self._format_trouble_words(summary.get("top_trouble_words", []))
+            )
+            self.improved_words_label.setText(
+                self._format_delta_words(summary.get("most_improved_words", []))
+            )
+            self.regressed_words_label.setText(
+                self._format_delta_words(
+                    summary.get("most_regressed_words", []), reverse=True
+                )
+            )
+            self.char_kinds_label.setText(
+                self._format_simple_rate_rows(
+                    char_summary.get("top_character_kinds", []), key="kind"
+                )
+            )
+            self.char_confusions_label.setText(
+                self._format_confusions(
+                    char_summary.get("top_character_confusions", [])
+                )
+            )
+            self.position_label.setText(
+                self._format_simple_rate_rows(
+                    pos_summary.get("top_position_buckets", []), key="bucket"
+                )
+            )
+            pos_improved = pos_summary.get("most_improved_positions", [])[:2]
+            pos_regressed = pos_summary.get("most_regressed_positions", [])[:2]
+            pos_lines = []
+            for row in pos_improved:
+                pos_lines.append(
+                    f"improved: {row.get('bucket', '?')} ({abs(float(row.get('delta', 0.0))):.1%})"
+                )
+            for row in pos_regressed:
+                pos_lines.append(
+                    f"regressed: {row.get('bucket', '?')} ({abs(float(row.get('delta', 0.0))):.1%})"
+                )
+            self.position_improved_label.setText(
+                "\n".join(pos_lines) if pos_lines else "Not enough prior-window data."
+            )
+            self.phoneme_label.setText(
+                self._format_simple_rate_rows(
+                    phon_summary.get("top_trouble_symbols", []), key="symbol"
+                )
+            )
+            self.phoneme_confusions_label.setText(
+                self._format_confusions(phon_summary.get("top_symbol_confusions", []))
+            )
+            self.feedback_label.setText("\n".join(f"- {line}" for line in feedback))
+        except Exception as e:
+            self.trouble_words_label.setText(f"Trend query failed: {e}")
+            for lbl in trend_labels[1:]:
+                lbl.setText("Trend query failed.")
     
     def _clear_charts(self):
         """Clear all charts when no data is available."""

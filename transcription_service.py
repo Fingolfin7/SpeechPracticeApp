@@ -267,7 +267,13 @@ class TranscriptionService(QtCore.QObject):
         self.window.btn_score.setEnabled(False)
         self.window.metrics_label.setText("Scoring... please wait")
         self._set_timing_text("Timing: running...")
-        self.ensure_model()
+        try:
+            self.ensure_model()
+        except Exception as e:
+            self.window.metrics_label.setText(f"Scoring failed: {e}")
+            self._set_timing_text("Timing: failed")
+            self.window.btn_score.setEnabled(True)
+            return
 
         self.window.worker = TranscribeWorker(
             self.model,
@@ -312,7 +318,17 @@ class TranscriptionService(QtCore.QObject):
             else self.window.current_audio_path
         )
 
-        self.ensure_model()
+        try:
+            self.ensure_model()
+        except Exception as e:
+            self.window.metrics_label.setText(f"Transcription failed: {e}")
+            self._set_timing_text("Timing: failed")
+            self.window.btn_score.setEnabled(True)
+            try:
+                self.window.btn_save.setEnabled(False)
+            except Exception:
+                pass
+            return
 
         self.window.free_worker = FreeTranscribeWorker(
             self.model,

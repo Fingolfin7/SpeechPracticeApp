@@ -191,10 +191,15 @@ def extract_error_events(ref_text: str, hyp_text: str) -> List[Dict]:
 
 
 def _parse_timestamp(ts: str) -> datetime | None:
-    try:
-        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
-    except Exception:
+    if not ts:
         return None
+    try:
+        return datetime.fromisoformat(ts)
+    except Exception:
+        try:
+            return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            return None
 
 
 def _window_bounds(

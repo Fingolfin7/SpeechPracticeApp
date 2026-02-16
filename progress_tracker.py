@@ -264,9 +264,12 @@ class ProgressTrackerDialog(QDialog):
             for session in sessions:
                 # Parse timestamp
                 try:
-                    session_date = datetime.strptime(session.timestamp, "%Y-%m-%dT%H:%M:%S")
+                    session_date = datetime.fromisoformat(session.timestamp)
                 except ValueError:
-                    continue
+                    try:
+                        session_date = datetime.strptime(session.timestamp, "%Y-%m-%dT%H:%M:%S")
+                    except ValueError:
+                        continue
                 
                 # Filter by date range
                 if session_date < start_date or session_date > end_date:

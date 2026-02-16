@@ -127,7 +127,7 @@ def get_all_sessions(db):
 
 
 def get_session_by_id(db, sess_id: int):
-    return db.query(PracticeSession).get(sess_id)
+    return db.get(PracticeSession, sess_id)
 
 
 def add_session(
@@ -183,7 +183,7 @@ def update_session_scores(
     filled_pauses: float | None = None,
     avg_conf: float | None = None,
 ):
-    sess = db.query(PracticeSession).get(sess_id)
+    sess = db.get(PracticeSession, sess_id)
     if not sess:
         return None
     sess.transcript = transcript
@@ -208,7 +208,7 @@ def update_session_scores(
 
 
 def delete_session(db, sess_id: int):
-    sess = db.query(PracticeSession).get(sess_id)
+    sess = db.get(PracticeSession, sess_id)
     if not sess:
         return
     try:

@@ -55,11 +55,17 @@ def save_free_speak_session(window) -> None:
     if window.current_audio_path is None:
         base = datetime.now().strftime("%Y%m%d_%H%M%S")
         os.makedirs("recordings", exist_ok=True)
+        audio_data = (
+            window.audio_data
+            if window.audio_data is not None
+            else np.zeros(0, dtype=np.float32)
+        )
+        audio_data = np.asarray(audio_data, dtype=np.float32)
         try:
             flac_path = os.path.join("recordings", base + ".flac")
             sf.write(
                 flac_path,
-                (window.audio_data or np.zeros(0, dtype=np.float32)).astype(np.float32),
+                audio_data,
                 window.sr,
                 format="FLAC",
                 subtype="PCM_16",
@@ -70,7 +76,7 @@ def save_free_speak_session(window) -> None:
                 wav_path = os.path.join("recordings", base + ".wav")
                 sf.write(
                     wav_path,
-                    (window.audio_data or np.zeros(0, dtype=np.float32)).astype(np.float32),
+                    audio_data,
                     window.sr,
                     format="WAV",
                     subtype="PCM_16",

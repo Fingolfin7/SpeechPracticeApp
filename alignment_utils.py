@@ -19,9 +19,7 @@ Token = Tuple[str, int, int]  # (text, start_char, end_char)
 Span = Tuple[int, int, str]  # (start, end, color_hex)
 
 VOWELS = set("aeiou")
-TOKEN_RE = re.compile(
-    r"[A-Za-z0-9]+(?:[\u2019'`-][A-Za-z0-9]+)*", flags=re.UNICODE
-)
+TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[\u2019'`-][A-Za-z0-9]+)*", flags=re.UNICODE)
 
 
 def _normalize_token_text(token: str) -> str:
@@ -46,7 +44,9 @@ def _align_tokens(
     n, m = len(ref), len(hyp)
     inf = 10**9
     dp = [[inf] * (m + 1) for _ in range(n + 1)]
-    bt: List[List[Tuple[str, int, int]]] = [[("", -1, -1) for _ in range(m + 1)] for _ in range(n + 1)]
+    bt: List[List[Tuple[str, int, int]]] = [
+        [("", -1, -1) for _ in range(m + 1)] for _ in range(n + 1)
+    ]
     dp[0][0] = 0
 
     def relax(ni: int, nj: int, cost: int, op: str, pi: int, pj: int) -> None:
@@ -102,7 +102,9 @@ def _align_tokens(
     return ops
 
 
-def _append_runs(spans: List[Span], start_base: int, indexes: List[int], color: str) -> None:
+def _append_runs(
+    spans: List[Span], start_base: int, indexes: List[int], color: str
+) -> None:
     if not indexes:
         return
     indexes.sort()
@@ -177,6 +179,48 @@ def compute_error_spans_for_display(
     return script_spans, transcript_spans
 
 
+def extract_mistake_pairs_for_display(
+    ref_text: str, hyp_text: str
+) -> List[Tuple[str, str]]:
+    """
+    Return word-level mistake pairs as (spoken, expected).
+
+    Examples:
+    - substitution: ("snear", "snare")
+    - deletion: ("[missing]", "snare")
+    - insertion: ("snear", "[extra]")
+    """
+    ref_tokens = tokenize_with_spans(ref_text)
+    hyp_tokens = tokenize_with_spans(hyp_text)
+
+    ref_words = [t[0] for t in ref_tokens]
+    hyp_words = [t[0] for t in hyp_tokens]
+    ops = _align_tokens(ref_words, hyp_words)
+
+    mistakes: List[Tuple[str, str]] = []
+    for op, ri, hj in ops:
+        if op in ("equal", "equal_join_hyp", "equal_join_ref"):
+            continue
+
+        ref_display = ""
+        hyp_display = ""
+        if ri is not None:
+            _rtok, rs, re = ref_tokens[ri]
+            ref_display = ref_text[rs:re]
+        if hj is not None:
+            _htok, hs, he = hyp_tokens[hj]
+            hyp_display = hyp_text[hs:he]
+
+        if op == "sub":
+            mistakes.append((hyp_display, ref_display))
+        elif op == "del":
+            mistakes.append(("[missing]", ref_display))
+        elif op == "ins":
+            mistakes.append((hyp_display, "[extra]"))
+
+    return mistakes
+
+
 def compute_flexible_wer(ref_text: str, hyp_text: str) -> float:
     """
     WER with tolerance for common formatting/segmentation variants:
@@ -210,6 +254,4 @@ def char_level_spans_for_substitution(
     """
     Public wrapper for character-level substitution span extraction.
     """
-    return _char_level_spans_for_substitution(
-        ref_word, hyp_word, ref_start, hyp_start
-    )
+    return _char_level_spans_for_substitution(ref_word, hyp_word, ref_start, hyp_start)

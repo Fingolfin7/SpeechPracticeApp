@@ -56,6 +56,7 @@ from transcript_utils import (
     build_transcript_from_segments,
     highlight_transcript_at_time,
 )
+from alignment_utils import extract_mistake_pairs_for_display
 from settings_ui import (
     default_settings,
     settings_path,
@@ -177,6 +178,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             tuple[int, int, float, float]
         ] = []  # (start_char, end_char, t0, t1)
         self.transcript_active_index: int = -1
+        self.mistake_pairs: List[Tuple[str, str]] = []
 
         # persistent error highlights (base layers)
         self.script_error_selections: List[QtWidgets.QTextEdit.ExtraSelection] = []
@@ -223,9 +225,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         act_quick = mode_menu.addAction("Quick Practice")
         act_quick.triggered.connect(self._enter_quick_practice)
         self.act_free_mode = QAction("Free Speak Mode", self, checkable=True)
-        self.act_free_mode.setStatusTip(
-            "Transcribe without scoring or auto-saving"
-        )
+        self.act_free_mode.setStatusTip("Transcribe without scoring or auto-saving")
         self.act_free_mode.toggled.connect(
             lambda checked: on_toggle_free_mode(self, checked)
         )
@@ -240,6 +240,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.act_error_hl.setChecked(True)
         self.act_error_hl.toggled.connect(self._toggle_error_highlights)
         view_menu.addAction(self.act_error_hl)
+        self.act_copy_mistakes = QAction("Copy Mistakes", self)
+        self.act_copy_mistakes.setStatusTip(
+            "Copy a word-level list of spoken vs expected mistakes"
+        )
+        self.act_copy_mistakes.triggered.connect(self._copy_mistakes_to_clipboard)
+        view_menu.addAction(self.act_copy_mistakes)
         view_menu.addSeparator()
         act_settings = view_menu.addAction("Settings")
         act_settings.triggered.connect(self._open_settings)
@@ -252,12 +258,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         hl = QVBoxLayout(hist_w)
         hl.addWidget(QLabel("Session History"))
         self.history_list = QtWidgets.QListWidget()
-        self.history_list.setContextMenuPolicy(
-            QtCore.Qt.CustomContextMenu
-        )
-        self.history_list.customContextMenuRequested.connect(
-            self._history_context_menu
-        )
+        self.history_list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.history_list.customContextMenuRequested.connect(self._history_context_menu)
         hl.addWidget(self.history_list)
         splitter.addWidget(hist_w)
 
@@ -344,6 +346,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Save button (for Free Speak optional saving)
         self.btn_save = QPushButton("Save")
         self.btn_save.setObjectName("PrimaryButton")
+        self.btn_copy_mistakes = QPushButton("Copy Mistakes")
         # volume slider
         self.vol_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         # 0..120 maps to ~0%..200% with perceptual curve
@@ -351,7 +354,6 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.vol_slider.setValue(90)
         self.vol_slider.setFixedWidth(120)
         self.vol_slider.setToolTip("Volume")
-
 
         icon_sz = 28  # <— pick any size you like (px)
 
@@ -367,15 +369,18 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.btn_record.clicked.connect(self._toggle_record)
         self.btn_play.clicked.connect(self._toggle_play_pause)
-        self.btn_score.clicked.connect(
-            self.transcription_service.transcribe_and_score
-        )
-        self.btn_save.clicked.connect(
-            lambda: save_free_speak_session(self)
-        )
+        self.btn_score.clicked.connect(self.transcription_service.transcribe_and_score)
+        self.btn_save.clicked.connect(lambda: save_free_speak_session(self))
+        self.btn_copy_mistakes.clicked.connect(self._copy_mistakes_to_clipboard)
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
 
-        for b in (self.btn_record, self.btn_play, self.btn_score, self.btn_save):
+        for b in (
+            self.btn_record,
+            self.btn_play,
+            self.btn_score,
+            self.btn_save,
+            self.btn_copy_mistakes,
+        ):
             b.setEnabled(False)
             tlay.addWidget(b)
         tlay.addWidget(self.vol_slider)
@@ -384,13 +389,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         # metrics label ----------------------------------------------------
         self.metrics_label = QLabel(
-            "Score: –, WER: –, CER: –, Clarity: – | "
-            "Rate: – wpm | Pauses: – | Conf: –"
+            "Score: –, WER: –, CER: –, Clarity: – | Rate: – wpm | Pauses: – | Conf: –"
         )
         self.metrics_label.setTextInteractionFlags(
             # enable copy-paste
-            QtCore.Qt.TextSelectableByMouse
-            | QtCore.Qt.TextSelectableByKeyboard
+            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
         )
         f = self.metrics_label.font()
         f.setPointSize(f.pointSize() + 2)
@@ -399,8 +402,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         rl.addWidget(self.metrics_label)
         self.timing_label = QLabel("Timing: -")
         self.timing_label.setTextInteractionFlags(
-            QtCore.Qt.TextSelectableByMouse
-            | QtCore.Qt.TextSelectableByKeyboard
+            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
         )
         self.timing_label.setStyleSheet("color:#9fb0c0; font-size:11px;")
         rl.addWidget(self.timing_label)
@@ -430,13 +432,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _update_script_border(self) -> None:
         """Set a left-border style on the script pane based on current mode."""
         if self.quick_practice_mode:
-            self.script_txt.setStyleSheet(
-                "border-left: 4px solid #00d0ff;"
-            )
+            self.script_txt.setStyleSheet("border-left: 4px solid #00d0ff;")
         elif self.free_speak_mode:
-            self.script_txt.setStyleSheet(
-                "border-left: 4px solid #f0a030;"
-            )
+            self.script_txt.setStyleSheet("border-left: 4px solid #f0a030;")
         else:
             self.script_txt.setStyleSheet("")
 
@@ -471,18 +469,16 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     # -------------------------- input hooks ------------------------------
     def keyPressEvent(self, ev: QtGui.QKeyEvent) -> None:
         # Space toggles play/pause when not typing in a text box
-        if (
-                ev.key() == QtCore.Qt.Key_Space
-                and not (self.script_txt.hasFocus() or self.transcript_txt.hasFocus())
+        if ev.key() == QtCore.Qt.Key_Space and not (
+            self.script_txt.hasFocus() or self.transcript_txt.hasFocus()
         ):
             self._toggle_play_pause()
             ev.accept()
             return
 
         # Arrow keys navigate errors when not typing in a text box
-        if (
-                ev.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_Right)
-                and not (self.script_txt.hasFocus() or self.transcript_txt.hasFocus())
+        if ev.key() in (QtCore.Qt.Key_Left, QtCore.Qt.Key_Right) and not (
+            self.script_txt.hasFocus() or self.transcript_txt.hasFocus()
         ):
             self._goto_error(-1 if ev.key() == QtCore.Qt.Key_Left else +1)
             ev.accept()
@@ -491,7 +487,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         super().keyPressEvent(ev)
 
     def _spans_to_selections(
-            self, edit: QtWidgets.QTextEdit, spans: List[Tuple[int, int, str]]
+        self, edit: QtWidgets.QTextEdit, spans: List[Tuple[int, int, str]]
     ) -> List[QtWidgets.QTextEdit.ExtraSelection]:
         sels: List[QtWidgets.QTextEdit.ExtraSelection] = []
         doc_len = len(edit.toPlainText())
@@ -513,9 +509,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         return sels
 
     def set_error_highlights(
-            self,
-            script_spans: list[tuple[int, int, str]],
-            transcript_spans: list[tuple[int, int, str]],
+        self,
+        script_spans: list[tuple[int, int, str]],
+        transcript_spans: list[tuple[int, int, str]],
     ) -> None:
         # Store raw spans for nav
         self.script_error_spans = list(script_spans or [])
@@ -536,9 +532,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             except Exception:
                 pass
             try:
-                self.transcript_txt.setExtraSelections(
-                    self.transcript_error_selections
-                )
+                self.transcript_txt.setExtraSelections(self.transcript_error_selections)
             except Exception:
                 pass
         else:
@@ -555,11 +549,45 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Rebuild error navigation anchors
         self._rebuild_error_nav_points()
 
+    def set_mistake_pairs(self, mistakes: List[Tuple[str, str]]) -> None:
+        self.mistake_pairs = list(mistakes or [])
+        has_mistakes = bool(self.mistake_pairs)
+        try:
+            self.btn_copy_mistakes.setEnabled(has_mistakes)
+        except Exception:
+            pass
+        try:
+            self.act_copy_mistakes.setEnabled(has_mistakes)
+        except Exception:
+            pass
+
+    def _copy_mistakes_to_clipboard(self) -> None:
+        if not getattr(self, "mistake_pairs", None):
+            self.metrics_label.setText("No mistakes available to copy")
+            return
+        grouped: dict[Tuple[str, str], int] = {}
+        for pair in self.mistake_pairs:
+            grouped[pair] = grouped.get(pair, 0) + 1
+        lines = []
+        sorted_pairs = sorted(
+            grouped.items(),
+            key=lambda item: (-item[1], item[0][0].lower(), item[0][1].lower()),
+        )
+        for (spoken, expected), count in sorted_pairs:
+            line = f"{expected} -> {spoken}"
+            if count > 1:
+                line += f" (x{count})"
+            lines.append(line)
+        QtWidgets.QApplication.clipboard().setText("\n".join(lines))
+        label = "mistake" if len(lines) == 1 else "mistakes"
+        self.metrics_label.setText(f"Copied {len(lines)} {label} to clipboard")
+
     def _clear_error_highlights(self) -> None:
         self.script_error_spans = []
         self.transcript_error_spans = []
         self.script_error_selections = []
         self.transcript_error_selections = []
+        self.set_mistake_pairs([])
         self._error_nav_points = []
         self._error_nav_idx = -1
         try:
@@ -685,9 +713,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 return
             if sys.platform.startswith("win"):
                 # Use Explorer to select the file
-                subprocess.run(
-                    ["explorer", "/select,", path.replace("/", "\\")]
-                )
+                subprocess.run(["explorer", "/select,", path.replace("/", "\\")])
             elif sys.platform == "darwin":
                 subprocess.run(["open", "-R", path])
             else:
@@ -782,8 +808,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self._update_time_axis(0)
 
         self.metrics_label.setText(
-            "Score: –, WER: –, CER: –, Clarity: – | "
-            "Rate: – wpm | Pauses: – | Conf: –"
+            "Score: –, WER: –, CER: –, Clarity: – | Rate: – wpm | Pauses: – | Conf: –"
         )
         self.transcript_txt.clear()
         self._clear_error_highlights()
@@ -812,6 +837,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_score.setEnabled(False)
         self.btn_save.setEnabled(False)
         self.btn_save.setVisible(self.free_speak_mode)
+        self.btn_copy_mistakes.setEnabled(False)
 
     def _enter_quick_practice(self) -> None:
         # Exit free-speak mode if active
@@ -828,9 +854,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
 
         self.script_txt.setReadOnly(False)
         self.script_txt.clear()
-        self.script_txt.setPlaceholderText(
-            "Type or paste your reference text here..."
-        )
+        self.script_txt.setPlaceholderText("Type or paste your reference text here...")
 
         self.player.stop()
         self.play_timer.stop()
@@ -852,6 +876,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_score.setEnabled(False)
         self.btn_score.setText("Score")
         self.btn_save.setVisible(False)
+        self.btn_copy_mistakes.setEnabled(False)
 
     # --------------------------- recording --------------------------------
 
@@ -905,7 +930,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     self._live_write = 0
                 else:
                     m = min(L - w, n)
-                    self._live_ring[w: w + m] = b[:m]
+                    self._live_ring[w : w + m] = b[:m]
                     r = n - m
                     if r:
                         self._live_ring[:r] = b[m:]
@@ -1055,9 +1080,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_save.setVisible(True)
             self.btn_save.setEnabled(False)
             self.metrics_label.setText("Free Speak: ready to transcribe")
-            QtCore.QTimer.singleShot(
-                100, self.transcription_service.transcribe_free
-            )
+            QtCore.QTimer.singleShot(100, self.transcription_service.transcribe_free)
             return
 
         # In Quick Practice mode, read reference text from the editable pane
@@ -1086,7 +1109,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             it.setIcon(self._session_type_icon(sess.script_name))
             # remove placeholder if present
             if self.history_list.count() == 1 and not isinstance(
-                    self.history_list.item(0).data(QtCore.Qt.UserRole), int
+                self.history_list.item(0).data(QtCore.Qt.UserRole), int
             ):
                 self.history_list.takeItem(0)
             self.history_list.insertItem(0, it)
@@ -1121,19 +1144,15 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 it.setData(QtCore.Qt.UserRole, sess.id)
                 it.setIcon(self._session_type_icon(sess.script_name))
                 if self.history_list.count() == 1 and not isinstance(
-                        self.history_list.item(0).data(QtCore.Qt.UserRole), int
+                    self.history_list.item(0).data(QtCore.Qt.UserRole), int
                 ):
                     self.history_list.takeItem(0)
                 self.history_list.insertItem(0, it)
                 self.history_list.setCurrentItem(it)
                 self.history_list.scrollToItem(it)
-                self.metrics_label.setText(
-                    "Saved session (legacy DB); scores pending."
-                )
+                self.metrics_label.setText("Saved session (legacy DB); scores pending.")
             except Exception as e2:
-                self.metrics_label.setText(
-                    f"Could not save session. DB error: {e2}"
-                )
+                self.metrics_label.setText(f"Could not save session. DB error: {e2}")
                 try:
                     print("DB save error (first):", repr(e))
                     print("DB save error (fallback):", repr(e2))
@@ -1180,9 +1199,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.play_timer.stop()
             self.btn_play.setIcon(self.ic_play)
             return
-        start = (
-            self.player.idx if 0 <= self.player.idx < self.audio_data.size else 0
-        )
+        start = self.player.idx if 0 <= self.player.idx < self.audio_data.size else 0
         self.player.play(start)
         self.play_timer.start()
         self.btn_play.setIcon(self.ic_pause)
@@ -1243,11 +1260,11 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         # Clicks in the transcript jump to that segment
         if obj in (
-                self.transcript_txt,
-                getattr(self.transcript_txt, "viewport", lambda: None)(),
+            self.transcript_txt,
+            getattr(self.transcript_txt, "viewport", lambda: None)(),
         ) and event.type() in (
-                QtCore.QEvent.MouseButtonRelease,
-                QtCore.QEvent.MouseButtonDblClick,
+            QtCore.QEvent.MouseButtonRelease,
+            QtCore.QEvent.MouseButtonDblClick,
         ):
             try:
                 me = event  # type: ignore
@@ -1264,15 +1281,15 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 fw = QtWidgets.QApplication.focusWidget()
                 # Don't steal arrows from text inputs or sliders
                 if isinstance(
-                        fw,
-                        (
-                                QtWidgets.QLineEdit,
-                                QtWidgets.QTextEdit,
-                                QtWidgets.QPlainTextEdit,
-                                QtWidgets.QSlider,
-                                QtWidgets.QSpinBox,
-                                QtWidgets.QComboBox,
-                        ),
+                    fw,
+                    (
+                        QtWidgets.QLineEdit,
+                        QtWidgets.QTextEdit,
+                        QtWidgets.QPlainTextEdit,
+                        QtWidgets.QSlider,
+                        QtWidgets.QSpinBox,
+                        QtWidgets.QComboBox,
+                    ),
                 ):
                     return False
                 self._goto_error(+1 if ke.key() == QtCore.Qt.Key_Right else -1)
@@ -1294,9 +1311,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             return
         # find segment containing or nearest to char_pos
         idx = -1
-        for i, (s_char, e_char, _t0, _t1) in enumerate(
-                self.transcript_segment_ranges
-        ):
+        for i, (s_char, e_char, _t0, _t1) in enumerate(self.transcript_segment_ranges):
             if s_char <= char_pos <= e_char:
                 idx = i
                 break
@@ -1406,7 +1421,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         if raw <= 0:
             return 1.0
         exponent = math.floor(math.log10(raw))
-        fraction = raw / (10 ** exponent)
+        fraction = raw / (10**exponent)
         if fraction <= 1:
             nice_fraction = 1
         elif fraction <= 2:
@@ -1415,7 +1430,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             nice_fraction = 5
         else:
             nice_fraction = 10
-        return nice_fraction * (10 ** exponent)
+        return nice_fraction * (10**exponent)
 
     def _update_time_axis(self, n_samples: int) -> None:
         dur = n_samples / self.sr if n_samples else 15
@@ -1431,9 +1446,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 for t in np.arange(0, dur + 0.1, step)
             ]
         else:
-            ticks = [
-                (t, f"{int(t)}") for t in np.arange(0, dur + 0.1, step)
-            ]
+            ticks = [(t, f"{int(t)}") for t in np.arange(0, dur + 0.1, step)]
         self.top_axis.setTicks([ticks, []])
         self.plot.setLimits(xMin=0, xMax=max(1, dur))
 
@@ -1458,13 +1471,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Metrics formatting (handle missing values gracefully)
         no_scores = (sess.transcript is None) or (sess.transcript == "")
         score_txt = (
-            f"{sess.score:.2f}"
-            if (sess.score is not None and not no_scores)
-            else "–"
+            f"{sess.score:.2f}" if (sess.score is not None and not no_scores) else "–"
         )
-        wer_txt = (
-            f"{sess.wer:.2%}" if (sess.wer is not None and not no_scores) else "–"
-        )
+        wer_txt = f"{sess.wer:.2%}" if (sess.wer is not None and not no_scores) else "–"
         cer_txt = (
             f"{getattr(sess, 'cer', None):.2%}"
             if (getattr(sess, "cer", None) is not None and not no_scores)
@@ -1511,12 +1520,8 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         try:
             if getattr(sess, "segments", None):
                 segs_from_db = json.loads(sess.segments)
-                seg_list = (
-                    list(segs_from_db) if isinstance(segs_from_db, list) else []
-                )
-                txt, segs, ranges, active_idx = build_transcript_from_segments(
-                    seg_list
-                )
+                seg_list = list(segs_from_db) if isinstance(segs_from_db, list) else []
+                txt, segs, ranges, active_idx = build_transcript_from_segments(seg_list)
                 self.transcript_segments = segs
                 self.transcript_segment_ranges = ranges
                 self.transcript_active_index = -1
@@ -1538,6 +1543,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 script_display, transcript_display
             )
             self.set_error_highlights(s_spans, t_spans)
+            self.set_mistake_pairs(
+                extract_mistake_pairs_for_display(
+                    script_display,
+                    transcript_display,
+                )
+            )
         except Exception:
             self._clear_error_highlights()
 
@@ -1601,13 +1612,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         return settings_path()
 
     def _load_settings(self) -> None:
-        self.settings = load_settings(
-            self._default_settings(), self._settings_path()
-        )
+        self.settings = load_settings(self._default_settings(), self._settings_path())
         # Load the toggle (default True if missing)
-        self.show_error_highlights = bool(
-            self.settings.get("error_highlights", True)
-        )
+        self.show_error_highlights = bool(self.settings.get("error_highlights", True))
         # Sync the action and legends if UI is built
         try:
             self.act_error_hl.setChecked(self.show_error_highlights)
@@ -1632,8 +1639,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 count = torch.cuda.device_count()
                 name = torch.cuda.get_device_name(0)
                 total_vram = int(
-                    torch.cuda.get_device_properties(0).total_memory
-                    // (1024**2)
+                    torch.cuda.get_device_properties(0).total_memory // (1024**2)
                 )
                 return (
                     True,

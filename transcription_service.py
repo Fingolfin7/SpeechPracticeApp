@@ -19,7 +19,10 @@ from transcript_utils import (
     highlight_transcript_at_time,
 )
 from settings_ui import whisper_options
-from alignment_utils import compute_error_spans_for_display
+from alignment_utils import (
+    compute_error_spans_for_display,
+    extract_mistake_pairs_for_display,
+)
 from error_analytics import extract_error_events
 
 
@@ -110,7 +113,10 @@ class TranscriptionService(QtCore.QObject):
 
     def _set_timing_text(self, text: str) -> None:
         try:
-            if hasattr(self.window, "timing_label") and self.window.timing_label is not None:
+            if (
+                hasattr(self.window, "timing_label")
+                and self.window.timing_label is not None
+            ):
                 self.window.timing_label.setText(str(text))
         except Exception:
             pass
@@ -300,10 +306,7 @@ class TranscriptionService(QtCore.QObject):
         Free Speak: no WER/CER; still compute fluency/confidence
         when timestamps are available.
         """
-        if (
-            self.window.audio_data is None
-            and self.window.current_audio_path is None
-        ):
+        if self.window.audio_data is None and self.window.current_audio_path is None:
             self.window.metrics_label.setText("Nothing to transcribe.")
             self._set_timing_text("Timing: -")
             return
@@ -344,9 +347,7 @@ class TranscriptionService(QtCore.QObject):
             )
         except Exception:
             pass
-        self.window.free_worker.completed.connect(
-            self.on_free_transcription_done
-        )
+        self.window.free_worker.completed.connect(self.on_free_transcription_done)
         self.window.free_worker.failed.connect(self.on_free_worker_failed)
         self.window.free_worker.start()
 
@@ -373,6 +374,12 @@ class TranscriptionService(QtCore.QObject):
                 self.window.transcript_txt.toPlainText(),
             )
             self.window.set_error_highlights(s_spans, t_spans)
+            self.window.set_mistake_pairs(
+                extract_mistake_pairs_for_display(
+                    self.window.current_script_text,
+                    self.window.transcript_txt.toPlainText(),
+                )
+            )
 
             # Persist if session exists
             if getattr(self.window, "current_session_id", None) is not None:
@@ -407,22 +414,15 @@ class TranscriptionService(QtCore.QObject):
                 label = f"{formatted_timestamp} - {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
-                if (
-                    self.window.history_list.count() == 1
-                    and not isinstance(
-                        self.window.history_list.item(0).data(
-                            QtCore.Qt.UserRole
-                        ),
-                        int,
-                    )
+                if self.window.history_list.count() == 1 and not isinstance(
+                    self.window.history_list.item(0).data(QtCore.Qt.UserRole),
+                    int,
                 ):
                     self.window.history_list.takeItem(0)
                 self.window.history_list.addItem(it)
             try:
                 if sess is not None:
-                    events = extract_error_events(
-                        self.window.current_script_text, hyp
-                    )
+                    events = extract_error_events(self.window.current_script_text, hyp)
                     db.replace_session_errors(
                         self.window.db,
                         sess.id,
@@ -434,9 +434,7 @@ class TranscriptionService(QtCore.QObject):
                 pass
 
             timing = self._get_worker_timing(free_speak=False)
-            timing_text = self._format_timing_text(
-                timing, time.perf_counter() - t_ui0
-            )
+            timing_text = self._format_timing_text(timing, time.perf_counter() - t_ui0)
             self.window.metrics_label.setText(
                 f"Score: {score:.2f}/5 | WER: {err:.2%} | "
                 f"CER: {cer_val:.2%} | Clarity: {clar:.2%}"
@@ -463,9 +461,7 @@ class TranscriptionService(QtCore.QObject):
             segs_aug, artic_rate, pause_ratio, filled_cnt, avg_conf = (
                 self._augment_segments_and_fluency(seg_list, hyp)
             )
-            cer_val = self._compute_cer(
-                self.window.current_script_text, hyp
-            )
+            cer_val = self._compute_cer(self.window.current_script_text, hyp)
 
             # Build transcript display and time ranges
             txt, segs_built, ranges, active_idx = build_transcript_from_segments(
@@ -481,6 +477,12 @@ class TranscriptionService(QtCore.QObject):
                 self.window.current_script_text, txt
             )
             self.window.set_error_highlights(s_spans, t_spans)
+            self.window.set_mistake_pairs(
+                extract_mistake_pairs_for_display(
+                    self.window.current_script_text,
+                    txt,
+                )
+            )
 
             # Label with extended metrics
             avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
@@ -542,22 +544,15 @@ class TranscriptionService(QtCore.QObject):
                 label = f"{formatted_timestamp} - {sess.script_name}"
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
-                if (
-                    self.window.history_list.count() == 1
-                    and not isinstance(
-                        self.window.history_list.item(0).data(
-                            QtCore.Qt.UserRole
-                        ),
-                        int,
-                    )
+                if self.window.history_list.count() == 1 and not isinstance(
+                    self.window.history_list.item(0).data(QtCore.Qt.UserRole),
+                    int,
                 ):
                     self.window.history_list.takeItem(0)
                 self.window.history_list.addItem(it)
             try:
                 if sess is not None:
-                    events = extract_error_events(
-                        self.window.current_script_text, hyp
-                    )
+                    events = extract_error_events(self.window.current_script_text, hyp)
                     db.replace_session_errors(
                         self.window.db,
                         sess.id,
@@ -569,9 +564,7 @@ class TranscriptionService(QtCore.QObject):
                 pass
 
             timing = self._get_worker_timing(free_speak=False)
-            timing_text = self._format_timing_text(
-                timing, time.perf_counter() - t_ui0
-            )
+            timing_text = self._format_timing_text(timing, time.perf_counter() - t_ui0)
             avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
             self.window.metrics_label.setText(
                 "Score: "
@@ -602,13 +595,10 @@ class TranscriptionService(QtCore.QObject):
         if not self._received_segments_this_run:
             self.window.transcript_txt.setText(hyp)
             self._clear_transcript_sync()
+            self.window.set_mistake_pairs([])
             timing = self._get_worker_timing(free_speak=True)
-            timing_text = self._format_timing_text(
-                timing, time.perf_counter() - t_ui0
-            )
-            self.window.metrics_label.setText(
-                "Transcript ready (Free Speak)"
-            )
+            timing_text = self._format_timing_text(timing, time.perf_counter() - t_ui0)
+            self.window.metrics_label.setText("Transcript ready (Free Speak)")
             self._set_timing_text(timing_text)
         self.window.btn_score.setEnabled(True)
         self.window.btn_save.setEnabled(True)
@@ -638,19 +628,16 @@ class TranscriptionService(QtCore.QObject):
             self.window.transcript_segment_ranges = ranges
             self.window.transcript_active_index = active_idx
             self.window.transcript_txt.setPlainText(txt)
+            self.window.set_mistake_pairs([])
 
-            avg_conf_txt = (
-                f"{avg_conf:.0%}" if avg_conf is not None else "-"
-            )
+            avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
             self.window.metrics_label.setText(
                 "Transcript ready (Free Speak) | "
                 f"Rate: {artic_rate:.0f} wpm | "
                 f"Pauses: {pause_ratio:.0%} | Conf: {avg_conf_txt}"
             )
             timing = self._get_worker_timing(free_speak=True)
-            timing_text = self._format_timing_text(
-                timing, time.perf_counter() - t_ui0
-            )
+            timing_text = self._format_timing_text(timing, time.perf_counter() - t_ui0)
             self._set_timing_text(timing_text)
 
             self.window.transcript_active_index = -1
@@ -665,6 +652,7 @@ class TranscriptionService(QtCore.QObject):
         except Exception:
             self.window.transcript_txt.setText(hyp)
             self._clear_transcript_sync()
+            self.window.set_mistake_pairs([])
         finally:
             self.window.btn_score.setEnabled(True)
             self.window.btn_save.setEnabled(True)

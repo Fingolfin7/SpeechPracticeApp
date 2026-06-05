@@ -1772,7 +1772,12 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Enable controls
         self.btn_record.setEnabled(True)
         self.btn_play.setEnabled(self.audio_data is not None)
-        self.btn_score.setEnabled(True)
+        can_score = self.audio_data is not None
+        try:
+            can_score = bool(self.transcription_service.can_start_transcription())
+        except Exception:
+            pass
+        self.btn_score.setEnabled(can_score)
 
     # --------------------------- settings ----------------------------------
 

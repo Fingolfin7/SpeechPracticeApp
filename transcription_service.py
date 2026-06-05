@@ -4,6 +4,7 @@ import json
 import os
 import time
 import gc
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Any, Dict, Tuple, List
 
@@ -26,6 +27,17 @@ from alignment_utils import (
 from error_analytics import extract_error_events
 
 
+@dataclass
+class TranscriptionRunContext:
+    mode: str
+    session_id: Optional[int]
+    script_name: str
+    script_text: str
+    audio_path: Optional[str] = None
+    worker: Optional[Any] = None
+    received_segments: bool = False
+
+
 class TranscriptionService(QtCore.QObject):
     """
     Centralized service for handling transcription and scoring.
@@ -37,6 +49,8 @@ class TranscriptionService(QtCore.QObject):
         self.window = window
         self.model: Optional[Any] = None
         self._received_segments_this_run: bool = False
+        self._active_score_context: Optional[TranscriptionRunContext] = None
+        self._active_free_context: Optional[TranscriptionRunContext] = None
 
     # ------------------------ model/options ------------------------
 
@@ -97,9 +111,12 @@ class TranscriptionService(QtCore.QObject):
     def get_whisper_options(self, free_speak: bool = False) -> dict:
         return whisper_options(self.window.settings, free_speak=free_speak)
 
-    def _get_worker_timing(self, free_speak: bool = False) -> Dict[str, float]:
-        worker_attr = "free_worker" if free_speak else "worker"
-        worker = getattr(self.window, worker_attr, None)
+    def _get_worker_timing(
+        self, free_speak: bool = False, worker: Optional[Any] = None
+    ) -> Dict[str, float]:
+        if worker is None:
+            worker_attr = "free_worker" if free_speak else "worker"
+            worker = getattr(self.window, worker_attr, None)
         timing = getattr(worker, "last_timing", None)
         return dict(timing) if isinstance(timing, dict) else {}
 
@@ -142,6 +159,68 @@ class TranscriptionService(QtCore.QObject):
                     setattr(self.window, attr, None)
             except Exception:
                 pass
+
+    def is_busy(self) -> bool:
+        for attr in ("worker", "free_worker"):
+            try:
+                w = getattr(self.window, attr, None)
+                if w is not None and w.isRunning():
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def can_start_transcription(self) -> bool:
+        if self.is_busy():
+            return False
+        if bool(getattr(self.window, "free_speak_mode", False)):
+            return (
+                getattr(self.window, "audio_data", None) is not None
+                or getattr(self.window, "current_audio_path", None) is not None
+            )
+        return getattr(self.window, "current_audio_path", None) is not None
+
+    def _is_context_visible(self, context: Optional[TranscriptionRunContext]) -> bool:
+        if context is None:
+            return True
+        current_session_id = getattr(self.window, "current_session_id", None)
+        if context.session_id is not None:
+            return current_session_id == context.session_id
+        if context.mode == "free":
+            return (
+                current_session_id is None
+                and bool(getattr(self.window, "free_speak_mode", False))
+            )
+        return (
+            current_session_id is None
+            and getattr(self.window, "current_audio_path", None) == context.audio_path
+            and getattr(self.window, "current_script_text", "") == context.script_text
+        )
+
+    def _add_history_item(self, sess) -> None:
+        formatted_timestamp = datetime.strptime(
+            sess.timestamp, "%Y-%m-%dT%H:%M:%S"
+        ).strftime("%d %b %Y %H:%M")
+        label = f"{formatted_timestamp} - {sess.script_name}"
+        it = QListWidgetItem(label)
+        it.setData(QtCore.Qt.UserRole, sess.id)
+        try:
+            it.setIcon(self.window._session_type_icon(sess.script_name))
+        except Exception:
+            pass
+        if self.window.history_list.count() == 1 and not isinstance(
+            self.window.history_list.item(0).data(QtCore.Qt.UserRole),
+            int,
+        ):
+            self.window.history_list.takeItem(0)
+        self.window.history_list.addItem(it)
+
+    def _finish_worker(self) -> None:
+        self._release_finished_workers()
+        try:
+            self.window.btn_score.setEnabled(self.can_start_transcription())
+        except Exception:
+            pass
 
     def unload_model(self) -> None:
         self.model = None
@@ -261,6 +340,10 @@ class TranscriptionService(QtCore.QObject):
         Script-based scoring. Uses ASR, computes WER/CER/Clarity and
         extended metrics when timestamps are available.
         """
+        if self.is_busy():
+            self.window.metrics_label.setText("Transcription already running.")
+            return
+
         if self.window.current_audio_path is None:
             self.window.metrics_label.setText("No audio to score.")
             self._set_timing_text("Timing: -")
@@ -281,25 +364,48 @@ class TranscriptionService(QtCore.QObject):
             self.window.btn_score.setEnabled(True)
             return
 
+        context = TranscriptionRunContext(
+            mode="score",
+            session_id=getattr(self.window, "current_session_id", None),
+            script_name=getattr(self.window, "current_script_name", ""),
+            script_text=getattr(self.window, "current_script_text", ""),
+            audio_path=getattr(self.window, "current_audio_path", None),
+        )
+        self._active_score_context = context
+
         self.window.worker = TranscribeWorker(
             self.model,
-            self.window.current_script_text,
-            self.window.current_audio_path,
+            context.script_text,
+            context.audio_path,
             self.window,
             options=self.get_whisper_options(),
         )
+        context.worker = self.window.worker
         self._received_segments_this_run = False
 
         # Connect before start to avoid race
         try:
-            self.window.worker.partial.connect(self.on_transcription_partial)
+            self.window.worker.partial.connect(
+                lambda hyp, ctx=context: self.on_transcription_partial(hyp, ctx)
+            )
             self.window.worker.completed_with_segments.connect(
-                self.on_transcription_done_with_segments
+                lambda hyp, err, clar, score, segments, ctx=context: (
+                    self.on_transcription_done_with_segments(
+                        hyp, err, clar, score, segments, ctx
+                    )
+                )
             )
         except Exception:
             pass
-        self.window.worker.completed.connect(self.on_transcription_done)
-        self.window.worker.failed.connect(self.on_worker_failed)
+        self.window.worker.completed.connect(
+            lambda hyp, err, clar, score, ctx=context: self.on_transcription_done(
+                hyp, err, clar, score, ctx
+            )
+        )
+        self.window.worker.failed.connect(
+            lambda msg, ctx=context: self.on_worker_failed(msg, ctx)
+        )
+        self.window.worker.finished.connect(self._finish_worker)
         self.window.worker.start()
 
     def transcribe_free(self) -> None:
@@ -307,6 +413,10 @@ class TranscriptionService(QtCore.QObject):
         Free Speak: no WER/CER; still compute fluency/confidence
         when timestamps are available.
         """
+        if self.is_busy():
+            self.window.metrics_label.setText("Transcription already running.")
+            return
+
         if self.window.audio_data is None and self.window.current_audio_path is None:
             self.window.metrics_label.setText("Nothing to transcribe.")
             self._set_timing_text("Timing: -")
@@ -334,33 +444,57 @@ class TranscriptionService(QtCore.QObject):
                 pass
             return
 
+        context = TranscriptionRunContext(
+            mode="free",
+            session_id=getattr(self.window, "current_session_id", None),
+            script_name=getattr(self.window, "current_script_name", "Free Speak"),
+            script_text=getattr(self.window, "current_script_text", ""),
+            audio_path=getattr(self.window, "current_audio_path", None),
+        )
+        self._active_free_context = context
+
         self.window.free_worker = FreeTranscribeWorker(
             self.model,
             audio_input,
             self.window,
             options=self.get_whisper_options(free_speak=True),
         )
+        context.worker = self.window.free_worker
         self._received_segments_this_run = False
 
         try:
-            self.window.free_worker.partial.connect(self.on_free_transcription_partial)
+            self.window.free_worker.partial.connect(
+                lambda hyp, ctx=context: self.on_free_transcription_partial(hyp, ctx)
+            )
             self.window.free_worker.completed_with_segments.connect(
-                self.on_free_transcription_done_with_segments
+                lambda hyp, segments, ctx=context: (
+                    self.on_free_transcription_done_with_segments(hyp, segments, ctx)
+                )
             )
         except Exception:
             pass
-        self.window.free_worker.completed.connect(self.on_free_transcription_done)
-        self.window.free_worker.failed.connect(self.on_free_worker_failed)
+        self.window.free_worker.completed.connect(
+            lambda hyp, ctx=context: self.on_free_transcription_done(hyp, ctx)
+        )
+        self.window.free_worker.failed.connect(
+            lambda msg, ctx=context: self.on_free_worker_failed(msg, ctx)
+        )
+        self.window.free_worker.finished.connect(self._finish_worker)
         self.window.free_worker.start()
 
     # ------------------------ slots: scoring -----------------------
 
-    @QtCore.pyqtSlot(str)
-    def on_transcription_partial(self, hyp: str) -> None:
+    def on_transcription_partial(
+        self, hyp: str, context: Optional[TranscriptionRunContext] = None
+    ) -> None:
         """
         Show accumulated chunk output while a long script-based transcription runs.
         Final scoring/highlighting happens in the completed slots.
         """
+        if context is None:
+            context = self._active_score_context
+        if not self._is_context_visible(context):
+            return
         try:
             self.window.transcript_txt.setPlainText(str(hyp))
             self._clear_transcript_sync()
@@ -368,39 +502,61 @@ class TranscriptionService(QtCore.QObject):
         except Exception:
             pass
 
-    @QtCore.pyqtSlot(str, float, float, float)
     def on_transcription_done(
-        self, hyp: str, err: float, clar: float, score: float
+        self,
+        hyp: str,
+        err: float,
+        clar: float,
+        score: float,
+        context: Optional[TranscriptionRunContext] = None,
     ) -> None:
         """
         Completion without segments. Show WER/CER/Clarity/Score,
         compute error spans (no timing metrics available).
         """
         t_ui0 = time.perf_counter()
-        cer_val = self._compute_cer(self.window.current_script_text, hyp)
+        if context is None:
+            context = self._active_score_context
+        script_text = (
+            context.script_text if context is not None else self.window.current_script_text
+        )
+        script_name = (
+            context.script_name if context is not None else self.window.current_script_name
+        )
+        audio_path = (
+            context.audio_path if context is not None else self.window.current_audio_path
+        )
+        visible = self._is_context_visible(context)
+        received_segments = (
+            context.received_segments
+            if context is not None
+            else self._received_segments_this_run
+        )
+        cer_val = self._compute_cer(script_text, hyp)
 
-        if not self._received_segments_this_run:
-            self.window.transcript_txt.setText(hyp)
-            self._clear_transcript_sync()
+        if not received_segments:
+            if visible:
+                self.window.transcript_txt.setText(hyp)
+                self._clear_transcript_sync()
 
-            # Error highlights (no timestamps needed)
-            s_spans, t_spans = self.compute_error_spans(
-                self.window.current_script_text,
-                self.window.transcript_txt.toPlainText(),
-            )
-            self.window.set_error_highlights(s_spans, t_spans)
-            self.window.set_mistake_pairs(
-                extract_mistake_pairs_for_display(
-                    self.window.current_script_text,
+                # Error highlights (no timestamps needed)
+                s_spans, t_spans = self.compute_error_spans(
+                    script_text,
                     self.window.transcript_txt.toPlainText(),
                 )
-            )
+                self.window.set_error_highlights(s_spans, t_spans)
+                self.window.set_mistake_pairs(
+                    extract_mistake_pairs_for_display(
+                        script_text,
+                        self.window.transcript_txt.toPlainText(),
+                    )
+                )
 
             # Persist if session exists
-            if getattr(self.window, "current_session_id", None) is not None:
+            if context is not None and context.session_id is not None:
                 sess = db.update_session_scores(
                     self.window.db,
-                    self.window.current_session_id,
+                    context.session_id,
                     hyp,
                     err,
                     clar,
@@ -412,9 +568,9 @@ class TranscriptionService(QtCore.QObject):
                 # Create session if none (rare path)
                 sess = db.add_session(
                     self.window.db,
-                    self.window.current_script_name,
-                    self.window.current_script_text,
-                    self.window.current_audio_path,
+                    script_name,
+                    script_text,
+                    audio_path or "",
                     hyp,
                     err,
                     clar,
@@ -422,22 +578,14 @@ class TranscriptionService(QtCore.QObject):
                     segments_json=None,
                     cer=cer_val,
                 )
-                self.window.current_session_id = sess.id
-                formatted_timestamp = datetime.strptime(
-                    sess.timestamp, "%Y-%m-%dT%H:%M:%S"
-                ).strftime("%d %b %Y %H:%M")
-                label = f"{formatted_timestamp} - {sess.script_name}"
-                it = QListWidgetItem(label)
-                it.setData(QtCore.Qt.UserRole, sess.id)
-                if self.window.history_list.count() == 1 and not isinstance(
-                    self.window.history_list.item(0).data(QtCore.Qt.UserRole),
-                    int,
-                ):
-                    self.window.history_list.takeItem(0)
-                self.window.history_list.addItem(it)
+                if context is not None:
+                    context.session_id = sess.id
+                if visible:
+                    self.window.current_session_id = sess.id
+                self._add_history_item(sess)
             try:
                 if sess is not None:
-                    events = extract_error_events(self.window.current_script_text, hyp)
+                    events = extract_error_events(script_text, hyp)
                     db.replace_session_errors(
                         self.window.db,
                         sess.id,
@@ -448,82 +596,104 @@ class TranscriptionService(QtCore.QObject):
             except Exception:
                 pass
 
-            timing = self._get_worker_timing(free_speak=False)
-            timing_text = self._format_timing_text(timing, time.perf_counter() - t_ui0)
-            self.window.metrics_label.setText(
-                f"Score: {score:.2f}/5 | WER: {err:.2%} | "
-                f"CER: {cer_val:.2%} | Clarity: {clar:.2%}"
+            timing = self._get_worker_timing(
+                free_speak=False,
+                worker=context.worker if context is not None else None,
             )
-            self._set_timing_text(timing_text)
+            timing_text = self._format_timing_text(timing, time.perf_counter() - t_ui0)
+            if visible:
+                self.window.metrics_label.setText(
+                    f"Score: {score:.2f}/5 | WER: {err:.2%} | "
+                    f"CER: {cer_val:.2%} | Clarity: {clar:.2%}"
+                )
+                self._set_timing_text(timing_text)
 
-        self.window.btn_score.setEnabled(True)
-        self._release_finished_workers()
+        self._finish_worker()
 
-    @QtCore.pyqtSlot(str, float, float, float, object)
     def on_transcription_done_with_segments(
-        self, hyp: str, err: float, clar: float, score: float, segments: object
+        self,
+        hyp: str,
+        err: float,
+        clar: float,
+        score: float,
+        segments: object,
+        context: Optional[TranscriptionRunContext] = None,
     ) -> None:
         """
         Completion with segments: compute extended metrics + spans,
         update UI, and persist.
         """
         t_ui0 = time.perf_counter()
+        if context is None:
+            context = self._active_score_context
+        script_text = (
+            context.script_text if context is not None else self.window.current_script_text
+        )
+        script_name = (
+            context.script_name if context is not None else self.window.current_script_name
+        )
+        audio_path = (
+            context.audio_path if context is not None else self.window.current_audio_path
+        )
+        visible = self._is_context_visible(context)
         try:
             self._received_segments_this_run = True
+            if context is not None:
+                context.received_segments = True
 
             seg_list = list(segments) if isinstance(segments, list) else []
             # Augment and compute extended metrics
             segs_aug, artic_rate, pause_ratio, filled_cnt, avg_conf = (
                 self._augment_segments_and_fluency(seg_list, hyp)
             )
-            cer_val = self._compute_cer(self.window.current_script_text, hyp)
+            cer_val = self._compute_cer(script_text, hyp)
 
             # Build transcript display and time ranges
             txt, segs_built, ranges, active_idx = build_transcript_from_segments(
                 segs_aug
             )
-            self.window.transcript_segments = segs_aug
-            self.window.transcript_segment_ranges = ranges
-            self.window.transcript_active_index = active_idx
-            self.window.transcript_txt.setPlainText(txt)
 
-            # Error highlights (script vs built transcript text)
-            s_spans, t_spans = self.compute_error_spans(
-                self.window.current_script_text, txt
-            )
-            self.window.set_error_highlights(s_spans, t_spans)
-            self.window.set_mistake_pairs(
-                extract_mistake_pairs_for_display(
-                    self.window.current_script_text,
-                    txt,
+            if visible:
+                self.window.transcript_segments = segs_aug
+                self.window.transcript_segment_ranges = ranges
+                self.window.transcript_active_index = active_idx
+                self.window.transcript_txt.setPlainText(txt)
+
+                # Error highlights (script vs built transcript text)
+                s_spans, t_spans = self.compute_error_spans(script_text, txt)
+                self.window.set_error_highlights(s_spans, t_spans)
+                self.window.set_mistake_pairs(
+                    extract_mistake_pairs_for_display(
+                        script_text,
+                        txt,
+                    )
                 )
-            )
 
-            # Label with extended metrics
-            avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
-            self.window.metrics_label.setText(
-                "Score: "
-                f"{score:.2f}/5 | WER: {err:.2%} | CER: {cer_val:.2%} | "
-                f"Clarity: {clar:.2%} | Rate: {artic_rate:.0f} wpm | "
-                f"Pauses: {pause_ratio:.0%} | Conf: {avg_conf_txt}"
-            )
+                # Label with extended metrics
+                avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
+                self.window.metrics_label.setText(
+                    "Score: "
+                    f"{score:.2f}/5 | WER: {err:.2%} | CER: {cer_val:.2%} | "
+                    f"Clarity: {clar:.2%} | Rate: {artic_rate:.0f} wpm | "
+                    f"Pauses: {pause_ratio:.0%} | Conf: {avg_conf_txt}"
+                )
 
-            # Initial playhead highlight along with base selections
-            self.window.transcript_active_index = -1
-            self.window.transcript_active_index = highlight_transcript_at_time(
-                self.window.transcript_txt,
-                self.window.transcript_segment_ranges,
-                0.0,
-                self.window.transcript_active_index,
-                base_selections=self.window.transcript_error_selections,
-            )
+                # Initial playhead highlight along with base selections
+                self.window.transcript_active_index = -1
+                self.window.transcript_active_index = highlight_transcript_at_time(
+                    self.window.transcript_txt,
+                    self.window.transcript_segment_ranges,
+                    0.0,
+                    self.window.transcript_active_index,
+                    base_selections=self.window.transcript_error_selections,
+                )
 
             # Persist
             segments_json = json.dumps(segs_aug)
-            if getattr(self.window, "current_session_id", None) is not None:
+            if context is not None and context.session_id is not None:
                 sess = db.update_session_scores(
                     self.window.db,
-                    self.window.current_session_id,
+                    context.session_id,
                     hyp,
                     err,
                     clar,
@@ -538,9 +708,9 @@ class TranscriptionService(QtCore.QObject):
             else:
                 sess = db.add_session(
                     self.window.db,
-                    self.window.current_script_name,
-                    self.window.current_script_text,
-                    self.window.current_audio_path,
+                    script_name,
+                    script_text,
+                    audio_path or "",
                     hyp,
                     err,
                     clar,
@@ -552,22 +722,14 @@ class TranscriptionService(QtCore.QObject):
                     filled_pauses=filled_cnt,
                     avg_conf=avg_conf,
                 )
-                self.window.current_session_id = sess.id
-                formatted_timestamp = datetime.strptime(
-                    sess.timestamp, "%Y-%m-%dT%H:%M:%S"
-                ).strftime("%d %b %Y %H:%M")
-                label = f"{formatted_timestamp} - {sess.script_name}"
-                it = QListWidgetItem(label)
-                it.setData(QtCore.Qt.UserRole, sess.id)
-                if self.window.history_list.count() == 1 and not isinstance(
-                    self.window.history_list.item(0).data(QtCore.Qt.UserRole),
-                    int,
-                ):
-                    self.window.history_list.takeItem(0)
-                self.window.history_list.addItem(it)
+                if context is not None:
+                    context.session_id = sess.id
+                if visible:
+                    self.window.current_session_id = sess.id
+                self._add_history_item(sess)
             try:
                 if sess is not None:
-                    events = extract_error_events(self.window.current_script_text, hyp)
+                    events = extract_error_events(script_text, hyp)
                     db.replace_session_errors(
                         self.window.db,
                         sess.id,
@@ -578,33 +740,43 @@ class TranscriptionService(QtCore.QObject):
             except Exception:
                 pass
 
-            timing = self._get_worker_timing(free_speak=False)
+            timing = self._get_worker_timing(
+                free_speak=False,
+                worker=context.worker if context is not None else None,
+            )
             timing_text = self._format_timing_text(timing, time.perf_counter() - t_ui0)
             avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
-            self.window.metrics_label.setText(
-                "Score: "
-                f"{score:.2f}/5 | WER: {err:.2%} | CER: {cer_val:.2%} | "
-                f"Clarity: {clar:.2%} | Rate: {artic_rate:.0f} wpm | "
-                f"Pauses: {pause_ratio:.0%} | Conf: {avg_conf_txt}"
-            )
-            self._set_timing_text(timing_text)
+            if visible:
+                self.window.metrics_label.setText(
+                    "Score: "
+                    f"{score:.2f}/5 | WER: {err:.2%} | CER: {cer_val:.2%} | "
+                    f"Clarity: {clar:.2%} | Rate: {artic_rate:.0f} wpm | "
+                    f"Pauses: {pause_ratio:.0%} | Conf: {avg_conf_txt}"
+                )
+                self._set_timing_text(timing_text)
 
         except Exception:
             # Fallback: show plain hypothesis if anything goes wrong
-            self.window.transcript_txt.setText(hyp)
-            self._clear_transcript_sync()
+            if visible:
+                self.window.transcript_txt.setText(hyp)
+                self._clear_transcript_sync()
         finally:
-            self.window.btn_score.setEnabled(True)
-            self._release_finished_workers()
+            self._finish_worker()
 
     # ------------------------ slots: free speak ---------------------
 
-    @QtCore.pyqtSlot(str)
-    def on_free_transcription_partial(self, hyp: str) -> None:
+    def on_free_transcription_partial(
+        self, hyp: str, context: Optional[TranscriptionRunContext] = None
+    ) -> None:
         """
         Show accumulated chunk output while a long Free Speak transcription runs.
         Final fluency/confidence metrics happen in the completed slots.
         """
+        if context is None:
+            context = self._active_free_context
+        if not self._is_context_visible(context):
+            self.window.last_transcript_text = str(hyp)
+            return
         try:
             self.window.last_transcript_text = str(hyp)
             self.window.transcript_txt.setPlainText(str(hyp))
@@ -616,36 +788,55 @@ class TranscriptionService(QtCore.QObject):
         except Exception:
             pass
 
-    @QtCore.pyqtSlot(str)
-    def on_free_transcription_done(self, hyp: str) -> None:
+    def on_free_transcription_done(
+        self, hyp: str, context: Optional[TranscriptionRunContext] = None
+    ) -> None:
         """
         Free Speak without segments. No WER/CER. Keep transcript visible.
         """
         t_ui0 = time.perf_counter()
+        if context is None:
+            context = self._active_free_context
+        visible = self._is_context_visible(context)
+        received_segments = (
+            context.received_segments
+            if context is not None
+            else self._received_segments_this_run
+        )
         self.window.last_transcript_text = hyp
 
-        if not self._received_segments_this_run:
+        if not received_segments and visible:
             self.window.transcript_txt.setText(hyp)
             self._clear_transcript_sync()
             self.window.set_mistake_pairs([])
-            timing = self._get_worker_timing(free_speak=True)
+            timing = self._get_worker_timing(
+                free_speak=True,
+                worker=context.worker if context is not None else None,
+            )
             timing_text = self._format_timing_text(timing, time.perf_counter() - t_ui0)
             self.window.metrics_label.setText("Transcript ready (Free Speak)")
             self._set_timing_text(timing_text)
-        self.window.btn_score.setEnabled(True)
-        self.window.btn_save.setEnabled(True)
-        self._release_finished_workers()
+        if visible:
+            self.window.btn_save.setEnabled(True)
+        self._finish_worker()
 
-    @QtCore.pyqtSlot(str, object)
     def on_free_transcription_done_with_segments(
-        self, hyp: str, segments: object
+        self,
+        hyp: str,
+        segments: object,
+        context: Optional[TranscriptionRunContext] = None,
     ) -> None:
         """
         Free Speak with segments: compute fluency/confidence only.
         """
         t_ui0 = time.perf_counter()
+        if context is None:
+            context = self._active_free_context
+        visible = self._is_context_visible(context)
         try:
             self._received_segments_this_run = True
+            if context is not None:
+                context.received_segments = True
             self.window.last_transcript_text = hyp
 
             seg_list = list(segments) if isinstance(segments, list) else []
@@ -656,59 +847,73 @@ class TranscriptionService(QtCore.QObject):
             txt, segs_built, ranges, active_idx = build_transcript_from_segments(
                 segs_aug
             )
-            self.window.transcript_segments = segs_aug
-            self.window.transcript_segment_ranges = ranges
-            self.window.transcript_active_index = active_idx
-            self.window.transcript_txt.setPlainText(txt)
-            self.window.set_mistake_pairs([])
+            if visible:
+                self.window.transcript_segments = segs_aug
+                self.window.transcript_segment_ranges = ranges
+                self.window.transcript_active_index = active_idx
+                self.window.transcript_txt.setPlainText(txt)
+                self.window.set_mistake_pairs([])
 
             avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
-            self.window.metrics_label.setText(
-                "Transcript ready (Free Speak) | "
-                f"Rate: {artic_rate:.0f} wpm | "
-                f"Pauses: {pause_ratio:.0%} | Conf: {avg_conf_txt}"
+            if visible:
+                self.window.metrics_label.setText(
+                    "Transcript ready (Free Speak) | "
+                    f"Rate: {artic_rate:.0f} wpm | "
+                    f"Pauses: {pause_ratio:.0%} | Conf: {avg_conf_txt}"
+                )
+            timing = self._get_worker_timing(
+                free_speak=True,
+                worker=context.worker if context is not None else None,
             )
-            timing = self._get_worker_timing(free_speak=True)
             timing_text = self._format_timing_text(timing, time.perf_counter() - t_ui0)
-            self._set_timing_text(timing_text)
+            if visible:
+                self._set_timing_text(timing_text)
 
-            self.window.transcript_active_index = -1
-            self.window.transcript_active_index = highlight_transcript_at_time(
-                self.window.transcript_txt,
-                self.window.transcript_segment_ranges,
-                0.0,
-                self.window.transcript_active_index,
-                base_selections=self.window.transcript_error_selections,
-            )
+            if visible:
+                self.window.transcript_active_index = -1
+                self.window.transcript_active_index = highlight_transcript_at_time(
+                    self.window.transcript_txt,
+                    self.window.transcript_segment_ranges,
+                    0.0,
+                    self.window.transcript_active_index,
+                    base_selections=self.window.transcript_error_selections,
+                )
             # Persistence happens on Save in free speak mode
         except Exception:
-            self.window.transcript_txt.setText(hyp)
-            self._clear_transcript_sync()
-            self.window.set_mistake_pairs([])
+            if visible:
+                self.window.transcript_txt.setText(hyp)
+                self._clear_transcript_sync()
+                self.window.set_mistake_pairs([])
         finally:
-            self.window.btn_score.setEnabled(True)
-            self.window.btn_save.setEnabled(True)
-            self._release_finished_workers()
+            if visible:
+                self.window.btn_save.setEnabled(True)
+            self._finish_worker()
 
     # ------------------------ error handling -----------------------
 
-    @QtCore.pyqtSlot(str)
-    def on_worker_failed(self, msg: str) -> None:
-        self.window.metrics_label.setText(f"Scoring failed: {msg}")
-        self._set_timing_text("Timing: failed")
-        self.window.btn_score.setEnabled(True)
-        self._release_finished_workers()
+    def on_worker_failed(
+        self, msg: str, context: Optional[TranscriptionRunContext] = None
+    ) -> None:
+        if context is None:
+            context = self._active_score_context
+        if self._is_context_visible(context):
+            self.window.metrics_label.setText(f"Scoring failed: {msg}")
+            self._set_timing_text("Timing: failed")
+        self._finish_worker()
 
-    @QtCore.pyqtSlot(str)
-    def on_free_worker_failed(self, msg: str) -> None:
-        self.window.metrics_label.setText(f"Transcription failed: {msg}")
-        self._set_timing_text("Timing: failed")
-        self.window.btn_score.setEnabled(True)
-        try:
-            self.window.btn_save.setEnabled(False)
-        except Exception:
-            pass
-        self._release_finished_workers()
+    def on_free_worker_failed(
+        self, msg: str, context: Optional[TranscriptionRunContext] = None
+    ) -> None:
+        if context is None:
+            context = self._active_free_context
+        if self._is_context_visible(context):
+            self.window.metrics_label.setText(f"Transcription failed: {msg}")
+            self._set_timing_text("Timing: failed")
+            try:
+                self.window.btn_save.setEnabled(False)
+            except Exception:
+                pass
+        self._finish_worker()
 
     # ------------------------ utilities ----------------------------
 

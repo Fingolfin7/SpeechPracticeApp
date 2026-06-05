@@ -57,6 +57,7 @@ from transcript_utils import (
     highlight_transcript_at_time,
 )
 from alignment_utils import extract_mistake_pairs_for_display
+from autumn_client import AutumnClient, AutumnError
 from settings_ui import (
     default_settings,
     settings_path,
@@ -346,6 +347,9 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         # Save button (for Free Speak optional saving)
         self.btn_save = QPushButton("Save")
         self.btn_save.setObjectName("PrimaryButton")
+        self.btn_autumn = QPushButton("Start Autumn")
+        self.btn_autumn.setObjectName("PrimaryButton")
+        self.btn_autumn.setVisible(False)
         self.btn_copy_mistakes = QPushButton("Copy Mistakes")
         # volume slider
         self.vol_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
@@ -371,6 +375,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_play.clicked.connect(self._toggle_play_pause)
         self.btn_score.clicked.connect(self.transcription_service.transcribe_and_score)
         self.btn_save.clicked.connect(lambda: save_free_speak_session(self))
+        self.btn_autumn.clicked.connect(self._toggle_autumn_timer)
         self.btn_copy_mistakes.clicked.connect(self._copy_mistakes_to_clipboard)
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
 
@@ -379,6 +384,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_play,
             self.btn_score,
             self.btn_save,
+            self.btn_autumn,
             self.btn_copy_mistakes,
         ):
             b.setEnabled(False)
@@ -1414,6 +1420,171 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
     def _on_toggle_free_mode(self, checked: bool) -> None:
         on_toggle_free_mode(self, checked)
 
+    # --------------------------- autumn -----------------------------------
+
+    def _autumn_client(self) -> AutumnClient:
+        raw_settings = getattr(self, "settings", {})
+        settings = raw_settings if isinstance(raw_settings, dict) else {}
+        return AutumnClient(
+            settings.get("autumn_base_url"),
+            settings.get("autumn_api_key"),
+        )
+
+    def _autumn_project(self) -> str:
+        return str(getattr(self, "settings", {}).get("autumn_project") or "").strip()
+
+    def _autumn_subprojects(self) -> list[str]:
+        raw = getattr(self, "settings", {}).get("autumn_subprojects") or []
+        if isinstance(raw, str):
+            return [s.strip() for s in raw.split(",") if s.strip()]
+        return [str(s).strip() for s in raw if str(s).strip()]
+
+    def _autumn_is_configured(self) -> bool:
+        settings = getattr(self, "settings", {})
+        return bool(
+            isinstance(settings, dict)
+            and str(settings.get("autumn_api_key") or "").strip()
+            and self._autumn_project()
+        )
+
+    def _sync_autumn_ui(self) -> None:
+        if not hasattr(self, "btn_autumn"):
+            return
+        configured = self._autumn_is_configured()
+        active_id = None
+        if configured:
+            active_id = getattr(self, "settings", {}).get("autumn_active_session_id")
+        self.btn_autumn.setVisible(configured)
+        self.btn_autumn.setEnabled(configured)
+        self.btn_autumn.setText("Stop Autumn" if active_id else "Start Autumn")
+        if configured:
+            project = self._autumn_project()
+            subs = self._autumn_subprojects()
+            sub_text = f" ({', '.join(subs)})" if subs else ""
+            self.btn_autumn.setToolTip(f"Track Autumn project: {project}{sub_text}")
+        else:
+            self.btn_autumn.setToolTip("")
+
+    @staticmethod
+    def _fmt_percent(value) -> str | None:
+        if value is None:
+            return None
+        try:
+            return f"{float(value):.2%}"
+        except Exception:
+            return None
+
+    @staticmethod
+    def _fmt_float(value, suffix: str = "") -> str | None:
+        if value is None:
+            return None
+        try:
+            return f"{float(value):.2f}{suffix}"
+        except Exception:
+            return None
+
+    def _build_autumn_note(self) -> str:
+        title = str(getattr(self, "current_script_name", "") or "SpeechPractice").strip()
+        sess = None
+        try:
+            sid = getattr(self, "current_session_id", None)
+            if sid is not None:
+                sess = db.get_session_by_id(self.db, int(sid))
+        except Exception:
+            sess = None
+
+        if not sess:
+            return f"SpeechPractice: {title} | scores pending"
+
+        parts: list[str] = []
+        score_txt = self._fmt_float(getattr(sess, "score", None), "/5")
+        if score_txt:
+            parts.append(f"Score {score_txt}")
+        wer_txt = self._fmt_percent(getattr(sess, "wer", None))
+        if wer_txt:
+            parts.append(f"WER {wer_txt}")
+        cer_txt = self._fmt_percent(getattr(sess, "cer", None))
+        if cer_txt:
+            parts.append(f"CER {cer_txt}")
+        clarity_txt = self._fmt_percent(getattr(sess, "clarity", None))
+        if clarity_txt:
+            parts.append(f"Clarity {clarity_txt}")
+        rate = getattr(sess, "artic_rate", None)
+        if rate is not None:
+            try:
+                parts.append(f"Rate {float(rate):.0f} wpm")
+            except Exception:
+                pass
+        pause_txt = self._fmt_percent(getattr(sess, "pause_ratio", None))
+        if pause_txt:
+            parts.append(f"Pauses {pause_txt}")
+        conf_txt = self._fmt_percent(getattr(sess, "avg_conf", None))
+        if conf_txt:
+            parts.append(f"Conf {conf_txt}")
+
+        summary = ", ".join(parts) if parts else "scores pending"
+        return f"SpeechPractice: {title} | {summary}"
+
+    def _toggle_autumn_timer(self) -> None:
+        if not self._autumn_is_configured():
+            self.metrics_label.setText("Connect Autumn in Settings first.")
+            self._sync_autumn_ui()
+            return
+        active_id = getattr(self, "settings", {}).get("autumn_active_session_id")
+        if active_id:
+            self._stop_autumn_timer()
+        else:
+            self._start_autumn_timer()
+
+    def _start_autumn_timer(self) -> None:
+        project = self._autumn_project()
+        try:
+            payload = self._autumn_client().start_timer(
+                project,
+                self._autumn_subprojects(),
+                note=f"SpeechPractice: {getattr(self, 'current_script_name', 'Practice')}",
+            )
+            session = payload.get("session") or {}
+            session_id = session.get("id")
+            if not session_id:
+                raise AutumnError("Autumn did not return a timer id")
+            self.settings["autumn_active_session_id"] = int(session_id)
+            self._save_settings()
+            self._sync_autumn_ui()
+            self.metrics_label.setText(f"Autumn timer started: {project}")
+        except AutumnError as exc:
+            self.metrics_label.setText(f"Autumn start failed: {exc}")
+            QtWidgets.QMessageBox.warning(self, "Autumn", str(exc))
+
+    def _stop_autumn_timer(self) -> None:
+        project = self._autumn_project()
+        active_id = getattr(self, "settings", {}).get("autumn_active_session_id")
+        note, ok = QtWidgets.QInputDialog.getMultiLineText(
+            self,
+            "Stop Autumn Timer",
+            "Session note",
+            self._build_autumn_note(),
+        )
+        if not ok:
+            return
+        try:
+            payload = self._autumn_client().stop_timer(
+                session_id=int(active_id) if active_id else None,
+                project=project,
+                note=note.strip(),
+            )
+            self.settings["autumn_active_session_id"] = None
+            self._save_settings()
+            self._sync_autumn_ui()
+            duration = payload.get("duration")
+            if duration is not None:
+                self.metrics_label.setText(f"Autumn timer stopped: {float(duration):.1f} min")
+            else:
+                self.metrics_label.setText("Autumn timer stopped.")
+        except AutumnError as exc:
+            self.metrics_label.setText(f"Autumn stop failed: {exc}")
+            QtWidgets.QMessageBox.warning(self, "Autumn", str(exc))
+
     # ----------------------- axis helpers ----------------------------------
 
     @staticmethod
@@ -1627,6 +1798,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 self.transcript_legend.setVisible(self.show_error_highlights)
         except Exception:
             pass
+        self._sync_autumn_ui()
 
     def _save_settings(self) -> None:
         save_settings(self.settings, self._settings_path())

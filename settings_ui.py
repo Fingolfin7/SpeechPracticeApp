@@ -4,7 +4,7 @@ import os
 import json
 from typing import Dict, Tuple
 
-from PyQt5 import QtWidgets
+from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -14,7 +14,17 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QLabel,
     QDialogButtonBox,
+    QGroupBox,
+    QHBoxLayout,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QWidget,
 )
+
+from autumn_client import AutumnClient, AutumnError, normalize_base_url
 
 
 def default_settings() -> Dict:
@@ -30,6 +40,13 @@ def default_settings() -> Dict:
         # advanced decoding controls
         "no_speech_threshold": 0.30,
         "condition_on_previous_text": True,
+        # Autumn timer integration
+        "autumn_base_url": "https://autumn-lg0b.onrender.com",
+        "autumn_api_key": "",
+        "autumn_connected": False,
+        "autumn_project": "",
+        "autumn_subprojects": [],
+        "autumn_active_session_id": None,
     }
 
 
@@ -182,6 +199,166 @@ def open_settings_dialog(window) -> None:
     gpu_label.setText(f"Detected: {summary}\nRecommendation: {recommendation}")
     form.addRow("Hardware", gpu_label)
 
+    # Autumn integration
+    autumn_box = QGroupBox("Autumn", dlg)
+    autumn_layout = QFormLayout(autumn_box)
+
+    autumn_base_edit = QLineEdit(
+        normalize_base_url(window.settings.get("autumn_base_url")), autumn_box
+    )
+    autumn_layout.addRow("URL", autumn_base_edit)
+
+    auth_row = QWidget(autumn_box)
+    auth_layout = QHBoxLayout(auth_row)
+    auth_layout.setContentsMargins(0, 0, 0, 0)
+    autumn_user_edit = QLineEdit(auth_row)
+    autumn_user_edit.setPlaceholderText("username")
+    autumn_pass_edit = QLineEdit(auth_row)
+    autumn_pass_edit.setPlaceholderText("password")
+    autumn_pass_edit.setEchoMode(QLineEdit.Password)
+    autumn_connect_btn = QPushButton("Connect", auth_row)
+    autumn_disconnect_btn = QPushButton("Disconnect", auth_row)
+    auth_layout.addWidget(autumn_user_edit)
+    auth_layout.addWidget(autumn_pass_edit)
+    auth_layout.addWidget(autumn_connect_btn)
+    auth_layout.addWidget(autumn_disconnect_btn)
+    autumn_layout.addRow("Login", auth_row)
+
+    autumn_status = QLabel("", autumn_box)
+    autumn_status.setWordWrap(True)
+    autumn_layout.addRow("Status", autumn_status)
+
+    project_row = QWidget(autumn_box)
+    project_layout = QHBoxLayout(project_row)
+    project_layout.setContentsMargins(0, 0, 0, 0)
+    autumn_project_cb = QComboBox(project_row)
+    autumn_project_cb.setEditable(True)
+    autumn_refresh_btn = QPushButton("Refresh", project_row)
+    project_layout.addWidget(autumn_project_cb, 1)
+    project_layout.addWidget(autumn_refresh_btn)
+    autumn_layout.addRow("Project", project_row)
+
+    autumn_subs_list = QListWidget(autumn_box)
+    autumn_subs_list.setMaximumHeight(110)
+    autumn_layout.addRow("Subprojects", autumn_subs_list)
+    form.addRow(autumn_box)
+
+    autumn_token = {"value": str(window.settings.get("autumn_api_key") or "")}
+    loading_projects = {"value": False}
+
+    def _set_autumn_status(text: str) -> None:
+        autumn_status.setText(text)
+
+    def _selected_subprojects() -> list[str]:
+        selected: list[str] = []
+        for i in range(autumn_subs_list.count()):
+            item = autumn_subs_list.item(i)
+            if item.checkState() == QtCore.Qt.Checked:
+                selected.append(item.text())
+        return selected
+
+    def _set_subprojects(names: list[str], selected: list[str] | None = None) -> None:
+        selected_set = set(selected or [])
+        autumn_subs_list.clear()
+        for name in names:
+            item = QListWidgetItem(str(name))
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setCheckState(
+                QtCore.Qt.Checked
+                if item.text() in selected_set
+                else QtCore.Qt.Unchecked
+            )
+            autumn_subs_list.addItem(item)
+
+    def _client() -> AutumnClient:
+        return AutumnClient(autumn_base_edit.text(), autumn_token["value"])
+
+    def _refresh_subprojects() -> None:
+        if loading_projects["value"]:
+            return
+        project = autumn_project_cb.currentText().strip()
+        if not autumn_token["value"] or not project:
+            _set_subprojects([], [])
+            return
+        previous = _selected_subprojects() or list(
+            window.settings.get("autumn_subprojects") or []
+        )
+        try:
+            subs = _client().list_subprojects(project)
+            _set_subprojects(subs, previous)
+            _set_autumn_status("Connected")
+        except AutumnError as exc:
+            _set_autumn_status(str(exc))
+
+    def _refresh_projects() -> None:
+        if not autumn_token["value"]:
+            _set_autumn_status("Not connected")
+            return
+        project = autumn_project_cb.currentText().strip() or str(
+            window.settings.get("autumn_project") or ""
+        )
+        try:
+            loading_projects["value"] = True
+            projects = _client().list_projects()
+            autumn_project_cb.clear()
+            autumn_project_cb.addItems(projects)
+            if project:
+                idx = autumn_project_cb.findText(project)
+                if idx >= 0:
+                    autumn_project_cb.setCurrentIndex(idx)
+                else:
+                    autumn_project_cb.setEditText(project)
+            elif projects:
+                autumn_project_cb.setCurrentIndex(0)
+            _set_autumn_status("Connected")
+        except AutumnError as exc:
+            _set_autumn_status(str(exc))
+        finally:
+            loading_projects["value"] = False
+        _refresh_subprojects()
+
+    def _connect_autumn() -> None:
+        username = autumn_user_edit.text().strip()
+        password = autumn_pass_edit.text()
+        if not username or not password:
+            QMessageBox.warning(dlg, "Autumn", "Enter your Autumn username and password.")
+            return
+        try:
+            client = AutumnClient(autumn_base_edit.text())
+            token = client.authenticate(username, password)
+            autumn_token["value"] = token
+            _set_autumn_status("Connected")
+            autumn_pass_edit.clear()
+            _refresh_projects()
+        except AutumnError as exc:
+            _set_autumn_status(str(exc))
+
+    def _disconnect_autumn() -> None:
+        autumn_token["value"] = ""
+        autumn_project_cb.clear()
+        autumn_subs_list.clear()
+        _set_autumn_status("Not connected")
+
+    autumn_connect_btn.clicked.connect(_connect_autumn)
+    autumn_disconnect_btn.clicked.connect(_disconnect_autumn)
+    autumn_refresh_btn.clicked.connect(_refresh_projects)
+    autumn_project_cb.activated.connect(lambda _idx: _refresh_subprojects())
+    if autumn_project_cb.lineEdit() is not None:
+        autumn_project_cb.lineEdit().editingFinished.connect(_refresh_subprojects)
+
+    saved_project = str(window.settings.get("autumn_project") or "")
+    saved_subprojects = window.settings.get("autumn_subprojects") or []
+    if isinstance(saved_subprojects, str):
+        saved_subprojects = [
+            s.strip() for s in saved_subprojects.split(",") if s.strip()
+        ]
+    loading_projects["value"] = True
+    if saved_project:
+        autumn_project_cb.setEditText(saved_project)
+    _set_subprojects(list(saved_subprojects), list(saved_subprojects))
+    loading_projects["value"] = False
+    _set_autumn_status("Connected" if autumn_token["value"] else "Not connected")
+
     buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=dlg)
     form.addRow(buttons)
     buttons.accepted.connect(dlg.accept)
@@ -202,6 +379,13 @@ def open_settings_dialog(window) -> None:
         window.settings["no_speech_threshold"] = float(ns_sb.value())
         window.settings["transcribe_chunk_seconds"] = int(chunk_sb.value())
         window.settings["language"] = lang_cb.currentText()
+        window.settings["autumn_base_url"] = normalize_base_url(autumn_base_edit.text())
+        window.settings["autumn_api_key"] = autumn_token["value"]
+        window.settings["autumn_connected"] = bool(autumn_token["value"])
+        window.settings["autumn_project"] = autumn_project_cb.currentText().strip()
+        window.settings["autumn_subprojects"] = _selected_subprojects()
+        if not autumn_token["value"]:
+            window.settings["autumn_active_session_id"] = None
         # Reset any loaded Whisper model so it is recreated with new settings.
         # The active model cache is owned by TranscriptionService.
         try:
@@ -218,6 +402,11 @@ def open_settings_dialog(window) -> None:
         except Exception:
             pass
         save_settings(window.settings, settings_path())
+        try:
+            if hasattr(window, "_sync_autumn_ui"):
+                window._sync_autumn_ui()
+        except Exception:
+            pass
 
 
 def whisper_options(settings: Dict, free_speak: bool = False) -> Dict:

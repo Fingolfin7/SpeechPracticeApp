@@ -215,6 +215,67 @@ class TranscriptionService(QtCore.QObject):
             self.window.history_list.takeItem(0)
         self.window.history_list.addItem(it)
 
+    def _set_background_status(self, text: str | None) -> None:
+        try:
+            if hasattr(self.window, "set_background_status"):
+                self.window.set_background_status(text)
+        except Exception:
+            pass
+
+    def _sync_export_button(self) -> None:
+        try:
+            if hasattr(self.window, "_sync_export_button"):
+                self.window._sync_export_button()
+        except Exception:
+            pass
+
+    def _mark_run_started(self, context: TranscriptionRunContext) -> None:
+        try:
+            if context.mode == "score":
+                self.window.mark_session_scoring(context.session_id, True)
+                self._set_background_status(
+                    f"Scoring in background: {context.script_name}"
+                )
+            else:
+                self._set_background_status("Transcribing Free Speak in background")
+        except Exception:
+            pass
+
+    def _mark_score_run_finished(
+        self,
+        context: Optional[TranscriptionRunContext],
+        sess,
+        failed: bool = False,
+    ) -> None:
+        if context is not None:
+            try:
+                self.window.mark_session_scoring(context.session_id, False)
+            except Exception:
+                pass
+        if sess is not None:
+            try:
+                self.window.refresh_history_session(sess)
+            except Exception:
+                pass
+            try:
+                when = self.window._session_timestamp_label(sess.timestamp)
+            except Exception:
+                when = str(getattr(sess, "timestamp", "") or "")
+            if failed:
+                self._set_background_status(f"Scoring failed for session from {when}")
+            else:
+                self._set_background_status(f"Finished scoring session from {when}")
+        elif failed:
+            self._set_background_status("Scoring failed")
+        else:
+            self._set_background_status("Finished scoring")
+
+    def _mark_free_run_finished(self, failed: bool = False) -> None:
+        if failed:
+            self._set_background_status("Free Speak transcription failed")
+        else:
+            self._set_background_status("Free Speak transcript ready")
+
     def _finish_worker(self) -> None:
         self._release_finished_workers()
         try:
@@ -372,6 +433,7 @@ class TranscriptionService(QtCore.QObject):
             audio_path=getattr(self.window, "current_audio_path", None),
         )
         self._active_score_context = context
+        self._mark_run_started(context)
 
         self.window.worker = TranscribeWorker(
             self.model,
@@ -452,6 +514,7 @@ class TranscriptionService(QtCore.QObject):
             audio_path=getattr(self.window, "current_audio_path", None),
         )
         self._active_free_context = context
+        self._mark_run_started(context)
 
         self.window.free_worker = FreeTranscribeWorker(
             self.model,
@@ -498,6 +561,7 @@ class TranscriptionService(QtCore.QObject):
         try:
             self.window.transcript_txt.setPlainText(str(hyp))
             self._clear_transcript_sync()
+            self._sync_export_button()
             self.window.metrics_label.setText("Scoring... transcribed partial audio")
         except Exception:
             pass
@@ -538,6 +602,7 @@ class TranscriptionService(QtCore.QObject):
             if visible:
                 self.window.transcript_txt.setText(hyp)
                 self._clear_transcript_sync()
+                self._sync_export_button()
 
                 # Error highlights (no timestamps needed)
                 s_spans, t_spans = self.compute_error_spans(
@@ -595,6 +660,7 @@ class TranscriptionService(QtCore.QObject):
                     )
             except Exception:
                 pass
+            self._mark_score_run_finished(context, sess)
 
             timing = self._get_worker_timing(
                 free_speak=False,
@@ -658,6 +724,7 @@ class TranscriptionService(QtCore.QObject):
                 self.window.transcript_segment_ranges = ranges
                 self.window.transcript_active_index = active_idx
                 self.window.transcript_txt.setPlainText(txt)
+                self._sync_export_button()
 
                 # Error highlights (script vs built transcript text)
                 s_spans, t_spans = self.compute_error_spans(script_text, txt)
@@ -739,6 +806,7 @@ class TranscriptionService(QtCore.QObject):
                     )
             except Exception:
                 pass
+            self._mark_score_run_finished(context, sess)
 
             timing = self._get_worker_timing(
                 free_speak=False,
@@ -760,6 +828,7 @@ class TranscriptionService(QtCore.QObject):
             if visible:
                 self.window.transcript_txt.setText(hyp)
                 self._clear_transcript_sync()
+                self._sync_export_button()
         finally:
             self._finish_worker()
 
@@ -781,6 +850,7 @@ class TranscriptionService(QtCore.QObject):
             self.window.last_transcript_text = str(hyp)
             self.window.transcript_txt.setPlainText(str(hyp))
             self._clear_transcript_sync()
+            self._sync_export_button()
             self.window.set_mistake_pairs([])
             self.window.metrics_label.setText(
                 "Transcribing... (Free Speak) transcribed partial audio"
@@ -808,6 +878,7 @@ class TranscriptionService(QtCore.QObject):
         if not received_segments and visible:
             self.window.transcript_txt.setText(hyp)
             self._clear_transcript_sync()
+            self._sync_export_button()
             self.window.set_mistake_pairs([])
             timing = self._get_worker_timing(
                 free_speak=True,
@@ -818,6 +889,7 @@ class TranscriptionService(QtCore.QObject):
             self._set_timing_text(timing_text)
         if visible:
             self.window.btn_save.setEnabled(True)
+        self._mark_free_run_finished()
         self._finish_worker()
 
     def on_free_transcription_done_with_segments(
@@ -852,6 +924,7 @@ class TranscriptionService(QtCore.QObject):
                 self.window.transcript_segment_ranges = ranges
                 self.window.transcript_active_index = active_idx
                 self.window.transcript_txt.setPlainText(txt)
+                self._sync_export_button()
                 self.window.set_mistake_pairs([])
 
             avg_conf_txt = f"{avg_conf:.0%}" if avg_conf is not None else "-"
@@ -883,10 +956,12 @@ class TranscriptionService(QtCore.QObject):
             if visible:
                 self.window.transcript_txt.setText(hyp)
                 self._clear_transcript_sync()
+                self._sync_export_button()
                 self.window.set_mistake_pairs([])
         finally:
             if visible:
                 self.window.btn_save.setEnabled(True)
+            self._mark_free_run_finished()
             self._finish_worker()
 
     # ------------------------ error handling -----------------------
@@ -899,6 +974,7 @@ class TranscriptionService(QtCore.QObject):
         if self._is_context_visible(context):
             self.window.metrics_label.setText(f"Scoring failed: {msg}")
             self._set_timing_text("Timing: failed")
+        self._mark_score_run_finished(context, None, failed=True)
         self._finish_worker()
 
     def on_free_worker_failed(
@@ -913,6 +989,7 @@ class TranscriptionService(QtCore.QObject):
                 self.window.btn_save.setEnabled(False)
             except Exception:
                 pass
+        self._mark_free_run_finished(failed=True)
         self._finish_worker()
 
     # ------------------------ utilities ----------------------------

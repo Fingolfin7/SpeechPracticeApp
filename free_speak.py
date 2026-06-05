@@ -104,7 +104,10 @@ def save_free_speak_session(window) -> None:
             segments_json=segments_json,
         )
         window.current_session_id = sess.id
-        label = f"{sess.id}: {sess.timestamp} — {sess.script_name}"
+        if hasattr(window, "_history_label_for_session"):
+            label = window._history_label_for_session(sess)
+        else:
+            label = f"{sess.id}: {sess.timestamp} - {sess.script_name}"
         it = QListWidgetItem(label)
         it.setData(QtCore.Qt.UserRole, sess.id)
         it.setIcon(window._session_type_icon(sess.script_name))

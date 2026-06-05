@@ -247,6 +247,13 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         )
         self.act_copy_mistakes.triggered.connect(self._copy_mistakes_to_clipboard)
         view_menu.addAction(self.act_copy_mistakes)
+        self.act_export_report = QAction("Export Report", self)
+        self.act_export_report.setStatusTip(
+            "Export the current session transcript and metrics as Markdown"
+        )
+        self.act_export_report.triggered.connect(self._export_current_report)
+        self.act_export_report.setEnabled(False)
+        view_menu.addAction(self.act_export_report)
         view_menu.addSeparator()
         act_settings = view_menu.addAction("Settings")
         act_settings.triggered.connect(self._open_settings)
@@ -351,6 +358,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_autumn.setObjectName("PrimaryButton")
         self.btn_autumn.setVisible(False)
         self.btn_copy_mistakes = QPushButton("Copy Mistakes")
+        self.btn_export_report = QPushButton("Export")
         # volume slider
         self.vol_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         # 0..120 maps to ~0%..200% with perceptual curve
@@ -377,6 +385,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_save.clicked.connect(lambda: save_free_speak_session(self))
         self.btn_autumn.clicked.connect(self._toggle_autumn_timer)
         self.btn_copy_mistakes.clicked.connect(self._copy_mistakes_to_clipboard)
+        self.btn_export_report.clicked.connect(self._export_current_report)
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
 
         for b in (
@@ -386,6 +395,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.btn_save,
             self.btn_autumn,
             self.btn_copy_mistakes,
+            self.btn_export_report,
         ):
             b.setEnabled(False)
             tlay.addWidget(b)
@@ -412,6 +422,10 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         )
         self.timing_label.setStyleSheet("color:#9fb0c0; font-size:11px;")
         rl.addWidget(self.timing_label)
+        self.background_status_label = QLabel("")
+        self.background_status_label.setStyleSheet("color:#9fb0c0; font-size:11px;")
+        self.background_status_label.setVisible(False)
+        rl.addWidget(self.background_status_label)
 
         # transcript pane --------------------------------------------------
         rl.addWidget(QLabel("Transcript"))
@@ -463,6 +477,196 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         p.drawEllipse(1, 1, size - 2, size - 2)
         p.end()
         return QtGui.QIcon(pix)
+
+    @staticmethod
+    def _session_timestamp_label(timestamp: str) -> str:
+        try:
+            return datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S").strftime(
+                "%d %b %Y %H:%M"
+            )
+        except Exception:
+            return str(timestamp or "")
+
+    def _history_label_for_session(self, sess, status: str | None = None) -> str:
+        label = f"{self._session_timestamp_label(sess.timestamp)} - {sess.script_name}"
+        if status:
+            label += f" [{status}]"
+        return label
+
+    def _find_history_item(self, session_id: int):
+        for row in range(self.history_list.count()):
+            item = self.history_list.item(row)
+            try:
+                if item.data(QtCore.Qt.UserRole) == session_id:
+                    return item
+            except Exception:
+                pass
+        return None
+
+    def refresh_history_session(self, session_or_id, status: str | None = None) -> None:
+        try:
+            if isinstance(session_or_id, int):
+                sess = db.get_session_by_id(self.db, session_or_id)
+            else:
+                sess = session_or_id
+            if sess is None:
+                return
+            item = self._find_history_item(sess.id)
+            if item is None:
+                item = QListWidgetItem()
+                item.setData(QtCore.Qt.UserRole, sess.id)
+                self.history_list.insertItem(0, item)
+            item.setText(self._history_label_for_session(sess, status=status))
+            item.setIcon(self._session_type_icon(sess.script_name))
+        except Exception:
+            pass
+
+    def mark_session_scoring(self, session_id: int | None, scoring: bool) -> None:
+        if session_id is None:
+            return
+        self.refresh_history_session(session_id, status="scoring" if scoring else None)
+
+    def set_background_status(self, text: str | None) -> None:
+        try:
+            value = str(text or "").strip()
+            self.background_status_label.setText(value)
+            self.background_status_label.setVisible(bool(value))
+        except Exception:
+            pass
+
+    def _sync_export_button(self) -> None:
+        enabled = False
+        try:
+            enabled = bool(self.transcript_txt.toPlainText().strip())
+        except Exception:
+            enabled = False
+        try:
+            self.btn_export_report.setEnabled(enabled)
+        except Exception:
+            pass
+        try:
+            self.act_export_report.setEnabled(enabled)
+        except Exception:
+            pass
+
+    def _export_current_report(self) -> None:
+        try:
+            transcript = self.transcript_txt.toPlainText().strip()
+        except Exception:
+            transcript = ""
+        if not transcript:
+            self.metrics_label.setText("No transcript available to export")
+            self._sync_export_button()
+            return
+
+        sess = None
+        try:
+            sid = getattr(self, "current_session_id", None)
+            if sid is not None:
+                sess = db.get_session_by_id(self.db, int(sid))
+        except Exception:
+            sess = None
+
+        script_name = (
+            getattr(sess, "script_name", None)
+            or getattr(self, "current_script_name", None)
+            or "SpeechPractice"
+        )
+        default_name = "".join(
+            ch if ch.isalnum() or ch in ("-", "_") else "_"
+            for ch in str(script_name).strip()
+        ).strip("_")
+        if not default_name:
+            default_name = "speechpractice"
+        default_name += "_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".md"
+
+        reports_dir = os.path.abspath("reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        default_path = os.path.join(reports_dir, default_name)
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export Session Report",
+            default_path,
+            "Markdown Files (*.md);;Text Files (*.txt);;All Files (*)",
+        )
+        if not path:
+            return
+
+        script_text = (
+            getattr(sess, "script_text", None)
+            or getattr(self, "current_script_text", None)
+            or self.script_txt.toPlainText()
+        )
+        timestamp = getattr(sess, "timestamp", None) or datetime.now().isoformat(
+            timespec="seconds"
+        )
+        metrics = self._report_metrics_text(sess)
+        mistakes = self._report_mistakes_text()
+        lines = [
+            f"# {script_name}",
+            "",
+            f"- Timestamp: {timestamp}",
+            f"- Audio: {getattr(sess, 'audio_path', None) or getattr(self, 'current_audio_path', '') or '-'}",
+            f"- Metrics: {metrics}",
+            "",
+            "## Transcript",
+            "",
+            transcript,
+            "",
+            "## Reference Script",
+            "",
+            script_text.strip() or "-",
+            "",
+            "## Mistakes",
+            "",
+            mistakes,
+            "",
+        ]
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("\n".join(lines))
+            self.metrics_label.setText(f"Exported report: {os.path.basename(path)}")
+        except Exception as e:
+            self.metrics_label.setText(f"Could not export report: {e}")
+
+    def _report_metrics_text(self, sess) -> str:
+        if sess is None:
+            return self.metrics_label.text()
+        no_scores = not bool(getattr(sess, "transcript", None))
+        if no_scores:
+            return "scores pending"
+        parts = []
+        if getattr(sess, "score", None) is not None:
+            parts.append(f"Score {float(sess.score):.2f}/5")
+        if getattr(sess, "wer", None) is not None:
+            parts.append(f"WER {float(sess.wer):.2%}")
+        if getattr(sess, "cer", None) is not None:
+            parts.append(f"CER {float(sess.cer):.2%}")
+        if getattr(sess, "clarity", None) is not None:
+            parts.append(f"Clarity {float(sess.clarity):.2%}")
+        if getattr(sess, "artic_rate", None) is not None:
+            parts.append(f"Rate {float(sess.artic_rate):.0f} wpm")
+        if getattr(sess, "pause_ratio", None) is not None:
+            parts.append(f"Pauses {float(sess.pause_ratio):.0%}")
+        if getattr(sess, "avg_conf", None) is not None:
+            parts.append(f"Conf {float(sess.avg_conf):.0%}")
+        return ", ".join(parts) if parts else "scores pending"
+
+    def _report_mistakes_text(self) -> str:
+        pairs = list(getattr(self, "mistake_pairs", None) or [])
+        if not pairs:
+            return "-"
+        grouped: dict[Tuple[str, str], int] = {}
+        for pair in pairs:
+            grouped[pair] = grouped.get(pair, 0) + 1
+        lines = []
+        for (spoken, expected), count in sorted(
+            grouped.items(),
+            key=lambda item: (-item[1], item[0][0].lower(), item[0][1].lower()),
+        ):
+            suffix = f" (x{count})" if count > 1 else ""
+            lines.append(f"- {expected} -> {spoken}{suffix}")
+        return "\n".join(lines)
 
     def _replace_player(self, new_player: AudioPlayer) -> None:
         try:
@@ -774,10 +978,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
             self.history_list.addItem("No sessions yet")
         else:
             for sess in sessions:
-                formatted_timestamp = datetime.strptime(
-                    sess.timestamp, "%Y-%m-%dT%H:%M:%S"
-                ).strftime("%d %b %Y %H:%M")
-                label = f"{formatted_timestamp} — {sess.script_name}"
+                label = self._history_label_for_session(sess)
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
                 it.setIcon(self._session_type_icon(sess.script_name))
@@ -844,6 +1045,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_save.setEnabled(False)
         self.btn_save.setVisible(self.free_speak_mode)
         self.btn_copy_mistakes.setEnabled(False)
+        self._sync_export_button()
 
     def _enter_quick_practice(self) -> None:
         # Exit free-speak mode if active
@@ -883,6 +1085,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         self.btn_score.setText("Score")
         self.btn_save.setVisible(False)
         self.btn_copy_mistakes.setEnabled(False)
+        self._sync_export_button()
 
     # --------------------------- recording --------------------------------
 
@@ -1106,10 +1309,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                 score=None,
             )
             self.current_session_id = sess.id
-            formatted_timestamp = datetime.strptime(
-                sess.timestamp, "%Y-%m-%dT%H:%M:%S"
-            ).strftime("%d %b %Y %H:%M")
-            label = f"{formatted_timestamp} — {sess.script_name}"
+            label = self._history_label_for_session(sess)
             it = QListWidgetItem(label)
             it.setData(QtCore.Qt.UserRole, sess.id)
             it.setIcon(self._session_type_icon(sess.script_name))
@@ -1142,10 +1342,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
                     score=0.0,
                 )
                 self.current_session_id = sess.id
-                formatted_timestamp = datetime.strptime(
-                    sess.timestamp, "%Y-%m-%dT%H:%M:%S"
-                ).strftime("%d %b %Y %H:%M")
-                label = f"{formatted_timestamp} — {sess.script_name}"
+                label = self._history_label_for_session(sess)
                 it = QListWidgetItem(label)
                 it.setData(QtCore.Qt.UserRole, sess.id)
                 it.setIcon(self._session_type_icon(sess.script_name))
@@ -1778,6 +1975,7 @@ class SpeechPracticeApp(QtWidgets.QMainWindow):
         except Exception:
             pass
         self.btn_score.setEnabled(can_score)
+        self._sync_export_button()
 
     # --------------------------- settings ----------------------------------
 

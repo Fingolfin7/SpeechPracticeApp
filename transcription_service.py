@@ -292,6 +292,7 @@ class TranscriptionService(QtCore.QObject):
 
         # Connect before start to avoid race
         try:
+            self.window.worker.partial.connect(self.on_transcription_partial)
             self.window.worker.completed_with_segments.connect(
                 self.on_transcription_done_with_segments
             )
@@ -342,6 +343,7 @@ class TranscriptionService(QtCore.QObject):
         self._received_segments_this_run = False
 
         try:
+            self.window.free_worker.partial.connect(self.on_free_transcription_partial)
             self.window.free_worker.completed_with_segments.connect(
                 self.on_free_transcription_done_with_segments
             )
@@ -352,6 +354,19 @@ class TranscriptionService(QtCore.QObject):
         self.window.free_worker.start()
 
     # ------------------------ slots: scoring -----------------------
+
+    @QtCore.pyqtSlot(str)
+    def on_transcription_partial(self, hyp: str) -> None:
+        """
+        Show accumulated chunk output while a long script-based transcription runs.
+        Final scoring/highlighting happens in the completed slots.
+        """
+        try:
+            self.window.transcript_txt.setPlainText(str(hyp))
+            self._clear_transcript_sync()
+            self.window.metrics_label.setText("Scoring... transcribed partial audio")
+        except Exception:
+            pass
 
     @QtCore.pyqtSlot(str, float, float, float)
     def on_transcription_done(
@@ -583,6 +598,23 @@ class TranscriptionService(QtCore.QObject):
             self._release_finished_workers()
 
     # ------------------------ slots: free speak ---------------------
+
+    @QtCore.pyqtSlot(str)
+    def on_free_transcription_partial(self, hyp: str) -> None:
+        """
+        Show accumulated chunk output while a long Free Speak transcription runs.
+        Final fluency/confidence metrics happen in the completed slots.
+        """
+        try:
+            self.window.last_transcript_text = str(hyp)
+            self.window.transcript_txt.setPlainText(str(hyp))
+            self._clear_transcript_sync()
+            self.window.set_mistake_pairs([])
+            self.window.metrics_label.setText(
+                "Transcribing... (Free Speak) transcribed partial audio"
+            )
+        except Exception:
+            pass
 
     @QtCore.pyqtSlot(str)
     def on_free_transcription_done(self, hyp: str) -> None:

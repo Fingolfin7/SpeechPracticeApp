@@ -26,6 +26,7 @@ def default_settings() -> Dict:
         "timestamps": True,
         "beam_size": 1,
         "temperature": 0.0,
+        "transcribe_chunk_seconds": 60,
         # advanced decoding controls
         "no_speech_threshold": 0.30,
         "condition_on_previous_text": True,
@@ -160,6 +161,14 @@ def open_settings_dialog(window) -> None:
     ns_sb.setValue(float(window.settings.get("no_speech_threshold", 0.45)))
     form.addRow("No-speech threshold", ns_sb)
 
+    # Transcription chunk size
+    chunk_sb = QSpinBox(dlg)
+    chunk_sb.setRange(10, 600)
+    chunk_sb.setSingleStep(10)
+    chunk_sb.setSuffix(" sec")
+    chunk_sb.setValue(int(window.settings.get("transcribe_chunk_seconds", 60)))
+    form.addRow("Chunk size", chunk_sb)
+
     # Language
     lang_cb = QComboBox(dlg)
     lang_cb.addItems(["auto", "en"])  # can be extended
@@ -191,6 +200,7 @@ def open_settings_dialog(window) -> None:
         window.settings["condition_on_previous_text"] = bool(cot_ck.isChecked())
         window.settings["timestamps"] = bool(ts_ck.isChecked())
         window.settings["no_speech_threshold"] = float(ns_sb.value())
+        window.settings["transcribe_chunk_seconds"] = int(chunk_sb.value())
         window.settings["language"] = lang_cb.currentText()
         # Reset any loaded Whisper model so it is recreated with new settings.
         # The active model cache is owned by TranscriptionService.
@@ -227,6 +237,9 @@ def whisper_options(settings: Dict, free_speak: bool = False) -> Dict:
         compression_ratio_threshold=2.4,
         logprob_threshold=-1.0,
         no_speech_threshold=float(settings.get("no_speech_threshold", 0.45)),
+        _speech_practice_chunk_seconds=int(
+            settings.get("transcribe_chunk_seconds", 60)
+        ),
     )
 
     # Device/precision hints: whisper python uses internal detection; we control fp16

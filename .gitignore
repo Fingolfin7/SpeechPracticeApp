@@ -16,3 +16,4 @@
 Agents..md
 CLAUDE.md
 *.exe
+django-runserver.*.log

@@ -1,0 +1,29 @@
+{% extends "practice/base.html" %}
+{% block title %}Scripts | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">Reading library</p>
+    <h1>Practice scripts</h1>
+  </div>
+  <div class="action-row">
+    <a class="button-link" href="{% url 'practice:script_import' %}">Import corpus</a>
+    <a class="button-link" href="{% url 'practice:script_create' %}">Add script</a>
+  </div>
+</section>
+
+<section class="script-list">
+  {% for script in scripts %}
+    <article class="script-row">
+      <div>
+        <strong>{{ script.title }}</strong>
+        <small>{{ script.get_source_display }}{% if script.author %} &middot; {{ script.author }}{% endif %} &middot; {{ script.word_count }} words</small>
+      </div>
+      <p>{{ script.body|truncatewords:34 }}</p>
+      <a class="quiet-link" href="{% url 'practice:practice' %}?script={{ script.pk }}">Practice this</a>
+    </article>
+  {% empty %}
+    <p class="empty">No scripts imported yet. Run <code>python manage.py import_legacy_scripts</code>.</p>
+  {% endfor %}
+</section>
+{% endblock %}

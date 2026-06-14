@@ -1,0 +1,107 @@
+{% extends "practice/base.html" %}
+{% block title %}Account | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">Account</p>
+    <h1>Settings and model access</h1>
+  </div>
+</section>
+
+<section class="settings-grid">
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Speech engine</p>
+      <span>Encrypted secrets</span>
+    </div>
+    <form class="settings-form" method="post">
+      {% csrf_token %}
+      <p>{{ form.transcription_provider.label_tag }}{{ form.transcription_provider }}</p>
+      <p>{{ form.script_generation_provider.label_tag }}{{ form.script_generation_provider }}</p>
+      <p>{{ form.openai_script_model.label_tag }}{{ form.openai_script_model }}</p>
+      <p>{{ form.anthropic_script_model.label_tag }}{{ form.anthropic_script_model }}</p>
+      <p>{{ form.openai_transcription_model.label_tag }}{{ form.openai_transcription_model }}</p>
+      <p>{{ form.autumn_base_url.label_tag }}{{ form.autumn_base_url }}</p>
+
+      <div class="api-keys-grid">
+        <div class="api-key-item">
+          <div class="api-key-header">
+            <strong>OpenAI API</strong>
+            <span>{% if have_keys.openai %}Stored{% else %}Not stored{% endif %}</span>
+          </div>
+          {{ form.openai_api_key }}
+          <label>{{ form.clear_openai_api_key }} Clear key</label>
+        </div>
+        <div class="api-key-item">
+          <div class="api-key-header">
+            <strong>Anthropic API</strong>
+            <span>{% if have_keys.anthropic %}Stored{% else %}Not stored{% endif %}</span>
+          </div>
+          {{ form.anthropic_api_key }}
+          <label>{{ form.clear_anthropic_api_key }} Clear key</label>
+        </div>
+        <div class="api-key-item">
+          <div class="api-key-header">
+            <strong>Autumn</strong>
+            <span>{% if have_keys.autumn %}Stored{% else %}Not stored{% endif %}</span>
+          </div>
+          {{ form.autumn_token }}
+          <label>{{ form.clear_autumn_token }} Clear token</label>
+        </div>
+      </div>
+
+      <button type="submit">Save settings</button>
+    </form>
+  </article>
+
+  <aside class="panel">
+    <p class="eyebrow">Connections</p>
+    <div class="connection-list">
+      <div class="connection-row">
+        <strong>Codex login</strong>
+        <span>{% if have_keys.codex %}Connected{% else %}Not connected{% endif %}</span>
+      </div>
+      <div class="connection-row">
+        <strong>OpenAI API key</strong>
+        <span>{% if have_keys.openai %}Stored{% else %}Missing{% endif %}</span>
+      </div>
+      <div class="connection-row">
+        <strong>Anthropic key</strong>
+        <span>{% if have_keys.anthropic %}Stored{% else %}Missing{% endif %}</span>
+      </div>
+      <div class="connection-row">
+        <strong>Autumn token</strong>
+        <span>{% if have_keys.autumn %}Stored{% else %}Missing{% endif %}</span>
+      </div>
+    </div>
+
+    <div class="job-mini-list" style="margin-top: 16px;">
+      {% if have_keys.codex %}
+        <p class="empty">
+          Codex connected{% if codex_summary.email %} as {{ codex_summary.email }}{% endif %}{% if codex_summary.plan %} ({{ codex_summary.plan }}){% endif %}.
+        </p>
+        <form method="post">
+          {% csrf_token %}
+          <button class="danger-button" type="submit" name="disconnect_codex">Disconnect Codex</button>
+        </form>
+      {% else %}
+        <form method="post">
+          {% csrf_token %}
+          <button type="submit" name="start_codex_login">Start Codex login</button>
+        </form>
+      {% endif %}
+
+      {% if codex_device_code %}
+        <div class="job-stamp">
+          <span>Open <a href="{{ codex_device_code.verification_url }}" target="_blank" rel="noopener noreferrer">{{ codex_device_code.verification_url }}</a></span>
+          <strong>{{ codex_device_code.user_code }}</strong>
+          <form method="post">
+            {% csrf_token %}
+            <button type="submit" name="complete_codex_login">Complete Codex login</button>
+          </form>
+        </div>
+      {% endif %}
+    </div>
+  </aside>
+</section>
+{% endblock %}

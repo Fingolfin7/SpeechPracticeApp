@@ -374,6 +374,150 @@ def get_word_trend_summary(
     }
 
 
+def _token_index_for_error(row, ref_tokens: List[tuple]) -> int | None:
+    if not ref_tokens:
+        return None
+
+    ref_start = getattr(row, "ref_start", None)
+    ref_end = getattr(row, "ref_end", None)
+    if ref_start is not None:
+        start = int(ref_start)
+        end = int(ref_end) if ref_end is not None else start
+        best_idx = None
+        best_overlap = -1
+        for idx, (_word, token_start, token_end) in enumerate(ref_tokens):
+            if start == end and token_start <= start <= token_end:
+                return idx
+            overlap = max(0, min(token_end, end) - max(token_start, start))
+            if overlap > best_overlap:
+                best_idx = idx
+                best_overlap = overlap
+        if best_idx is not None and best_overlap > 0:
+            return best_idx
+
+    ref_token = (getattr(row, "ref_token", None) or "").strip().lower()
+    if ref_token:
+        for idx, (word, _start, _end) in enumerate(ref_tokens):
+            if word == ref_token:
+                return idx
+    return None
+
+
+def _phrase_for_token(words: List[str], token_idx: int, phrase_size: int) -> str | None:
+    if len(words) < 2:
+        return None
+    window = min(max(2, phrase_size), len(words))
+    start = min(max(0, token_idx - (window // 2)), len(words) - window)
+    return " ".join(words[start : start + window])
+
+
+def _phrase_stats_for_sessions(
+    db_session,
+    sessions: List[db.PracticeSession],
+    phrase_size: int = 3,
+) -> Dict[str, Dict[str, float]]:
+    if not sessions:
+        return {}
+
+    events_by_session: Dict[int, List[db.SessionError]] = {}
+    for row in _events_for_sessions(db_session, sessions):
+        if row.op not in ("sub", "del") or not row.ref_token:
+            continue
+        events_by_session.setdefault(int(row.session_id), []).append(row)
+
+    attempts = Counter()
+    errors = Counter()
+    for sess in sessions:
+        ref_tokens = tokenize_with_spans(clean_text_for_alignment(sess.script_text))
+        words = [token for token, _start, _end in ref_tokens]
+        if len(words) < 2:
+            continue
+
+        window = min(max(2, phrase_size), len(words))
+        for start in range(0, len(words) - window + 1):
+            attempts[" ".join(words[start : start + window])] += 1
+
+        session_error_phrases = set()
+        for row in events_by_session.get(int(sess.id), []):
+            token_idx = _token_index_for_error(row, ref_tokens)
+            if token_idx is None:
+                continue
+            phrase = _phrase_for_token(words, token_idx, phrase_size=phrase_size)
+            if phrase:
+                session_error_phrases.add(phrase)
+        errors.update(session_error_phrases)
+
+    stats: Dict[str, Dict[str, float]] = {}
+    for phrase, attempts_count in attempts.items():
+        if attempts_count <= 0:
+            continue
+        err_count = int(errors.get(phrase, 0))
+        stats[phrase] = {
+            "phrase": phrase,
+            "attempts": float(attempts_count),
+            "errors": float(err_count),
+            "error_rate": float(err_count) / float(attempts_count),
+        }
+    return stats
+
+
+def get_phrase_trend_summary(
+    db_session,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+    script_name: str | None = None,
+    top_n: int = 5,
+    min_attempts: int = 1,
+    phrase_size: int = 3,
+) -> Dict[str, List[Dict]]:
+    recent_start, recent_end, prev_start, prev_end = _window_bounds(
+        start_dt, end_dt
+    )
+    recent_sessions = _scored_sessions_in_range(
+        db_session, recent_start, recent_end, script_name=script_name
+    )
+    recent_stats = _phrase_stats_for_sessions(
+        db_session, recent_sessions, phrase_size=phrase_size
+    )
+
+    if prev_start is None or prev_end is None:
+        top = sorted(
+            [
+                v
+                for v in recent_stats.values()
+                if int(v.get("attempts", 0)) >= int(min_attempts)
+                and float(v.get("errors", 0.0)) > 0
+            ],
+            key=lambda x: (x["error_rate"], x["errors"]),
+            reverse=True,
+        )[:top_n]
+        return {
+            "top_trouble_phrases": top,
+            "most_improved_phrases": [],
+            "most_regressed_phrases": [],
+            "recent_session_count": len(recent_sessions),
+            "previous_session_count": 0,
+        }
+
+    prev_sessions = _scored_sessions_in_range(
+        db_session, prev_start, prev_end, script_name=script_name
+    )
+    prev_stats = _phrase_stats_for_sessions(
+        db_session, prev_sessions, phrase_size=phrase_size
+    )
+    top, improved, regressed = _summarize_recent_vs_prev(
+        recent_stats, prev_stats, top_n, min_attempts, "phrase"
+    )
+    top = [row for row in top if float(row.get("errors", 0.0)) > 0]
+    return {
+        "top_trouble_phrases": top,
+        "most_improved_phrases": improved,
+        "most_regressed_phrases": regressed,
+        "recent_session_count": len(recent_sessions),
+        "previous_session_count": len(prev_sessions),
+    }
+
+
 def _character_stats_for_sessions(
     db_session, sessions: List[db.PracticeSession]
 ) -> Dict[str, Dict[str, float]]:
@@ -737,6 +881,7 @@ def generate_feedback_summary(
     char_summary: Dict,
     pos_summary: Dict,
     phon_summary: Dict,
+    phrase_summary: Dict | None = None,
 ) -> List[str]:
     feedback: List[str] = []
 
@@ -744,6 +889,11 @@ def generate_feedback_summary(
     if words:
         focus = ", ".join(w["word"] for w in words[:3])
         feedback.append(f"Word focus: drill these frequently missed words: {focus}.")
+
+    phrases = (phrase_summary or {}).get("top_trouble_phrases", [])
+    if phrases:
+        focus = "; ".join(f"'{p.get('phrase', '')}'" for p in phrases[:2])
+        feedback.append(f"Phrase focus: slow down and repeat these unstable phrases: {focus}.")
 
     char_kinds = char_summary.get("top_character_kinds", [])
     if char_kinds:

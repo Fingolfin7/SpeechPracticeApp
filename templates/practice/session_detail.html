@@ -1,0 +1,75 @@
+{% extends "practice/base.html" %}
+{% load static %}
+{% block title %}Session | SpeechPractice{% endblock %}
+{% block content %}
+<section class="detail-header">
+  <p class="eyebrow">Scored session</p>
+  <h1>{{ session.script_name }}</h1>
+  <p>{{ session.timestamp }}</p>
+  <div class="action-row">
+    <a class="button-link" href="#edit-transcript">Edit transcript</a>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="clear_transcript">
+      <button class="danger-button" type="submit">Clear transcript</button>
+    </form>
+  </div>
+</section>
+
+<section class="metric-strip">
+  <div><strong>{{ session.score|floatformat:2 }}</strong><span>score</span></div>
+  <div><strong>{{ session.wer|floatformat:2 }}</strong><span>WER</span></div>
+  <div><strong>{{ session.cer|floatformat:2 }}</strong><span>CER</span></div>
+  <div><strong>{{ session.clarity|floatformat:2 }}</strong><span>clarity</span></div>
+  <div><strong>{% if session.artic_rate %}{{ session.artic_rate|floatformat:0 }}{% else %}-{% endif %}</strong><span>wpm</span></div>
+</section>
+
+{% if has_audio %}
+<section class="panel history-player" data-history-player>
+  <div class="panel-heading">
+    <p class="eyebrow">Replay</p>
+    <span>Click waveform to seek and play</span>
+  </div>
+  <audio controls preload="metadata" src="{% url 'practice:session_audio' session.pk %}" data-history-audio></audio>
+  <canvas class="waveform" width="1100" height="140" data-waveform></canvas>
+</section>
+{% endif %}
+
+<section class="compare-grid">
+  <article class="panel">
+    <p class="eyebrow">Target script</p>
+    <div class="error-legend">
+      <span class="legend-chip legend-missing">missing word</span>
+      <span class="legend-chip legend-vowel">deleted vowel</span>
+      <span class="legend-chip legend-consonant">deleted letter</span>
+      <span class="legend-chip legend-replace">replacement</span>
+    </div>
+    <div class="script-reader compact highlighted-reader">{{ highlighted.script_html }}</div>
+  </article>
+  <article class="panel">
+    <p class="eyebrow">Transcript</p>
+    <div class="error-legend">
+      <span class="legend-chip legend-insert">inserted word</span>
+      <span class="legend-chip legend-char-insert">inserted letters</span>
+      <span class="legend-chip legend-replace">replacement</span>
+    </div>
+    <div class="script-reader compact highlighted-reader">{{ highlighted.transcript_html }}</div>
+  </article>
+</section>
+
+<section id="edit-transcript" class="panel">
+  <div class="panel-heading">
+    <p class="eyebrow">Correction desk</p>
+    <span>{{ highlighted.error_count }} stored error events</span>
+  </div>
+  <form class="transcript-editor" method="post">
+    {% csrf_token %}
+    {{ form.transcript.label_tag }}
+    {{ form.transcript }}
+    {{ form.transcript.errors }}
+    <button type="submit">Save and rescore transcript</button>
+  </form>
+</section>
+
+<script src="{% static 'practice/history.js' %}?v=9"></script>
+{% endblock %}

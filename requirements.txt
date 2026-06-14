@@ -1,10 +1,16 @@
 PyQt5>=5.15
+Django>=5.0,<6.0
 sounddevice>=0.4
 numpy>=1.24
 pyqtgraph>=0.13
 openai-whisper>=20231117
+# Optional cloud providers:
+# openai>=1.0
+# anthropic>=0.30
 jiwer>=3.0
 SQLAlchemy>=1.4
+cryptography>=42.0
+requests>=2.31
 soundfile>=0.12
 pydub>=0.25.1
 # Optional: packaging helper

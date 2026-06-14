@@ -1,0 +1,161 @@
+{% extends "practice/base.html" %}
+{% block title %}Today | SpeechPractice{% endblock %}
+{% block content %}
+<section class="today-hero">
+  <div>
+    <p class="eyebrow">Today's practice queue</p>
+    <h1>Start where your history says it matters.</h1>
+    <p class="lead">Review due cards, jump into generated drills, and keep scoring jobs visible while the app updates your progress map.</p>
+  </div>
+  <div class="hero-metrics" aria-label="Practice metrics">
+    <div><strong>{{ stats.session_count }}</strong><span>sessions</span></div>
+    <div><strong>{{ stats.scored_count }}</strong><span>scored</span></div>
+    <div><strong>{% if stats.average_score %}{{ stats.average_score|floatformat:2 }}{% else %}-{% endif %}</strong><span>avg score</span></div>
+  </div>
+</section>
+
+<section class="today-layout">
+  <article class="panel today-main">
+    <div class="panel-heading">
+      <p class="eyebrow">Next reps</p>
+      <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh cards</a>
+    </div>
+
+    {% if today_queue %}
+      <div class="today-list">
+        {% for item in today_queue %}
+          <div class="today-item {% if item.is_due %}is-due{% endif %}">
+            <div class="today-index">{{ forloop.counter }}</div>
+            <div class="today-copy">
+              <span class="pill">{{ item.card.get_kind_display }}</span>
+              <h2>{{ item.card.title }}</h2>
+              <p>{{ item.card.prompt }}</p>
+              <small>
+                {% if item.is_due %}Due now{% else %}Upcoming{% endif %}
+                &middot; mastery {{ item.card.mastery|floatformat:2 }}
+                &middot; {{ item.review_count }} reviews
+              </small>
+            </div>
+              <div class="today-actions">
+              {% if item.script %}
+                <a class="button-link" href="{% url 'practice:practice' %}?script={{ item.script.pk }}&amp;card={{ item.card.pk }}">Practice drill</a>
+              {% else %}
+                <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
+                  {% csrf_token %}
+                  <input type="hidden" name="provider" value="local_template">
+                  <button type="submit">Generate drill</button>
+                </form>
+              {% endif %}
+              <a class="quiet-link" href="{% url 'practice:card_detail' item.card.pk %}">Card details</a>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty">No cards yet. Refresh cards after scoring a few sessions, or import scripts and start practicing.</p>
+    {% endif %}
+  </article>
+
+  <aside class="today-side">
+    <article class="panel">
+      <p class="eyebrow">Scoring jobs</p>
+      <div class="job-mini-list">
+        {% for job in active_jobs %}
+          <a class="job-mini" href="{% url 'practice:scoring_job' job.pk %}">
+            <strong>{{ job.get_status_display }}</strong>
+            <span>{{ job.script_name }}</span>
+          </a>
+        {% empty %}
+          <p class="empty">No active scoring jobs.</p>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <p class="eyebrow">Coach notes</p>
+      <ul class="plain-list">
+        {% for line in summary.feedback %}
+          <li>{{ line }}</li>
+        {% endfor %}
+      </ul>
+    </article>
+  </aside>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Trouble words</p>
+    <div class="rank-list">
+      {% for row in summary.words.top_trouble_words %}
+        <div><strong>{{ row.word }}</strong><span>{{ row.error_rate|floatformat:0 }} error rate</span></div>
+      {% empty %}
+        <p class="empty">More scored sessions will fill this in.</p>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <p class="eyebrow">Phrase focus</p>
+    <div class="rank-list">
+      {% for row in summary.phrases.top_trouble_phrases %}
+        <div><strong>{{ row.phrase }}</strong><span>{{ row.error_rate|floatformat:0 }} error rate</span></div>
+      {% empty %}
+        <p class="empty">Phrase-level patterns will appear after more scored repetitions.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Sound patterns</p>
+    <div class="rank-list">
+      {% for row in summary.sounds.top_trouble_symbols %}
+        <div><strong>{{ row.symbol }}</strong><span>{{ row.errors|floatformat:0 }} errors / {{ row.attempts|floatformat:0 }} attempts</span></div>
+      {% empty %}
+        <p class="empty">No sound patterns yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Recent scoring jobs</p>
+    </div>
+    <div class="job-mini-list">
+      {% for job in recent_jobs %}
+        <a class="job-mini" href="{% url 'practice:scoring_job' job.pk %}">
+          <strong>{{ job.get_status_display }}</strong>
+          <span>{{ job.script_name }}</span>
+        </a>
+      {% empty %}
+        <p class="empty">No completed jobs yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Recent scoring history</p>
+      <a class="button-link" href="{% url 'practice:sessions' %}">View all</a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Script</th><th>Score</th><th>WER</th></tr></thead>
+        <tbody>
+          {% for session in recent_sessions %}
+            <tr>
+              <td>{{ session.timestamp }}</td>
+              <td>{{ session.script_name }}</td>
+              <td>{{ session.score|floatformat:2 }}</td>
+              <td>{{ session.wer|floatformat:2 }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4">No scored sessions yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+{% endblock %}

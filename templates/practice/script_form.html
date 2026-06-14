@@ -1,0 +1,16 @@
+{% extends "practice/base.html" %}
+{% block title %}New Script | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">Custom practice text</p>
+    <h1>Add a script</h1>
+  </div>
+</section>
+
+<form class="script-form" method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Save script</button>
+</form>
+{% endblock %}

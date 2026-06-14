@@ -1,0 +1,24 @@
+{% extends "practice/base.html" %}
+{% block title %}Cards | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">Adaptive loop</p>
+    <h1>Improvement cards</h1>
+  </div>
+  <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh from history</a>
+</section>
+
+<section class="card-grid">
+  {% for card in cards %}
+    <a class="practice-card large" href="{% url 'practice:card_detail' card.pk %}">
+      <span class="pill">{{ card.get_kind_display }}</span>
+      <strong>{{ card.title }}</strong>
+      <small>{{ card.get_status_display }} &middot; mastery {{ card.mastery|floatformat:2 }}</small>
+      <small>Due {{ card.due_at|date:"M j, H:i" }}</small>
+    </a>
+  {% empty %}
+    <p class="empty">No cards yet. Refresh from history to create the first set.</p>
+  {% endfor %}
+</section>
+{% endblock %}

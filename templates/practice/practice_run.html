@@ -1,0 +1,98 @@
+{% extends "practice/base.html" %}
+{% load static %}
+{% block title %}Practice | SpeechPractice{% endblock %}
+{% block content %}
+<section class="practice-shell">
+  <div class="practice-copy">
+    <p class="eyebrow">Record and score</p>
+    <h1>Read it once. Let the app remember the hard parts.</h1>
+    <p class="lead">Choose a script, record in the browser or upload audio, then score it into the same history that powers your improvement cards.</p>
+    {% if focus_card %}
+      <div class="focus-brief">
+        <span class="pill">{{ focus_card.get_kind_display }}</span>
+        <strong>{{ focus_card.title }}</strong>
+        <small>Mastery {{ focus_card.mastery|floatformat:2 }} &middot; due {{ focus_card.due_at|date:"M j, H:i" }}</small>
+      </div>
+    {% endif %}
+  </div>
+
+  <form
+    class="recorder-panel"
+    method="post"
+    enctype="multipart/form-data"
+    data-recorder-form
+    data-script-preview-base="{% url 'practice:script_preview' 0 %}"
+  >
+    {% csrf_token %}
+    {{ form.card }}
+    <div class="script-picker-tools">
+      <label for="script-search">Find a script</label>
+      <div>
+        <input id="script-search" type="search" placeholder="Search title, author, or tag" data-script-search>
+        <button type="button" data-random-script>Next random</button>
+      </div>
+    </div>
+    <div class="field-row">
+      {{ form.script.label_tag }}
+      {{ form.script }}
+      {% if form.script.errors %}<div class="form-error">{{ form.script.errors }}</div>{% endif %}
+    </div>
+    <div class="field-row">
+      {{ form.provider.label_tag }}
+      {{ form.provider }}
+    </div>
+
+    <div class="recording-stage" data-recording-stage>
+      <div class="recording-orb" aria-hidden="true"><span></span></div>
+      <div>
+        <strong data-recording-status>Ready to record</strong>
+        <small>Browser recording uses WebM when available. Upload remains available as a fallback.</small>
+      </div>
+    </div>
+
+    <div class="recorder-actions">
+      <button type="button" data-record-start>Record</button>
+      <button type="button" data-record-stop disabled>Stop</button>
+      <audio controls data-recording-preview hidden></audio>
+    </div>
+
+    <div class="field-row">
+      {{ form.audio.label_tag }}
+      {{ form.audio }}
+      {% if form.audio.errors %}<div class="form-error">{{ form.audio.errors }}</div>{% endif %}
+      <small>{{ form.audio.help_text }}</small>
+    </div>
+
+    <button type="submit">Score recording</button>
+  </form>
+</section>
+
+<section class="panel reading-panel" data-script-preview-panel>
+  <div class="panel-heading">
+    <p class="eyebrow">Current script</p>
+    <span data-script-word-count>
+      {% if selected_script %}{{ selected_script.word_count }} words{% else %}No script selected{% endif %}
+    </span>
+  </div>
+  {% if selected_script %}
+    <h2 data-script-title>{{ selected_script.title }}</h2>
+    <p class="script-meta" data-script-meta>
+      {% if selected_script.author %}<span>{{ selected_script.author }}</span>{% endif %}
+      <span>{{ selected_script.get_source_display }}</span>
+      <span>Level {{ selected_script.difficulty }}</span>
+      {% if selected_script.tags %}
+        <span>{{ selected_script.tags|join:", " }}</span>
+      {% endif %}
+    </p>
+    <div class="script-reader" data-script-body>{{ selected_script.body|linebreaks }}</div>
+  {% else %}
+    <h2 data-script-title>No active scripts yet</h2>
+    <p class="script-meta" data-script-meta><span>Upload or create a script to begin.</span></p>
+    <div class="script-reader empty" data-script-body>
+      <p>Your practice text will appear here after a script is available.</p>
+    </div>
+  {% endif %}
+</section>
+
+<script src="{% static 'practice/recorder.js' %}?v=4"></script>
+{% endblock %}

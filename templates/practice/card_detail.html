@@ -1,0 +1,75 @@
+{% extends "practice/base.html" %}
+{% block title %}{{ card.title }} | SpeechPractice{% endblock %}
+{% block content %}
+<section class="detail-header">
+  <span class="pill">{{ card.get_kind_display }}</span>
+  <h1>{{ card.title }}</h1>
+  <p>{{ card.prompt }}</p>
+  <div class="action-row">
+    <form method="post" action="{% url 'practice:generate_script' card.pk %}">
+      {% csrf_token %}
+      <label class="sr-label" for="generation-provider">Generator</label>
+      <select id="generation-provider" name="provider">
+        {% for value, label in generation_provider_choices %}
+          <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Generate starter script</button>
+    </form>
+    {% if generated_scripts %}
+      <a class="button-link" href="{% url 'practice:practice' %}?script={{ generated_scripts.0.pk }}&amp;card={{ card.pk }}">Practice latest drill</a>
+    {% endif %}
+  </div>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Progress</p>
+    <div class="meter"><span style="width: {% widthratio card.mastery 1 100 %}%"></span></div>
+    <p>Mastery: {{ card.mastery|floatformat:2 }}</p>
+    <p>Status: {{ card.get_status_display }}</p>
+    <p>Due: {{ card.due_at }}</p>
+  </article>
+  <article class="panel">
+    <p class="eyebrow">Evidence</p>
+    <pre class="json-dump">{{ card.stats }}</pre>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Generated drills</p>
+      <span>{{ generated_scripts|length }}</span>
+    </div>
+    <div class="drill-list">
+      {% for script in generated_scripts %}
+        <a class="drill-row" href="{% url 'practice:practice' %}?script={{ script.pk }}&amp;card={{ card.pk }}">
+          <strong>{{ script.title }}</strong>
+          <small>{{ script.word_count }} words &middot; practice now</small>
+        </a>
+      {% empty %}
+        <p class="empty">Generate a starter script to begin card-specific practice.</p>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Review history</p>
+      <span>{{ reviews|length }}</span>
+    </div>
+    <div class="review-list">
+      {% for review in reviews %}
+        <div class="review-row">
+          <strong>{% if review.score %}{{ review.score|floatformat:2 }}{% else %}-{% endif %}</strong>
+          <span>WER {% if review.error_rate is not None %}{{ review.error_rate|floatformat:2 }}{% else %}-{% endif %}</span>
+          <small>{{ review.reviewed_at }}</small>
+        </div>
+      {% empty %}
+        <p class="empty">No card-specific reviews yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SpeechPractice{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'practice/app.css' %}?v=8">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="{% url 'practice:dashboard' %}">
+      <span class="brand-mark">SP</span>
+      <span>
+        <strong>SpeechPractice</strong>
+        <small>adaptive speaking drills</small>
+      </span>
+    </a>
+    <nav>
+      <a href="{% url 'practice:dashboard' %}">Today</a>
+      <a href="{% url 'practice:practice' %}">Practice</a>
+      <a href="{% url 'practice:cards' %}">Cards</a>
+      <a href="{% url 'practice:scripts' %}">Scripts</a>
+      <a href="{% url 'practice:sessions' %}">History</a>
+      <a href="{% url 'practice:account' %}">Account</a>
+    </nav>
+  </header>
+
+  {% if messages %}
+    <section class="messages" aria-live="polite">
+      {% for message in messages %}
+        <p>{{ message }}</p>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

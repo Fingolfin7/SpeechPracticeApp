@@ -261,6 +261,37 @@ def script_create(request):
     return render(request, "practice/script_form.html", {"form": form})
 
 
+def script_edit(request, pk: int):
+    script = get_object_or_404(PracticeScript, pk=pk)
+    if request.method == "POST":
+        form = PracticeScriptForm(request.POST, instance=script)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Practice script updated.")
+            return redirect("practice:scripts")
+    else:
+        form = PracticeScriptForm(instance=script)
+    return render(
+        request,
+        "practice/script_form.html",
+        {
+            "form": form,
+            "script": script,
+            "is_edit": True,
+        },
+    )
+
+
+def script_delete(request, pk: int):
+    script = get_object_or_404(PracticeScript, pk=pk)
+    if request.method == "POST":
+        title = script.title
+        script.delete()
+        messages.success(request, f"Deleted script: {title}.")
+        return redirect("practice:scripts")
+    return render(request, "practice/script_confirm_delete.html", {"script": script})
+
+
 def script_preview(request, pk: int):
     script = get_object_or_404(PracticeScript, pk=pk, active=True)
     return JsonResponse(

@@ -43,6 +43,48 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Breath Drill")
+        self.assertContains(response, "Edit")
+        self.assertContains(response, "Delete")
+
+    def test_script_edit_view_updates_script(self):
+        script = PracticeScript.objects.create(
+            title="Breath Drill",
+            body="A clean phrase begins with a calm breath.",
+            source=PracticeScript.SOURCE_USER,
+            tags=["breath"],
+        )
+
+        response = self.client.post(
+            reverse("practice:script_edit", args=[script.pk]),
+            {
+                "title": "Updated Breath Drill",
+                "author": "Coach",
+                "body": "A calmer phrase begins with a better breath.",
+                "source": PracticeScript.SOURCE_USER,
+                "difficulty": 2,
+                "active": "on",
+                "tags_text": "breath,updated",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        script.refresh_from_db()
+        self.assertEqual(script.title, "Updated Breath Drill")
+        self.assertEqual(script.author, "Coach")
+        self.assertEqual(script.difficulty, 2)
+        self.assertEqual(script.tags, ["breath", "updated"])
+
+    def test_script_delete_view_removes_script(self):
+        script = PracticeScript.objects.create(
+            title="Delete Drill",
+            body="This script can go.",
+            source=PracticeScript.SOURCE_USER,
+        )
+
+        response = self.client.post(reverse("practice:script_delete", args=[script.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(PracticeScript.objects.filter(pk=script.pk).exists())
 
     def test_today_queue_pairs_due_card_with_latest_generated_script(self):
         due_card = ImprovementCard.objects.create(

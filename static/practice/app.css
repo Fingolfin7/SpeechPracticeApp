@@ -460,6 +460,27 @@ th {
   color: var(--muted);
 }
 
+.script-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+
+.danger-text {
+  color: var(--ember);
+}
+
+.danger-link {
+  background: var(--ember);
+  border-color: #7f2410;
+  color: white;
+}
+
+.danger-zone {
+  border-color: var(--ember);
+}
+
 .script-form {
   display: grid;
   gap: 12px;

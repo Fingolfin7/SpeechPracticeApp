@@ -1,0 +1,25 @@
+{% extends "practice/base.html" %}
+{% block title %}Delete Script | SpeechPractice{% endblock %}
+{% block content %}
+<section class="detail-header danger-zone">
+  <p class="eyebrow">Delete script</p>
+  <h1>{{ script.title }}</h1>
+  <p>Remove this practice script from the library. Existing scoring history keeps its stored script text, but this script will no longer appear for new practice runs.</p>
+  <div class="action-row">
+    <form method="post">
+      {% csrf_token %}
+      <button class="danger-button" type="submit">Delete script</button>
+    </form>
+    <a class="button-link" href="{% url 'practice:script_edit' script.pk %}">Keep editing</a>
+    <a class="quiet-link" href="{% url 'practice:scripts' %}">Back to scripts</a>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <p class="eyebrow">Preview</p>
+    <span>{{ script.word_count }} words</span>
+  </div>
+  <div class="script-reader compact">{{ script.body|linebreaks }}</div>
+</section>
+{% endblock %}

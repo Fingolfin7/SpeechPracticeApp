@@ -20,7 +20,11 @@
         <small>{{ script.get_source_display }}{% if script.author %} &middot; {{ script.author }}{% endif %} &middot; {{ script.word_count }} words</small>
       </div>
       <p>{{ script.body|truncatewords:34 }}</p>
-      <a class="quiet-link" href="{% url 'practice:practice' %}?script={{ script.pk }}">Practice this</a>
+      <div class="script-actions">
+        <a class="quiet-link" href="{% url 'practice:practice' %}?script={{ script.pk }}">Practice this</a>
+        <a class="quiet-link" href="{% url 'practice:script_edit' script.pk %}">Edit</a>
+        <a class="quiet-link danger-text" href="{% url 'practice:script_delete' script.pk %}">Delete</a>
+      </div>
     </article>
   {% empty %}
     <p class="empty">No scripts imported yet. Run <code>python manage.py import_legacy_scripts</code>.</p>

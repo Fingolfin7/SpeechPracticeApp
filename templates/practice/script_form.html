@@ -1,16 +1,28 @@
 {% extends "practice/base.html" %}
-{% block title %}New Script | SpeechPractice{% endblock %}
+{% block title %}{% if is_edit %}Edit Script{% else %}New Script{% endif %} | SpeechPractice{% endblock %}
 {% block content %}
 <section class="page-title">
   <div>
     <p class="eyebrow">Custom practice text</p>
-    <h1>Add a script</h1>
+    <h1>{% if is_edit %}Edit script{% else %}Add a script{% endif %}</h1>
+    {% if is_edit %}
+      <p class="lead">{{ script.title }}</p>
+    {% endif %}
   </div>
+  {% if is_edit %}
+    <div class="action-row">
+      <a class="button-link" href="{% url 'practice:practice' %}?script={{ script.pk }}">Practice this</a>
+      <a class="button-link danger-link" href="{% url 'practice:script_delete' script.pk %}">Delete script</a>
+    </div>
+  {% endif %}
 </section>
 
 <form class="script-form" method="post">
   {% csrf_token %}
   {{ form.as_p }}
-  <button type="submit">Save script</button>
+  <div class="action-row">
+    <button type="submit">{% if is_edit %}Save changes{% else %}Save script{% endif %}</button>
+    <a class="quiet-link" href="{% url 'practice:scripts' %}">Back to scripts</a>
+  </div>
 </form>
 {% endblock %}

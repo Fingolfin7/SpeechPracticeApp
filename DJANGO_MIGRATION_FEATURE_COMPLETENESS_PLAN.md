@@ -33,9 +33,15 @@
 ## Implementation Status
 
 - [x] Audit current Django branch and original desktop feature surfaces.
-- [ ] Add synced/clickable timed transcript on session detail.
-- [ ] Add recording mode support, including Free Speak transcription-only sessions.
-- [ ] Expand account settings with local Whisper tuning and Autumn project metadata.
-- [ ] Add dedicated progress tracker page with charts and filters.
-- [ ] Add session report export and mistake-copy support.
+- [x] Add synced/clickable timed transcript on session detail.
+- [x] Add recording mode support, including Free Speak transcription-only sessions.
+- [x] Expand account settings with local Whisper tuning and Autumn project metadata.
+- [x] Add dedicated progress tracker page with charts and filters.
+- [x] Add session report export and mistake-copy support.
 - [ ] Re-run tests and update this plan with remaining gaps.
+
+## Remaining Gaps After Current Port
+
+- Live partial transcription is still pending. The Django rebuild uses background jobs, so parity needs a polling or websocket endpoint that streams chunk-level transcript updates from workers.
+- Autumn active timer start/stop is still pending. Settings now keep project/subproject metadata, but timer lifecycle calls need a focused integration pass.
+- Local Whisper cache clearing after model changes is implicit per process. A deliberate cache-clear control can be added if model switching happens often during one server run.

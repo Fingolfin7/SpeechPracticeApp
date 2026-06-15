@@ -1,4 +1,36 @@
 (function () {
+  const copyMistakesButton = document.querySelector("[data-copy-mistakes]");
+  const mistakeLines = document.querySelector("[data-mistake-lines]");
+  const toggleHighlightsButton = document.querySelector("[data-toggle-highlights]");
+  const compareGrid = document.querySelector(".compare-grid");
+
+  if (copyMistakesButton && mistakeLines) {
+    copyMistakesButton.addEventListener("click", async function () {
+      const text = mistakeLines.textContent.trim();
+      if (!text) {
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        copyMistakesButton.textContent = "Copied";
+        window.setTimeout(function () {
+          copyMistakesButton.textContent = "Copy mistakes";
+        }, 1300);
+      } catch (error) {
+        const range = document.createRange();
+        range.selectNodeContents(mistakeLines);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+      }
+    });
+  }
+
+  if (toggleHighlightsButton && compareGrid) {
+    toggleHighlightsButton.addEventListener("click", function () {
+      compareGrid.classList.toggle("hide-error-highlights");
+    });
+  }
+
   const player = document.querySelector("[data-history-player]");
   if (!player) {
     return;

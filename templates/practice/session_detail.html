@@ -9,6 +9,10 @@
   <div class="action-row">
     <a class="button-link" href="#edit-transcript">Edit transcript</a>
     <a class="button-link" href="{% url 'practice:session_report' session.pk %}">Export report</a>
+    {% if mistake_lines %}
+      <button type="button" data-copy-mistakes>Copy mistakes</button>
+      <button class="secondary-button" type="button" data-toggle-highlights>Toggle highlights</button>
+    {% endif %}
     <form method="post">
       {% csrf_token %}
       <input type="hidden" name="action" value="clear_transcript">
@@ -62,6 +66,17 @@
     <div class="script-reader compact highlighted-reader timed-transcript" data-timed-transcript>{{ highlighted.timed_transcript_html }}</div>
   </article>
 </section>
+
+{% if mistake_lines %}
+<section class="panel mistakes-panel">
+  <div class="panel-heading">
+    <p class="eyebrow">Mistake list</p>
+    <span>{{ mistake_lines|length }} copied as plain text</span>
+  </div>
+  <pre data-mistake-lines>{% for line in mistake_lines %}{{ line }}
+{% endfor %}</pre>
+</section>
+{% endif %}
 
 <section id="edit-transcript" class="panel">
   <div class="panel-heading">

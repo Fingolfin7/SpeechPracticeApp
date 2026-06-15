@@ -1306,6 +1306,23 @@ select {
   box-shadow: 0 0 0 2px rgba(82, 240, 255, 0.22);
 }
 
+.hide-error-highlights .error-chip {
+  background: transparent;
+  padding: 0;
+}
+
+.mistakes-panel {
+  margin: 18px 0;
+}
+
+.mistakes-panel pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Consolas, "Courier New", monospace;
+  color: var(--muted);
+}
+
 .history-player {
   display: grid;
   gap: 12px;

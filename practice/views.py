@@ -227,6 +227,7 @@ def session_detail(request, pk: int):
         form = TranscriptEditForm(instance=session)
 
     highlighted = highlighted_session_text(session)
+    mistake_lines = _mistake_lines(session)
     return render(
         request,
         "practice/session_detail.html",
@@ -235,6 +236,7 @@ def session_detail(request, pk: int):
             "form": form,
             "highlighted": highlighted,
             "has_audio": audio_exists(session),
+            "mistake_lines": mistake_lines,
         },
     )
 
@@ -630,3 +632,14 @@ def _format_metric(value: float | None, suffix: str = "") -> str:
     if value is None:
         return "-"
     return f"{value:.3g}{suffix}"
+
+
+def _mistake_lines(session: PracticeSession) -> list[str]:
+    lines = []
+    errors = SessionError.objects.filter(session_id=session.pk).order_by("id")[:200]
+    for error in errors:
+        label = error.error_kind or error.op or "error"
+        expected = error.ref_token or "[nothing]"
+        heard = error.hyp_token or "[nothing]"
+        lines.append(f"{label}: expected {expected}; heard {heard}")
+    return lines

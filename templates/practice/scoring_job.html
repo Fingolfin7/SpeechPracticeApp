@@ -1,18 +1,11 @@
 {% extends "practice/base.html" %}
+{% load static %}
 {% block title %}Scoring Job | SpeechPractice{% endblock %}
 {% block content %}
-{% if is_pending %}
-  <script>
-    window.setTimeout(function () {
-      window.location.reload();
-    }, 4000);
-  </script>
-{% endif %}
-
-<section class="job-hero {{ job.status }}">
+<section class="job-hero {{ job.status }}" data-job-hero>
   <div>
     <p class="eyebrow">Scoring job #{{ job.pk }}</p>
-    <h1>{{ job.get_status_display }}</h1>
+    <h1 data-job-status-label>{{ job.get_status_display }}</h1>
     <p class="lead">{{ job.script_name }}</p>
     {% if job.card %}
       <p><a class="quiet-link" href="{% url 'practice:card_detail' job.card.pk %}">{{ job.card.title }}</a></p>
@@ -36,6 +29,7 @@
 
   <article class="panel">
     <p class="eyebrow">Next action</p>
+    <div data-job-next-action>
     {% if is_pending %}
       <p>This page refreshes automatically while transcription and scoring run.</p>
     {% elif is_done and session %}
@@ -50,11 +44,25 @@
     {% else %}
       <p>The job finished, but the session record is not available.</p>
     {% endif %}
+    </div>
   </article>
+</section>
+
+<section class="panel live-job-panel" data-job-status-url="{% url 'practice:scoring_job_status' job.pk %}">
+  <div class="panel-heading">
+    <p class="eyebrow">Live transcript</p>
+    <span data-job-live-state>{% if is_pending %}Listening for partial updates{% else %}Finished{% endif %}</span>
+  </div>
+  <div class="live-transcript-box job-transcript-box" data-job-partial-transcript>{% if job.partial_transcript %}{{ job.partial_transcript }}{% else %}No transcript text yet.{% endif %}</div>
 </section>
 
 <section class="panel reading-panel">
   <p class="eyebrow">Practice text</p>
-  <div class="script-reader compact">{{ job.script_text|linebreaks }}</div>
+  {% if job.script_text %}
+    <div class="script-reader compact">{{ job.script_text|linebreaks }}</div>
+  {% else %}
+    <p class="empty">Free Speak sessions do not have a target script.</p>
+  {% endif %}
 </section>
+<script src="{% static 'practice/job_status.js' %}?v=1"></script>
 {% endblock %}

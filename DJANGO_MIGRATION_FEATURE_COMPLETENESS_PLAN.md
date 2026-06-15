@@ -38,10 +38,12 @@
 - [x] Expand account settings with local Whisper tuning and Autumn project metadata.
 - [x] Add dedicated progress tracker page with charts and filters.
 - [x] Add session report export and mistake-copy support.
-- [ ] Re-run tests and update this plan with remaining gaps.
+- [x] Re-run tests and update this plan with remaining gaps.
+- [x] Add live job-status polling with partial transcript persistence for chunked local transcription.
+- [x] Add Autumn timer start/stop controls backed by saved project/subproject settings.
+- [x] Add explicit local Whisper cache clearing after tuning changes and from Account.
 
 ## Remaining Gaps After Current Port
 
-- Live partial transcription is still pending. The Django rebuild uses background jobs, so parity needs a polling or websocket endpoint that streams chunk-level transcript updates from workers.
-- Autumn active timer start/stop is still pending. Settings now keep project/subproject metadata, but timer lifecycle calls need a focused integration pass.
-- Local Whisper cache clearing after model changes is implicit per process. A deliberate cache-clear control can be added if model switching happens often during one server run.
+- OpenAI transcription still reports only the final transcript because the upstream request is not chunk-streamed in this app.
+- Local live partials are available for long recordings through the existing chunked Whisper helper and job-status polling; short local recordings may only publish a final transcript because Whisper processes them in one call.

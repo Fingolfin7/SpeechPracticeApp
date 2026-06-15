@@ -100,6 +100,37 @@
     </div>
 
     <div class="job-mini-list" style="margin-top: 16px;">
+      <form method="post">
+        {% csrf_token %}
+        <button class="secondary-button" type="submit" name="clear_whisper_cache">Clear Whisper cache</button>
+      </form>
+    </div>
+
+    <div class="job-mini-list" style="margin-top: 16px;">
+      <p class="eyebrow">Autumn timer</p>
+      {% if autumn_configured %}
+        <div class="job-stamp">
+          <strong>{% if autumn_active %}Running{% else %}Ready{% endif %}</strong>
+          <span>{{ settings_obj.autumn_project }}{% if settings_obj.autumn_subprojects %} · {{ settings_obj.autumn_subprojects|join:", " }}{% endif %}</span>
+        </div>
+        <form method="post">
+          {% csrf_token %}
+          <p>
+            <label for="autumn-note">Session note</label>
+            <textarea id="autumn-note" name="autumn_note" rows="4">{{ autumn_note }}</textarea>
+          </p>
+          {% if autumn_active %}
+            <button type="submit" name="stop_autumn_timer">Stop Autumn</button>
+          {% else %}
+            <button type="submit" name="start_autumn_timer">Start Autumn</button>
+          {% endif %}
+        </form>
+      {% else %}
+        <p class="empty">Store an Autumn token and project to enable timer controls.</p>
+      {% endif %}
+    </div>
+
+    <div class="job-mini-list" style="margin-top: 16px;">
       {% if have_keys.codex %}
         <p class="empty">
           Codex connected{% if codex_summary.email %} as {{ codex_summary.email }}{% endif %}{% if codex_summary.plan %} ({{ codex_summary.plan }}){% endif %}.

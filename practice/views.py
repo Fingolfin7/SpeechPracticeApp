@@ -8,10 +8,14 @@ from pathlib import Path
 
 from django.contrib import messages
 from django.core.files.uploadedfile import UploadedFile
+from django.db.utils import OperationalError, ProgrammingError
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
+
+from autumn_client import AutumnClient, AutumnError
 
 from .forms import AccountSettingsForm, BulkScriptImportForm, PracticeRunForm, PracticeScriptForm, TranscriptEditForm
 from .models import GeneratedPracticeScript, ImprovementCard, PracticeReview, PracticeScript, PracticeSession, PracticeSettings, ScoringJob, SessionError
@@ -43,7 +47,7 @@ from .services.session_display import audio_exists, highlighted_session_text, se
 from .services.script_import import import_script_items, parse_script_upload
 from .services.script_generation import generate_script_draft, script_generation_provider_choices
 from .services.transcription import TranscriptResult
-from .services.transcription import provider_label
+from .services.transcription import clear_local_whisper_cache, provider_label
 
 
 def dashboard(request):
@@ -332,6 +336,26 @@ def scoring_job_detail(request, pk: int):
     return render(request, "practice/scoring_job.html", context)
 
 
+def scoring_job_status(request, pk: int):
+    job = get_object_or_404(ScoringJob, pk=pk)
+    session_url = ""
+    if job.legacy_session_id:
+        session_url = reverse("practice:session_detail", args=[job.legacy_session_id])
+    return JsonResponse(
+        {
+            "id": job.pk,
+            "status": job.status,
+            "status_label": job.get_status_display(),
+            "is_pending": job.status in {ScoringJob.STATUS_QUEUED, ScoringJob.STATUS_RUNNING},
+            "is_done": job.status == ScoringJob.STATUS_SUCCEEDED,
+            "is_failed": job.status == ScoringJob.STATUS_FAILED,
+            "partial_transcript": job.partial_transcript or "",
+            "error_message": job.error_message or "",
+            "session_url": session_url,
+        }
+    )
+
+
 @require_POST
 def retry_scoring_job(request, pk: int):
     job = get_object_or_404(ScoringJob, pk=pk)
@@ -540,9 +564,53 @@ def account_settings(request):
             messages.success(request, "Codex login disconnected.")
             return redirect("practice:account")
 
+        if "clear_whisper_cache" in request.POST:
+            clear_local_whisper_cache()
+            messages.success(request, "Local Whisper model cache cleared.")
+            return redirect("practice:account")
+
+        if "start_autumn_timer" in request.POST:
+            try:
+                payload = _autumn_client(settings_obj).start_timer(
+                    settings_obj.autumn_project,
+                    settings_obj.autumn_subprojects or [],
+                    note=request.POST.get("autumn_note") or "SpeechPractice practice",
+                )
+                session = payload.get("session") or {}
+                session_id = session.get("id")
+                if not session_id:
+                    raise AutumnError("Autumn did not return a timer id")
+                settings_obj.autumn_active_session_id = int(session_id)
+                settings_obj.save(update_fields=["autumn_active_session_id", "updated_at"])
+                messages.success(request, f"Autumn timer started for {settings_obj.autumn_project}.")
+            except (AutumnError, ValueError, TypeError) as exc:
+                messages.error(request, f"Autumn start failed: {exc}")
+            return redirect("practice:account")
+
+        if "stop_autumn_timer" in request.POST:
+            try:
+                payload = _autumn_client(settings_obj).stop_timer(
+                    session_id=settings_obj.autumn_active_session_id,
+                    project=settings_obj.autumn_project,
+                    note=request.POST.get("autumn_note") or _latest_autumn_note(),
+                )
+                settings_obj.autumn_active_session_id = None
+                settings_obj.save(update_fields=["autumn_active_session_id", "updated_at"])
+                duration = payload.get("duration")
+                if duration is not None:
+                    messages.success(request, f"Autumn timer stopped after {float(duration):.1f} minutes.")
+                else:
+                    messages.success(request, "Autumn timer stopped.")
+            except (AutumnError, ValueError, TypeError) as exc:
+                messages.error(request, f"Autumn stop failed: {exc}")
+            return redirect("practice:account")
+
+        old_whisper = _whisper_settings_snapshot(settings_obj)
         form = AccountSettingsForm(request.POST, instance=settings_obj)
         if form.is_valid():
             form.save()
+            if old_whisper != _whisper_settings_snapshot(settings_obj):
+                clear_local_whisper_cache()
             messages.success(request, "Account settings saved.")
             return redirect("practice:account")
     else:
@@ -560,6 +628,9 @@ def account_settings(request):
         },
         "codex_device_code": request.session.get("codex_device_code"),
         "codex_summary": token_bundle_summary(bundle),
+        "autumn_configured": settings_obj.has_secret("autumn_token") and bool(settings_obj.autumn_project),
+        "autumn_active": bool(settings_obj.autumn_active_session_id),
+        "autumn_note": _latest_autumn_note(),
     }
     return render(request, "practice/account.html", context)
 
@@ -632,6 +703,56 @@ def _format_metric(value: float | None, suffix: str = "") -> str:
     if value is None:
         return "-"
     return f"{value:.3g}{suffix}"
+
+
+def _autumn_client(settings_obj: PracticeSettings) -> AutumnClient:
+    token = settings_obj.get_secret("autumn_token") or ""
+    if not token:
+        raise AutumnError("Store an Autumn token first.")
+    if not settings_obj.autumn_project:
+        raise AutumnError("Choose an Autumn project first.")
+    return AutumnClient(settings_obj.autumn_base_url, token)
+
+
+def _latest_autumn_note() -> str:
+    try:
+        session = PracticeSession.objects.exclude(timestamp="").order_by("-timestamp", "-id").first()
+    except (OperationalError, ProgrammingError):
+        session = None
+    if session is None:
+        return "SpeechPractice practice"
+    parts = [f"SpeechPractice: {session.script_name}"]
+    if session.score is not None:
+        parts.append(f"Score {session.score:.2f}/5")
+    if session.wer is not None:
+        parts.append(f"WER {session.wer:.1%}")
+    if session.cer is not None:
+        parts.append(f"CER {session.cer:.1%}")
+    if session.clarity is not None:
+        parts.append(f"Clarity {session.clarity:.1%}")
+    if session.artic_rate is not None:
+        parts.append(f"Rate {session.artic_rate:.0f} wpm")
+    return " | ".join(parts)
+
+
+def _whisper_settings_snapshot(settings_obj: PracticeSettings) -> tuple:
+    field_names = (
+        "whisper_model_name",
+        "whisper_device",
+        "whisper_preset",
+        "whisper_language",
+        "whisper_timestamps",
+        "whisper_beam_size",
+        "whisper_temperature",
+        "whisper_no_speech_threshold",
+        "whisper_condition_on_previous_text",
+        "whisper_chunk_seconds",
+    )
+    return tuple(
+        PracticeSettings.objects.filter(pk=settings_obj.pk)
+        .values_list(*field_names)
+        .get()
+    )
 
 
 def _mistake_lines(session: PracticeSession) -> list[str]:

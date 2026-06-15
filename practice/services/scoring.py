@@ -5,7 +5,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from django.conf import settings
 from django.utils import timezone
@@ -133,9 +133,10 @@ def transcribe_score_and_store(
     script_text: str,
     audio_path: str,
     provider_name: str | None = None,
+    partial_callback: Callable[[str], None] | None = None,
 ) -> PracticeSession:
     provider = get_transcription_provider(provider_name)
-    transcript = provider.transcribe(audio_path)
+    transcript = provider.transcribe(audio_path, partial_callback=partial_callback)
     result = score_transcript(script_text, transcript)
     session = PracticeSession.objects.create(
         timestamp=timezone.localtime().strftime("%Y-%m-%dT%H:%M:%S"),
@@ -161,9 +162,10 @@ def transcribe_free_and_store(
     *,
     audio_path: str,
     provider_name: str | None = None,
+    partial_callback: Callable[[str], None] | None = None,
 ) -> PracticeSession:
     provider = get_transcription_provider(provider_name)
-    transcript = provider.transcribe(audio_path)
+    transcript = provider.transcribe(audio_path, partial_callback=partial_callback)
     segments, artic_rate, pause_ratio, filled_pauses, avg_conf = augment_segments_and_fluency(
         transcript.segments,
         transcript.text,

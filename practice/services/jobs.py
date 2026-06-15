@@ -80,11 +80,18 @@ def process_scoring_job(job_id: int) -> ScoringJob:
         job.error_message = ""
         job.save(update_fields=["status", "started_at", "error_message", "updated_at"])
 
+    def on_partial(text: str) -> None:
+        ScoringJob.objects.filter(pk=job_id).update(
+            partial_transcript=str(text or "")[:20000],
+            updated_at=timezone.now(),
+        )
+
     try:
         if job.mode == ScoringJob.MODE_FREE:
             session = transcribe_free_and_store(
                 audio_path=job.audio_path,
                 provider_name=job.provider,
+                partial_callback=on_partial,
             )
         else:
             session = transcribe_score_and_store(
@@ -92,6 +99,7 @@ def process_scoring_job(job_id: int) -> ScoringJob:
                 script_text=job.script_text,
                 audio_path=job.audio_path,
                 provider_name=job.provider,
+                partial_callback=on_partial,
             )
             update_card_from_session(job.card, session)
             refresh_improvement_cards(days=settings.CARD_REFRESH_WINDOW_DAYS)
@@ -106,8 +114,9 @@ def process_scoring_job(job_id: int) -> ScoringJob:
     job = ScoringJob.objects.get(pk=job_id)
     job.status = ScoringJob.STATUS_SUCCEEDED
     job.legacy_session_id = session.pk
+    job.partial_transcript = session.transcript or job.partial_transcript
     job.finished_at = timezone.now()
-    job.save(update_fields=["status", "legacy_session_id", "finished_at", "updated_at"])
+    job.save(update_fields=["status", "legacy_session_id", "partial_transcript", "finished_at", "updated_at"])
     return job
 
 

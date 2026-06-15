@@ -4,12 +4,13 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from django.conf import settings
 from django.db.utils import OperationalError, ProgrammingError
 
 from practice.models import PracticeSettings
+from transcribe_worker import transcribe_source
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,11 @@ class TranscriptResult:
 class TranscriptionProvider(Protocol):
     name: str
 
-    def transcribe(self, audio_path: str) -> TranscriptResult:
+    def transcribe(
+        self,
+        audio_path: str,
+        partial_callback: Callable[[str], None] | None = None,
+    ) -> TranscriptResult:
         ...
 
 
@@ -54,14 +59,21 @@ class LocalWhisperProvider:
             or settings.WHISPER_LANGUAGE
         )
 
-    def transcribe(self, audio_path: str) -> TranscriptResult:
+    def transcribe(
+        self,
+        audio_path: str,
+        partial_callback: Callable[[str], None] | None = None,
+    ) -> TranscriptResult:
         model = _load_whisper_model(self.model_name, self.device)
         options = _whisper_options(self.app_settings)
         if self.language and self.language != "auto":
             options["language"] = self.language
-        result = model.transcribe(audio_path, **options)
+        result = transcribe_source(model, audio_path, options, partial_callback=partial_callback)
+        text = str(result.get("text", "")).strip()
+        if partial_callback and text:
+            partial_callback(text)
         return TranscriptResult(
-            text=str(result.get("text", "")).strip(),
+            text=text,
             provider=self.name,
             segments=list(result.get("segments") or []),
             raw=dict(result),
@@ -76,7 +88,11 @@ class OpenAITranscriptionProvider:
         self.model = model or (app_settings.openai_transcription_model if app_settings else None) or settings.OPENAI_TRANSCRIPTION_MODEL
         self.api_key = (app_settings.get_secret("openai_api_key") if app_settings else None) or settings.OPENAI_API_KEY
 
-    def transcribe(self, audio_path: str) -> TranscriptResult:
+    def transcribe(
+        self,
+        audio_path: str,
+        partial_callback: Callable[[str], None] | None = None,
+    ) -> TranscriptResult:
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY is required for OpenAI transcription.")
         try:
@@ -91,6 +107,8 @@ class OpenAITranscriptionProvider:
                 file=audio_file,
             )
         text = getattr(response, "text", "") or ""
+        if partial_callback and text:
+            partial_callback(str(text).strip())
         return TranscriptResult(
             text=str(text).strip(),
             provider=self.name,
@@ -107,13 +125,20 @@ class UploadedTranscriptProvider:
 
     name = "uploaded_transcript"
 
-    def transcribe(self, audio_path: str) -> TranscriptResult:
+    def transcribe(
+        self,
+        audio_path: str,
+        partial_callback: Callable[[str], None] | None = None,
+    ) -> TranscriptResult:
         path = Path(audio_path)
         sidecar = path if path.suffix.lower() == ".txt" else path.with_suffix(".txt")
         if not sidecar.exists():
             raise RuntimeError(f"Missing transcript sidecar: {sidecar}")
+        text = sidecar.read_text(encoding="utf-8").strip()
+        if partial_callback and text:
+            partial_callback(text)
         return TranscriptResult(
-            text=sidecar.read_text(encoding="utf-8").strip(),
+            text=text,
             provider=self.name,
             segments=[],
             raw={"sidecar": str(sidecar)},
@@ -183,6 +208,7 @@ def _whisper_options(app_settings: PracticeSettings | None) -> dict[str, Any]:
             "temperature": settings.WHISPER_TEMPERATURE,
             "condition_on_previous_text": settings.WHISPER_CONDITION_ON_PREVIOUS_TEXT,
             "no_speech_threshold": settings.WHISPER_NO_SPEECH_THRESHOLD,
+            "_speech_practice_chunk_seconds": 60,
         }
 
     beam_size = int(app_settings.whisper_beam_size)
@@ -218,8 +244,20 @@ def _whisper_options(app_settings: PracticeSettings | None) -> dict[str, Any]:
         "no_speech_threshold": float(app_settings.whisper_no_speech_threshold),
         "without_timestamps": not bool(app_settings.whisper_timestamps),
         "fp16": bool(use_fp16),
+        "_speech_practice_chunk_seconds": int(app_settings.whisper_chunk_seconds),
     }
     if beam_size <= 1:
         options.pop("beam_size", None)
         options["best_of"] = 1
     return options
+
+
+def clear_local_whisper_cache() -> None:
+    _load_whisper_model.cache_clear()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass

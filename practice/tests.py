@@ -429,7 +429,26 @@ class PracticeWebTests(TransactionTestCase):
         self.assertIsNotNone(processed.legacy_session_id)
         self.assertEqual(PracticeSession.objects.count(), 1)
         self.assertGreater(PracticeSession.objects.first().score, 4.9)
+        processed.refresh_from_db()
+        self.assertEqual(processed.partial_transcript, "clear practice text")
         refresh.assert_called_once()
+
+    def test_scoring_job_status_returns_partial_transcript(self):
+        job = ScoringJob.objects.create(
+            script_name="Status Drill",
+            script_text="clear practice text",
+            audio_path="recording.txt",
+            provider="uploaded_transcript",
+            status=ScoringJob.STATUS_RUNNING,
+            partial_transcript="clear practice",
+        )
+
+        response = self.client.get(reverse("practice:scoring_job_status", args=[job.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["is_pending"])
+        self.assertEqual(payload["partial_transcript"], "clear practice")
 
     def test_session_detail_edits_transcript_and_refreshes_errors(self):
         self._create_legacy_tables()
@@ -789,34 +808,36 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(record.script.source_ref, f"card:{card.pk}")
 
     def test_account_page_saves_encrypted_settings_and_models(self):
-        response = self.client.post(
-            reverse("practice:account"),
-            {
-                "transcription_provider": "openai",
-                "script_generation_provider": "anthropic",
-                "openai_script_model": "gpt-5.4-mini",
-                "anthropic_script_model": "claude-sonnet-4-6",
-                "openai_transcription_model": "whisper-1",
-                "whisper_model_name": "small.en",
-                "whisper_device": "cpu",
-                "whisper_preset": "fast_cpu",
-                "whisper_language": "en",
-                "whisper_timestamps": "on",
-                "whisper_beam_size": 1,
-                "whisper_temperature": 0.0,
-                "whisper_no_speech_threshold": 0.25,
-                "whisper_condition_on_previous_text": "on",
-                "whisper_chunk_seconds": 90,
-                "autumn_base_url": "https://autumn.example.test",
-                "autumn_project": "Speech Practice",
-                "autumn_subprojects_text": "Drills, Review",
-                "openai_api_key": "sk-test",
-                "anthropic_api_key": "ak-test",
-                "autumn_token": "autumn-test",
-            },
-        )
+        with patch("practice.views.clear_local_whisper_cache") as clear_cache:
+            response = self.client.post(
+                reverse("practice:account"),
+                {
+                    "transcription_provider": "openai",
+                    "script_generation_provider": "anthropic",
+                    "openai_script_model": "gpt-5.4-mini",
+                    "anthropic_script_model": "claude-sonnet-4-6",
+                    "openai_transcription_model": "whisper-1",
+                    "whisper_model_name": "small.en",
+                    "whisper_device": "cpu",
+                    "whisper_preset": "fast_cpu",
+                    "whisper_language": "en",
+                    "whisper_timestamps": "on",
+                    "whisper_beam_size": 1,
+                    "whisper_temperature": 0.0,
+                    "whisper_no_speech_threshold": 0.25,
+                    "whisper_condition_on_previous_text": "on",
+                    "whisper_chunk_seconds": 90,
+                    "autumn_base_url": "https://autumn.example.test",
+                    "autumn_project": "Speech Practice",
+                    "autumn_subprojects_text": "Drills, Review",
+                    "openai_api_key": "sk-test",
+                    "anthropic_api_key": "ak-test",
+                    "autumn_token": "autumn-test",
+                },
+            )
 
         self.assertEqual(response.status_code, 302)
+        clear_cache.assert_called_once()
         settings_obj = PracticeSettings.load()
         self.assertEqual(settings_obj.transcription_provider, "openai")
         self.assertEqual(settings_obj.openai_script_model, "gpt-5.4-mini")
@@ -837,6 +858,57 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "GPT-5.5")
         self.assertContains(response, "Claude Sonnet 4.6")
         self.assertContains(response, "Local Whisper tuning")
+        self.assertContains(response, "Autumn timer")
+
+    def test_account_page_clears_whisper_cache_on_request(self):
+        with patch("practice.views.clear_local_whisper_cache") as clear_cache:
+            response = self.client.post(
+                reverse("practice:account"),
+                {"clear_whisper_cache": "1"},
+            )
+
+        self.assertEqual(response.status_code, 302)
+        clear_cache.assert_called_once()
+
+    def test_account_page_starts_and_stops_autumn_timer(self):
+        settings_obj = PracticeSettings.load()
+        settings_obj.autumn_base_url = "https://autumn.example.test"
+        settings_obj.autumn_project = "Speech Practice"
+        settings_obj.autumn_subprojects = ["Drills"]
+        settings_obj.set_secret("autumn_token", "autumn-test")
+        settings_obj.save()
+        fake_client = patch("practice.views._autumn_client").start()
+        self.addCleanup(patch.stopall)
+        fake_client.return_value.start_timer.return_value = {"session": {"id": 42}}
+        fake_client.return_value.stop_timer.return_value = {"duration": 12.5}
+
+        response = self.client.post(
+            reverse("practice:account"),
+            {"start_autumn_timer": "1", "autumn_note": "Starting practice"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.autumn_active_session_id, 42)
+        fake_client.return_value.start_timer.assert_called_once_with(
+            "Speech Practice",
+            ["Drills"],
+            note="Starting practice",
+        )
+
+        response = self.client.post(
+            reverse("practice:account"),
+            {"stop_autumn_timer": "1", "autumn_note": "Finished practice"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        settings_obj.refresh_from_db()
+        self.assertIsNone(settings_obj.autumn_active_session_id)
+        fake_client.return_value.stop_timer.assert_called_once_with(
+            session_id=42,
+            project="Speech Practice",
+            note="Finished practice",
+        )
 
     def test_progress_page_renders_filters_and_chart_data(self):
         self._create_legacy_tables()

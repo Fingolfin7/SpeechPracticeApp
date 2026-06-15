@@ -11,6 +11,7 @@ urlpatterns = [
     path("progress/", views.progress, name="progress"),
     path("practice/", views.practice_run, name="practice"),
     path("jobs/<int:pk>/", views.scoring_job_detail, name="scoring_job"),
+    path("jobs/<int:pk>/status/", views.scoring_job_status, name="scoring_job_status"),
     path("jobs/<int:pk>/retry/", views.retry_scoring_job, name="retry_scoring_job"),
     path("sessions/", views.session_list, name="sessions"),
     path("sessions/<int:pk>/", views.session_detail, name="session_detail"),

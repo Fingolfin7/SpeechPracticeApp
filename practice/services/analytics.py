@@ -123,13 +123,55 @@ def _review_counts(cards: list[ImprovementCard]) -> dict[int, int]:
 def trend_summary(days: int = 30) -> dict[str, Any]:
     end_dt = datetime.now()
     start_dt = end_dt - timedelta(days=days)
+    return trend_summary_for_range(start_dt=start_dt, end_dt=end_dt)
+
+
+def trend_summary_for_range(
+    *,
+    start_dt: datetime,
+    end_dt: datetime,
+    script_name: str | None = None,
+) -> dict[str, Any]:
     session = legacy_db.get_session(str(settings.LEGACY_DB_PATH))
     try:
-        words = get_word_trend_summary(session, start_dt=start_dt, end_dt=end_dt, top_n=6, min_attempts=2)
-        chars = get_character_trend_summary(session, start_dt=start_dt, end_dt=end_dt, top_n=5)
-        positions = get_position_trend_summary(session, start_dt=start_dt, end_dt=end_dt, top_n=4)
-        sounds = get_phoneme_trend_summary(session, start_dt=start_dt, end_dt=end_dt, top_n=5, min_attempts=3)
-        phrases = get_phrase_trend_summary(session, start_dt=start_dt, end_dt=end_dt, top_n=5, min_attempts=1)
+        words = get_word_trend_summary(
+            session,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            script_name=script_name,
+            top_n=6,
+            min_attempts=2,
+        )
+        chars = get_character_trend_summary(
+            session,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            script_name=script_name,
+            top_n=5,
+        )
+        positions = get_position_trend_summary(
+            session,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            script_name=script_name,
+            top_n=4,
+        )
+        sounds = get_phoneme_trend_summary(
+            session,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            script_name=script_name,
+            top_n=5,
+            min_attempts=3,
+        )
+        phrases = get_phrase_trend_summary(
+            session,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            script_name=script_name,
+            top_n=5,
+            min_attempts=1,
+        )
         return {
             "words": words,
             "characters": chars,
@@ -140,6 +182,60 @@ def trend_summary(days: int = 30) -> dict[str, Any]:
         }
     finally:
         session.close()
+
+
+def script_name_options() -> list[str]:
+    rows = (
+        PracticeSession.objects.exclude(script_name="")
+        .values_list("script_name", flat=True)
+        .distinct()
+    )
+    return sorted({str(name) for name in rows if name})
+
+
+def progress_series(
+    *,
+    start_dt: datetime,
+    end_dt: datetime,
+    script_name: str | None = None,
+) -> list[dict[str, Any]]:
+    rows = PracticeSession.objects.exclude(score__isnull=True)
+    if script_name:
+        rows = rows.filter(script_name=script_name)
+    points = []
+    for session in rows:
+        parsed = _parse_session_timestamp(session.timestamp)
+        if parsed is None or parsed < start_dt or parsed > end_dt:
+            continue
+        points.append(
+            {
+                "date": parsed.isoformat(),
+                "label": parsed.strftime("%m/%d"),
+                "script": session.script_name,
+                "score": session.score,
+                "wer": session.wer,
+                "clarity": session.clarity,
+                "cer": session.cer,
+                "artic_rate": session.artic_rate,
+                "pause_ratio": session.pause_ratio,
+            }
+        )
+    points.sort(key=lambda item: item["date"])
+    return points
+
+
+def _parse_session_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value[:19], fmt)
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _mastery_from_error_rate(error_rate: float) -> float:

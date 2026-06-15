@@ -166,6 +166,13 @@ class PracticeReview(models.Model):
 
 
 class ScoringJob(models.Model):
+    MODE_SCORE = "score"
+    MODE_FREE = "free_speak"
+    MODE_CHOICES = [
+        (MODE_SCORE, "Score against script"),
+        (MODE_FREE, "Free Speak transcription"),
+    ]
+
     STATUS_QUEUED = "queued"
     STATUS_RUNNING = "running"
     STATUS_SUCCEEDED = "succeeded"
@@ -195,6 +202,7 @@ class ScoringJob(models.Model):
     script_text = models.TextField()
     audio_path = models.TextField()
     provider = models.CharField(max_length=64)
+    mode = models.CharField(max_length=32, choices=MODE_CHOICES, default=MODE_SCORE)
     status = models.CharField(max_length=32, choices=STATUS_CHOICES, default=STATUS_QUEUED)
     legacy_session_id = models.IntegerField(blank=True, null=True, db_index=True)
     error_message = models.TextField(blank=True)
@@ -275,7 +283,37 @@ class PracticeSettings(models.Model):
     openai_script_model = models.CharField(max_length=96, default="gpt-5.5")
     anthropic_script_model = models.CharField(max_length=96, default="claude-sonnet-4-6")
     openai_transcription_model = models.CharField(max_length=96, default="whisper-1")
+    whisper_model_name = models.CharField(max_length=96, default="base.en")
+    whisper_device = models.CharField(
+        max_length=16,
+        default="auto",
+        choices=[("auto", "Auto"), ("cpu", "CPU"), ("gpu", "GPU")],
+    )
+    whisper_preset = models.CharField(
+        max_length=32,
+        default="balanced_cpu",
+        choices=[
+            ("---", "Custom"),
+            ("fast_cpu", "Fast CPU"),
+            ("balanced_cpu", "Balanced CPU"),
+            ("balanced_gpu", "Balanced GPU"),
+            ("accurate_gpu", "Accurate GPU"),
+        ],
+    )
+    whisper_language = models.CharField(
+        max_length=16,
+        default="en",
+        choices=[("auto", "Auto detect"), ("en", "English")],
+    )
+    whisper_timestamps = models.BooleanField(default=True)
+    whisper_beam_size = models.PositiveSmallIntegerField(default=1)
+    whisper_temperature = models.FloatField(default=0.0)
+    whisper_no_speech_threshold = models.FloatField(default=0.3)
+    whisper_condition_on_previous_text = models.BooleanField(default=True)
+    whisper_chunk_seconds = models.PositiveSmallIntegerField(default=60)
     autumn_base_url = models.URLField(blank=True, default="")
+    autumn_project = models.CharField(max_length=255, blank=True, default="")
+    autumn_subprojects = models.JSONField(default=list, blank=True)
     autumn_token_enc = models.BinaryField(null=True, blank=True, editable=False)
     openai_api_key_enc = models.BinaryField(null=True, blank=True, editable=False)
     anthropic_api_key_enc = models.BinaryField(null=True, blank=True, editable=False)

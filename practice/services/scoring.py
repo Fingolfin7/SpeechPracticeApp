@@ -157,6 +157,35 @@ def transcribe_score_and_store(
     return session
 
 
+def transcribe_free_and_store(
+    *,
+    audio_path: str,
+    provider_name: str | None = None,
+) -> PracticeSession:
+    provider = get_transcription_provider(provider_name)
+    transcript = provider.transcribe(audio_path)
+    segments, artic_rate, pause_ratio, filled_pauses, avg_conf = augment_segments_and_fluency(
+        transcript.segments,
+        transcript.text,
+    )
+    return PracticeSession.objects.create(
+        timestamp=timezone.localtime().strftime("%Y-%m-%dT%H:%M:%S"),
+        script_name="Free Speak",
+        script_text="",
+        audio_path=str(Path(audio_path).resolve()),
+        transcript=transcript.text.strip(),
+        wer=None,
+        clarity=None,
+        score=None,
+        segments=json.dumps(segments) if segments else None,
+        cer=None,
+        artic_rate=artic_rate,
+        pause_ratio=pause_ratio,
+        filled_pauses=filled_pauses,
+        avg_conf=avg_conf,
+    )
+
+
 def _replace_session_errors(session: PracticeSession) -> None:
     SessionError.objects.filter(session_id=session.id).delete()
     events = extract_error_events(session.script_text, session.transcript or "")

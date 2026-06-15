@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import json
 import mimetypes
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from django.contrib import messages
@@ -20,10 +22,13 @@ from .services.analytics import (
     recent_sessions,
     refresh_improvement_cards,
     score_distribution,
+    progress_series,
+    script_name_options,
     today_queue,
+    trend_summary_for_range,
     trend_summary,
 )
-from .services.jobs import create_scoring_job, enqueue_scoring_job, job_status_context
+from .services.jobs import create_free_speak_job, create_scoring_job, enqueue_scoring_job, job_status_context
 from .services.scoring import _replace_session_errors, recording_upload_dir, score_transcript
 from .services.codex_auth import (
     CodexAuthError,
@@ -55,34 +60,71 @@ def dashboard(request):
     return render(request, "practice/dashboard.html", context)
 
 
+def progress(request):
+    end_dt = _parse_date_param(request.GET.get("end"), datetime.now())
+    start_dt = _parse_date_param(request.GET.get("start"), end_dt - timedelta(days=30))
+    if end_dt < start_dt:
+        start_dt, end_dt = end_dt, start_dt
+    end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    script_name = (request.GET.get("script") or "").strip() or None
+    points = progress_series(start_dt=start_dt, end_dt=end_dt, script_name=script_name)
+    summary = trend_summary_for_range(
+        start_dt=start_dt,
+        end_dt=end_dt,
+        script_name=script_name,
+    )
+    return render(
+        request,
+        "practice/progress.html",
+        {
+            "start_date": start_dt.date().isoformat(),
+            "end_date": end_dt.date().isoformat(),
+            "selected_script": script_name or "",
+            "script_options": script_name_options(),
+            "points": points,
+            "points_json": json.dumps(points),
+            "summary": summary,
+        },
+    )
+
+
 def practice_run(request):
     if request.method == "POST":
         form = PracticeRunForm(request.POST, request.FILES)
         if form.is_valid():
-            script = form.cleaned_data["script"]
+            mode = form.cleaned_data.get("mode") or PracticeRunForm.MODE_SCRIPT
+            script = form.cleaned_data.get("script")
             card = form.cleaned_data.get("card")
             audio = form.cleaned_data["audio"]
             provider = form.cleaned_data.get("provider") or None
             if audio is None:
                 form.add_error("audio", "Record or upload audio before scoring.")
             else:
-                audio_path = _save_uploaded_audio(audio, script.title)
-                job = create_scoring_job(
-                    script=script,
-                    audio_path=str(audio_path),
-                    provider=provider or "local_whisper",
-                    card=card,
-                )
+                audio_path = _save_uploaded_audio(audio, script.title if script else "free-speak")
+                if mode == PracticeRunForm.MODE_FREE:
+                    job = create_free_speak_job(
+                        audio_path=str(audio_path),
+                        provider=provider or "local_whisper",
+                    )
+                else:
+                    job = create_scoring_job(
+                        script=script,
+                        audio_path=str(audio_path),
+                        provider=provider or "local_whisper",
+                        card=card,
+                    )
                 enqueue_scoring_job(job)
                 focus_label = f" for {card.title}" if card else ""
+                mode_label = "Free Speak transcription" if mode == PracticeRunForm.MODE_FREE else "Scoring"
                 messages.success(
                     request,
-                    f"Scoring queued{focus_label} with {provider_label(provider)}.",
+                    f"{mode_label} queued{focus_label} with {provider_label(provider)}.",
                 )
                 return redirect("practice:scoring_job", pk=job.pk)
     else:
         script_id = request.GET.get("script")
         card_id = request.GET.get("card")
+        mode = request.GET.get("mode") or PracticeRunForm.MODE_SCRIPT
         initial_card = None
         initial_script = None
         if card_id:
@@ -91,11 +133,17 @@ def practice_run(request):
                 .filter(pk=card_id)
                 .first()
             )
-        if script_id:
+        if mode == PracticeRunForm.MODE_QUICK:
+            initial_script = PracticeScript.objects.filter(active=True).order_by("?").first()
+        elif script_id:
             initial_script = PracticeScript.objects.filter(pk=script_id, active=True).first()
         elif initial_card is not None:
             initial_script = _latest_script_for_card(initial_card)
-        form = PracticeRunForm(initial_script=initial_script, initial_card=initial_card)
+        form = PracticeRunForm(
+            initial_script=initial_script,
+            initial_card=initial_card,
+            initial={"mode": mode},
+        )
 
     selected_script = None
     script_value = form["script"].value()
@@ -189,6 +237,46 @@ def session_detail(request, pk: int):
             "has_audio": audio_exists(session),
         },
     )
+
+
+def session_report(request, pk: int):
+    session = get_object_or_404(PracticeSession, pk=pk)
+    errors = SessionError.objects.filter(session_id=session.pk).order_by("id")[:200]
+    lines = [
+        f"# SpeechPractice Report: {session.script_name}",
+        "",
+        f"- Date: {session.timestamp}",
+        f"- Score: {_format_metric(session.score)}",
+        f"- WER: {_format_metric(session.wer)}",
+        f"- CER: {_format_metric(session.cer)}",
+        f"- Clarity: {_format_metric(session.clarity)}",
+        f"- Articulation rate: {_format_metric(session.artic_rate, suffix=' wpm')}",
+        f"- Pause ratio: {_format_metric(session.pause_ratio)}",
+        f"- Filled pauses: {_format_metric(session.filled_pauses)}",
+        f"- Average confidence: {_format_metric(session.avg_conf)}",
+        "",
+        "## Target Script",
+        "",
+        session.script_text or "",
+        "",
+        "## Transcript",
+        "",
+        session.transcript or "",
+        "",
+        "## Mistakes",
+        "",
+    ]
+    if errors:
+        for error in errors:
+            lines.append(
+                f"- {error.error_kind or error.op}: expected `{error.ref_token or ''}`"
+                f" heard `{error.hyp_token or ''}`"
+            )
+    else:
+        lines.append("- No stored mistakes.")
+    response = HttpResponse("\n".join(lines), content_type="text/markdown; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="speechpractice-session-{session.pk}.md"'
+    return response
 
 
 @require_POST
@@ -527,3 +615,18 @@ def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
     start = max(0, min(start, file_size - 1))
     end = max(start, min(end, file_size - 1))
     return start, end
+
+
+def _parse_date_param(value: str | None, fallback: datetime) -> datetime:
+    if not value:
+        return fallback
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return fallback
+
+
+def _format_metric(value: float | None, suffix: str = "") -> str:
+    if value is None:
+        return "-"
+    return f"{value:.3g}{suffix}"

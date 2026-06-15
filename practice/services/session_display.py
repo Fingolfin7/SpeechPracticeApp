@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -15,6 +16,8 @@ from practice.models import PracticeSession, SessionError
 class HighlightedSessionText:
     script_html: SafeString
     transcript_html: SafeString
+    timed_transcript_html: SafeString
+    has_timed_transcript: bool
     error_count: int
 
 
@@ -42,9 +45,12 @@ def highlighted_session_text(session: PracticeSession) -> HighlightedSessionText
         if error.op in {"ins", "sub"} and error.hyp_start is not None and error.hyp_end is not None:
             transcript_ranges.append((error.hyp_start, error.hyp_end, _transcript_class(error)))
 
+    transcript_text = session.transcript or ""
     return HighlightedSessionText(
         script_html=_highlight_text(session.script_text or "", script_ranges),
-        transcript_html=_highlight_text(session.transcript or "", transcript_ranges),
+        transcript_html=_highlight_text(transcript_text, transcript_ranges),
+        timed_transcript_html=_timed_transcript_html(session, transcript_ranges),
+        has_timed_transcript=bool(_segment_ranges_for_transcript(transcript_text, session_segments(session))),
         error_count=len(errors),
     )
 
@@ -90,6 +96,87 @@ def _highlight_text(text: str, ranges: Iterable[tuple[int, int, str]]) -> SafeSt
         cursor = end
     pieces.append(html.escape(text[cursor:]))
     return mark_safe("".join(pieces))
+
+
+def _timed_transcript_html(
+    session: PracticeSession,
+    error_ranges: Iterable[tuple[int, int, str]],
+) -> SafeString:
+    text = session.transcript or ""
+    ranges = _segment_ranges_for_transcript(text, session_segments(session))
+    if not ranges:
+        return _highlight_text(text, error_ranges)
+
+    pieces = []
+    cursor = 0
+    error_ranges_list = list(error_ranges)
+    for index, (start, end, start_time, end_time) in enumerate(ranges):
+        if start > cursor:
+            pieces.append(str(_highlight_text(text[cursor:start], _shift_ranges(error_ranges_list, cursor, start))))
+        segment_html = _highlight_text(text[start:end], _shift_ranges(error_ranges_list, start, end))
+        pieces.append(
+            '<span class="timed-transcript-segment" '
+            f'data-transcript-index="{index}" '
+            f'data-start="{start_time:.3f}" '
+            f'data-end="{end_time:.3f}" '
+            'tabindex="0" role="button">'
+            f"{segment_html}"
+            "</span>"
+        )
+        cursor = end
+    if cursor < len(text):
+        pieces.append(str(_highlight_text(text[cursor:], _shift_ranges(error_ranges_list, cursor, len(text)))))
+    return mark_safe("".join(pieces))
+
+
+def _shift_ranges(
+    ranges: Iterable[tuple[int, int, str]],
+    start: int,
+    end: int,
+) -> list[tuple[int, int, str]]:
+    shifted = []
+    for range_start, range_end, css_class in ranges:
+        overlap_start = max(start, int(range_start))
+        overlap_end = min(end, int(range_end))
+        if overlap_end > overlap_start:
+            shifted.append((overlap_start - start, overlap_end - start, css_class))
+    return shifted
+
+
+def _segment_ranges_for_transcript(
+    transcript_text: str,
+    segments: list[dict],
+) -> list[tuple[int, int, float, float]]:
+    if not transcript_text or not segments:
+        return []
+    ranges = []
+    cursor = 0
+    lower_text = transcript_text.lower()
+    for segment in segments:
+        cleaned = _clean_segment_text(str(segment.get("text", "")))
+        if not cleaned:
+            continue
+        found = lower_text.find(cleaned, cursor)
+        if found < 0:
+            found = lower_text.find(cleaned)
+        if found < 0:
+            continue
+        start = found
+        end = found + len(cleaned)
+        try:
+            start_time = float(segment.get("start", 0.0))
+            end_time = float(segment.get("end", start_time))
+        except (TypeError, ValueError):
+            continue
+        ranges.append((start, end, start_time, end_time))
+        cursor = end
+    return ranges
+
+
+def _clean_segment_text(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"\s+", " ", text)
+    return re.sub(r"[^\w\s]", "", text)
 
 
 def _normalize_offsets(text: str) -> dict[int, int]:

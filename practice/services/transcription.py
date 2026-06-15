@@ -36,18 +36,27 @@ class LocalWhisperProvider:
         device: str | None = None,
         language: str | None = None,
     ) -> None:
-        self.model_name = model_name or settings.WHISPER_MODEL_NAME
-        self.device = device or settings.WHISPER_DEVICE
-        self.language = language or settings.WHISPER_LANGUAGE
+        app_settings = _practice_settings()
+        self.app_settings = app_settings
+        self.model_name = (
+            model_name
+            or (app_settings.whisper_model_name if app_settings else None)
+            or settings.WHISPER_MODEL_NAME
+        )
+        self.device = (
+            device
+            or (app_settings.whisper_device if app_settings else None)
+            or settings.WHISPER_DEVICE
+        )
+        self.language = (
+            language
+            or (app_settings.whisper_language if app_settings else None)
+            or settings.WHISPER_LANGUAGE
+        )
 
     def transcribe(self, audio_path: str) -> TranscriptResult:
         model = _load_whisper_model(self.model_name, self.device)
-        options: dict[str, Any] = {
-            "beam_size": settings.WHISPER_BEAM_SIZE,
-            "temperature": settings.WHISPER_TEMPERATURE,
-            "condition_on_previous_text": settings.WHISPER_CONDITION_ON_PREVIOUS_TEXT,
-            "no_speech_threshold": settings.WHISPER_NO_SPEECH_THRESHOLD,
-        }
+        options = _whisper_options(self.app_settings)
         if self.language and self.language != "auto":
             options["language"] = self.language
         result = model.transcribe(audio_path, **options)
@@ -165,3 +174,52 @@ def _practice_settings() -> PracticeSettings | None:
         return PracticeSettings.load()
     except (OperationalError, ProgrammingError):
         return None
+
+
+def _whisper_options(app_settings: PracticeSettings | None) -> dict[str, Any]:
+    if app_settings is None:
+        return {
+            "beam_size": settings.WHISPER_BEAM_SIZE,
+            "temperature": settings.WHISPER_TEMPERATURE,
+            "condition_on_previous_text": settings.WHISPER_CONDITION_ON_PREVIOUS_TEXT,
+            "no_speech_threshold": settings.WHISPER_NO_SPEECH_THRESHOLD,
+        }
+
+    beam_size = int(app_settings.whisper_beam_size)
+    temperature = float(app_settings.whisper_temperature)
+    use_fp16 = False
+    if app_settings.whisper_device == "gpu":
+        use_fp16 = True
+    elif app_settings.whisper_device == "auto":
+        use_fp16 = _has_cuda()
+
+    preset = app_settings.whisper_preset
+    if preset == "fast_cpu":
+        beam_size = 1
+        temperature = 0.0
+        use_fp16 = False
+    elif preset == "balanced_cpu":
+        beam_size = 2
+        temperature = 0.0
+        use_fp16 = False
+    elif preset == "balanced_gpu":
+        beam_size = 3
+        temperature = 0.0
+        use_fp16 = True
+    elif preset == "accurate_gpu":
+        beam_size = 5
+        temperature = 0.0
+        use_fp16 = True
+
+    options: dict[str, Any] = {
+        "temperature": temperature,
+        "beam_size": beam_size,
+        "condition_on_previous_text": bool(app_settings.whisper_condition_on_previous_text),
+        "no_speech_threshold": float(app_settings.whisper_no_speech_threshold),
+        "without_timestamps": not bool(app_settings.whisper_timestamps),
+        "fp16": bool(use_fp16),
+    }
+    if beam_size <= 1:
+        options.pop("beam_size", None)
+        options["best_of"] = 1
+    return options

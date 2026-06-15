@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from practice.models import GeneratedPracticeScript, ImprovementCard, PracticeScript, ScoringJob
 from practice.services.analytics import refresh_improvement_cards
-from practice.services.scoring import transcribe_score_and_store
+from practice.services.scoring import transcribe_free_and_store, transcribe_score_and_store
 from practice.services.spaced_repetition import update_card_from_session
 
 
@@ -28,6 +28,23 @@ def create_scoring_job(
         script_text=script.body,
         audio_path=audio_path,
         provider=provider,
+        mode=ScoringJob.MODE_SCORE,
+    )
+
+
+def create_free_speak_job(
+    *,
+    audio_path: str,
+    provider: str,
+) -> ScoringJob:
+    return ScoringJob.objects.create(
+        script=None,
+        card=None,
+        script_name="Free Speak",
+        script_text="",
+        audio_path=audio_path,
+        provider=provider,
+        mode=ScoringJob.MODE_FREE,
     )
 
 
@@ -64,14 +81,20 @@ def process_scoring_job(job_id: int) -> ScoringJob:
         job.save(update_fields=["status", "started_at", "error_message", "updated_at"])
 
     try:
-        session = transcribe_score_and_store(
-            script_name=job.script_name,
-            script_text=job.script_text,
-            audio_path=job.audio_path,
-            provider_name=job.provider,
-        )
-        update_card_from_session(job.card, session)
-        refresh_improvement_cards(days=settings.CARD_REFRESH_WINDOW_DAYS)
+        if job.mode == ScoringJob.MODE_FREE:
+            session = transcribe_free_and_store(
+                audio_path=job.audio_path,
+                provider_name=job.provider,
+            )
+        else:
+            session = transcribe_score_and_store(
+                script_name=job.script_name,
+                script_text=job.script_text,
+                audio_path=job.audio_path,
+                provider_name=job.provider,
+            )
+            update_card_from_session(job.card, session)
+            refresh_improvement_cards(days=settings.CARD_REFRESH_WINDOW_DAYS)
     except Exception as exc:
         job = ScoringJob.objects.get(pk=job_id)
         job.status = ScoringJob.STATUS_FAILED

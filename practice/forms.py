@@ -53,9 +53,25 @@ class PracticeScriptForm(forms.ModelForm):
 
 
 class PracticeRunForm(forms.Form):
+    MODE_SCRIPT = "script"
+    MODE_QUICK = "quick"
+    MODE_FREE = "free_speak"
+    MODE_CHOICES = [
+        (MODE_SCRIPT, "Script"),
+        (MODE_QUICK, "Quick Practice"),
+        (MODE_FREE, "Free Speak"),
+    ]
+
+    mode = forms.ChoiceField(
+        choices=MODE_CHOICES,
+        initial=MODE_SCRIPT,
+        widget=forms.RadioSelect,
+        label="Recording mode",
+    )
     script = forms.ModelChoiceField(
         queryset=PracticeScript.objects.none(),
         label="Practice script",
+        required=False,
     )
     card = forms.ModelChoiceField(
         queryset=ImprovementCard.objects.none(),
@@ -94,6 +110,14 @@ class PracticeRunForm(forms.Form):
         ]
         self.fields["provider"].choices = provider_choices
         self.fields["provider"].initial = "local_whisper"
+
+    def clean(self):
+        cleaned = super().clean()
+        mode = cleaned.get("mode") or self.MODE_SCRIPT
+        script = cleaned.get("script")
+        if mode != self.MODE_FREE and script is None:
+            self.add_error("script", "Choose a script for scripted practice.")
+        return cleaned
 
 
 class BulkScriptImportForm(forms.Form):
@@ -159,6 +183,11 @@ class AccountSettingsForm(forms.ModelForm):
     clear_openai_api_key = forms.BooleanField(required=False, label="Clear OpenAI key")
     clear_anthropic_api_key = forms.BooleanField(required=False, label="Clear Anthropic key")
     clear_autumn_token = forms.BooleanField(required=False, label="Clear Autumn token")
+    autumn_subprojects_text = forms.CharField(
+        required=False,
+        label="Autumn subprojects",
+        help_text="Comma-separated Autumn subprojects.",
+    )
 
     class Meta:
         model = PracticeSettings
@@ -168,7 +197,18 @@ class AccountSettingsForm(forms.ModelForm):
             "openai_script_model",
             "anthropic_script_model",
             "openai_transcription_model",
+            "whisper_model_name",
+            "whisper_device",
+            "whisper_preset",
+            "whisper_language",
+            "whisper_timestamps",
+            "whisper_beam_size",
+            "whisper_temperature",
+            "whisper_no_speech_threshold",
+            "whisper_condition_on_previous_text",
+            "whisper_chunk_seconds",
             "autumn_base_url",
+            "autumn_project",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -179,14 +219,38 @@ class AccountSettingsForm(forms.ModelForm):
         self.fields["anthropic_script_model"].widget = forms.Select(
             choices=settings.ANTHROPIC_SCRIPT_MODEL_CHOICES
         )
+        self.fields["whisper_model_name"].widget = forms.Select(
+            choices=[
+                ("tiny.en", "tiny.en - fastest English"),
+                ("base.en", "base.en - fast English"),
+                ("small.en", "small.en - balanced English"),
+                ("medium.en", "medium.en - higher accuracy English"),
+                ("tiny", "tiny - multilingual"),
+                ("base", "base - multilingual"),
+                ("small", "small - multilingual"),
+                ("medium", "medium - multilingual"),
+            ]
+        )
+        self.fields["whisper_beam_size"].widget.attrs.update({"min": 1, "max": 10})
+        self.fields["whisper_temperature"].widget.attrs.update({"min": 0, "max": 1, "step": 0.05})
+        self.fields["whisper_no_speech_threshold"].widget.attrs.update({"min": 0, "max": 1, "step": 0.05})
+        self.fields["whisper_chunk_seconds"].widget.attrs.update({"min": 10, "max": 600, "step": 10})
         self.fields["openai_api_key"].initial = ""
         self.fields["anthropic_api_key"].initial = ""
         self.fields["autumn_token"].initial = ""
+        if self.instance and self.instance.pk:
+            self.fields["autumn_subprojects_text"].initial = ", ".join(
+                self.instance.autumn_subprojects or []
+            )
 
     def save(self, commit=True):
         instance = super().save(commit=False)
         if not instance.autumn_base_url:
             instance.autumn_base_url = settings.DEFAULT_AUTUMN_BASE_URL
+        subs_raw = self.cleaned_data.get("autumn_subprojects_text") or ""
+        instance.autumn_subprojects = [
+            item.strip() for item in subs_raw.split(",") if item.strip()
+        ]
         for field in ("openai_api_key", "anthropic_api_key", "autumn_token"):
             if self.cleaned_data.get(f"clear_{field}"):
                 instance.set_secret(field, None)

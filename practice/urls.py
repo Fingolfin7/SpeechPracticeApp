@@ -14,6 +14,7 @@ urlpatterns = [
     path("sessions/", views.session_list, name="sessions"),
     path("sessions/<int:pk>/", views.session_detail, name="session_detail"),
     path("sessions/<int:pk>/audio/", views.session_audio, name="session_audio"),
+    path("sessions/<int:pk>/delete/", views.session_delete, name="session_delete"),
     path("scripts/", views.script_list, name="scripts"),
     path("scripts/new/", views.script_create, name="script_create"),
     path("scripts/import/", views.script_import, name="script_import"),

@@ -111,12 +111,19 @@ button:disabled {
 }
 
 main {
-  width: min(1180px, calc(100% - 36px));
-  margin: 28px auto 64px;
+  width: min(1760px, calc(100% - clamp(32px, 4vw, 88px)));
+  margin: 24px auto 64px;
+}
+
+main:has(.practice-workbench) {
+  width: calc(100% - clamp(24px, 2.5vw, 56px));
+  max-width: none;
+  margin-top: 18px;
+  margin-bottom: 0;
 }
 
 .messages {
-  width: min(1180px, calc(100% - 36px));
+  width: min(1760px, calc(100% - clamp(32px, 4vw, 88px)));
   margin: 18px auto 0;
 }
 
@@ -463,8 +470,59 @@ th {
 .script-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 8px;
   align-items: center;
+}
+
+.script-actions .quiet-link {
+  margin-right: 4px;
+}
+
+.script-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf1;
+  color: var(--accent-dark);
+  box-shadow: 0 1px 0 rgba(31, 24, 18, 0.08);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.script-tool:hover,
+.script-tool:focus-visible {
+  background: #f3e5cf;
+  border-color: var(--accent-dark);
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.script-tool svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.danger-tool {
+  color: var(--ember);
+}
+
+.danger-tool:hover,
+.danger-tool:focus-visible {
+  background: #f9e0d4;
+  border-color: var(--ember);
+  color: #7f2410;
 }
 
 .danger-text {
@@ -479,6 +537,18 @@ th {
 
 .danger-zone {
   border-color: var(--ember);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .script-form {
@@ -548,6 +618,15 @@ select {
   align-items: stretch;
 }
 
+.practice-workbench {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.46fr) minmax(760px, 1fr);
+  gap: clamp(18px, 2vw, 32px);
+  align-items: stretch;
+  height: calc(100dvh - 104px);
+  min-height: 620px;
+}
+
 .practice-copy,
 .recorder-panel {
   border: 1px solid var(--line);
@@ -581,9 +660,140 @@ select {
   font-size: 22px;
 }
 
+.focus-brief.compact {
+  margin: 0;
+  padding: 13px;
+}
+
+.focus-brief.compact strong {
+  font-size: 18px;
+}
+
 .recorder-panel {
   display: grid;
-  gap: 16px;
+  gap: 10px;
+}
+
+.practice-script-panel,
+.practice-recorder-panel {
+  position: sticky;
+  top: 84px;
+  height: 100%;
+  max-height: none;
+}
+
+.practice-script-panel {
+  margin-top: 0;
+  overflow: auto;
+  background:
+    linear-gradient(90deg, rgba(184, 68, 33, 0.055) 0 1px, transparent 1px 100%),
+    linear-gradient(#fffaf0, #fff4e5);
+  background-size: 38px 100%, 100% 100%;
+}
+
+.practice-script-panel .panel-heading {
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+.practice-script-panel h1 {
+  margin-bottom: 0;
+  font-size: clamp(24px, 2.8vw, 34px);
+  line-height: 1.06;
+}
+
+.practice-recorder-panel {
+  padding: clamp(16px, 2.4vw, 22px);
+  overflow: auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  border-color: #173230;
+  color: #fffaf0;
+  background:
+    radial-gradient(circle at top right, rgba(82, 240, 255, 0.13), transparent 34%),
+    linear-gradient(160deg, #102524 0%, #162f2d 48%, #0b1818 100%);
+  box-shadow: 0 24px 72px rgba(22, 37, 34, 0.22);
+}
+
+.practice-recorder-panel .eyebrow {
+  color: #f4c95d;
+}
+
+.practice-recorder-panel small,
+.practice-recorder-panel .field-row label {
+  color: #b8cbc5;
+}
+
+.practice-recorder-panel select,
+.practice-recorder-panel input {
+  border-color: rgba(255, 250, 240, 0.22);
+}
+
+.recorder-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.recorder-header > div:first-child {
+  display: grid;
+  grid-template-columns: auto minmax(190px, 240px);
+  gap: 6px 16px;
+  align-items: end;
+}
+
+.recorder-header > div:first-child .eyebrow {
+  grid-column: 1 / -1;
+}
+
+.recorder-header h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.recorder-provider {
+  display: grid;
+  gap: 4px;
+  margin-top: 0;
+  max-width: 240px;
+}
+
+.recorder-provider label {
+  color: #b8cbc5;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.recorder-provider select {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.recording-time {
+  min-width: 86px;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 250, 240, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.08);
+  text-align: right;
+}
+
+.recording-time span,
+.recording-time small {
+  display: block;
+}
+
+.recording-time span {
+  font-family: Georgia, serif;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.recording-time small {
+  color: #b8cbc5;
+  font-size: 11px;
 }
 
 .field-row {
@@ -594,11 +804,11 @@ select {
 .script-picker-tools {
   display: grid;
   gap: 8px;
-  padding: 14px;
+  padding: 12px;
   border: 1px solid var(--line);
-  border-left: 5px solid var(--ember);
+  border-left: 5px solid var(--accent);
   border-radius: 8px;
-  background: #fff7e8;
+  background: rgba(242, 227, 207, 0.72);
 }
 
 .script-picker-tools > label {
@@ -615,6 +825,12 @@ select {
   gap: 10px;
 }
 
+.secondary-button {
+  background: var(--panel);
+  color: var(--accent-dark);
+  border-color: var(--accent-dark);
+}
+
 .field-row label {
   color: var(--ember);
   font-size: 12px;
@@ -626,12 +842,12 @@ select {
 .recording-stage {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 16px;
+  gap: 10px;
   align-items: center;
-  padding: 18px;
-  border: 1px dashed var(--accent);
+  padding: 8px 10px;
+  border: 1px dashed rgba(82, 240, 255, 0.44);
   border-radius: 8px;
-  background: #f2e3cf;
+  background: rgba(255, 250, 240, 0.08);
 }
 
 .recording-stage strong,
@@ -639,19 +855,23 @@ select {
   display: block;
 }
 
+.recording-stage small {
+  display: none;
+}
+
 .recording-orb {
   display: grid;
   place-items: center;
-  width: 58px;
-  height: 58px;
-  border: 1px solid var(--ink);
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 250, 240, 0.22);
   border-radius: 50%;
-  background: var(--panel);
+  background: rgba(255, 250, 240, 0.1);
 }
 
 .recording-orb span {
-  width: 24px;
-  height: 24px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: var(--ember);
   box-shadow: 0 0 0 0 rgba(184, 68, 33, 0.5);
@@ -659,6 +879,78 @@ select {
 
 .recording-stage.is-recording .recording-orb span {
   animation: pulse-recording 1.1s infinite;
+}
+
+.recorder-controls {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.38fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.waveform-card {
+  position: relative;
+  min-height: clamp(190px, 28vh, 280px);
+  overflow: hidden;
+  border: 1px solid rgba(82, 240, 255, 0.24);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(82, 240, 255, 0.08), transparent 42%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    #0e1d1d;
+  background-size: 100% 100%, 44px 100%, 100% 50%, 100% 100%;
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 118, 110, 0.26),
+    0 16px 42px rgba(0, 0, 0, 0.18);
+}
+
+.waveform-card canvas {
+  display: block;
+  width: 100%;
+  height: clamp(190px, 28vh, 280px);
+}
+
+.waveform-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  padding: 24px;
+  color: #a9c3bf;
+  text-align: center;
+}
+
+.waveform-empty strong {
+  color: #edf8f1;
+  font-family: Georgia, serif;
+  font-size: 22px;
+}
+
+.waveform-empty span {
+  color: #a9c3bf;
+}
+
+.waveform-card.has-waveform .waveform-empty {
+  display: none;
+}
+
+.waveform-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--ember);
+  box-shadow: 0 0 0 1px rgba(184, 68, 33, 0.2);
+  opacity: 0;
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+
+.waveform-card.has-waveform .waveform-playhead {
+  opacity: 1;
 }
 
 .recorder-actions {
@@ -672,6 +964,195 @@ select {
   width: min(100%, 320px);
 }
 
+.transport-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  align-items: center;
+  padding: 7px;
+  border: 1px solid rgba(255, 250, 240, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 250, 240, 0.09);
+}
+
+.transport-button {
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 38px;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.transport-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.transport-button span {
+  display: block;
+}
+
+.record-button {
+  width: 60px;
+  background: #ef454b;
+  border-color: #9f2028;
+}
+
+.record-button span {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--ink);
+  border-radius: 50%;
+  background: #ff5d63;
+}
+
+.record-button.is-recording span {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: white;
+}
+
+.stop-button span {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.play-button span {
+  width: 0;
+  height: 0;
+  margin-left: 4px;
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  border-left: 16px solid currentColor;
+}
+
+.play-button.is-playing span {
+  width: 16px;
+  height: 18px;
+  margin-left: 0;
+  border: 0;
+  background:
+    linear-gradient(90deg, currentColor 0 35%, transparent 35% 65%, currentColor 65% 100%);
+}
+
+.delete-button {
+  color: #ffd9d1;
+  background: rgba(184, 68, 33, 0.38);
+  border-color: rgba(255, 160, 134, 0.42);
+}
+
+.delete-button span {
+  position: relative;
+  width: 18px;
+  height: 18px;
+}
+
+.delete-button span::before,
+.delete-button span::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 2px;
+  width: 14px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.delete-button span::before {
+  transform: rotate(45deg);
+}
+
+.delete-button span::after {
+  transform: rotate(-45deg);
+}
+
+.score-button {
+  flex: 1 1 180px;
+  text-align: center;
+  background: #f4c95d;
+  border-color: #8d6812;
+  color: #1b211c;
+  font-weight: 700;
+}
+
+.practice-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+  color: #eaf7f2;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.practice-metrics span {
+  color: #c1d4ce;
+}
+
+.live-transcript-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 4px;
+  min-height: 0;
+}
+
+.transcript-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.transcript-heading .eyebrow {
+  margin: 0;
+}
+
+.transcript-heading small {
+  color: #b8cbc5;
+}
+
+.transcript-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  font-size: 10px;
+}
+
+.transcript-legend span {
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+
+.legend-playhead {
+  background: rgba(82, 240, 255, 0.28);
+  color: #dffcff;
+}
+
+.live-transcript-box {
+  min-height: 120px;
+  max-height: none;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid rgba(255, 250, 240, 0.12);
+  border-radius: 8px;
+  background: rgba(7, 16, 18, 0.62);
+  color: #c8d7d1;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.upload-row {
+  padding-top: 2px;
+  opacity: 0.82;
+}
+
 .form-error {
   color: #a12b18;
   font-weight: 700;
@@ -680,6 +1161,10 @@ select {
 .reading-panel {
   margin-top: 18px;
   transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.practice-script-panel.reading-panel {
+  margin-top: 0;
 }
 
 .reading-panel.is-loading {
@@ -691,7 +1176,7 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: -4px 0 18px;
+  margin: 2px 0 18px;
 }
 
 .script-meta span {
@@ -705,10 +1190,15 @@ select {
 }
 
 .script-reader {
+  padding: clamp(18px, 3vw, 30px);
+  border: 1px solid rgba(36, 31, 26, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.82);
+  box-shadow: inset 5px 0 0 rgba(15, 118, 110, 0.14);
   color: var(--ink);
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 21px;
-  line-height: 1.72;
+  font-size: 18px;
+  line-height: 1.62;
 }
 
 .script-reader p {
@@ -1003,12 +1493,48 @@ select {
   .dashboard-grid,
   .import-grid,
   .today-layout,
+  .practice-workbench,
   .practice-shell,
   .settings-grid,
   .api-keys-grid,
   .compare-grid,
   .metric-strip {
     grid-template-columns: 1fr;
+  }
+
+  .practice-workbench {
+    height: auto;
+    min-height: 0;
+  }
+
+  .practice-script-panel,
+  .practice-recorder-panel {
+    position: static;
+    height: auto;
+    max-height: none;
+  }
+
+  .practice-recorder-panel {
+    order: -1;
+  }
+
+  .waveform-card,
+  .waveform-card canvas {
+    min-height: 190px;
+    height: 190px;
+  }
+
+  .transport-bar {
+    flex-wrap: wrap;
+    border-radius: 24px;
+  }
+
+  .recorder-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .live-transcript-box {
+    max-height: none;
   }
 
   .script-picker-tools > div {
@@ -1028,5 +1554,29 @@ select {
   button {
     width: 100%;
     text-align: center;
+  }
+
+  .site-header nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px;
+  }
+
+  .site-header nav a {
+    width: auto;
+    padding: 8px 6px;
+  }
+
+  .transport-button {
+    width: 48px;
+  }
+
+  .record-button {
+    width: 60px;
+  }
+
+  .transport-bar .score-button {
+    width: auto;
   }
 }

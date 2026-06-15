@@ -328,6 +328,9 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "Score recording")
         self.assertContains(response, 'data-script-preview-base="/scripts/0/preview/"')
         self.assertContains(response, "data-script-title")
+        self.assertContains(response, "data-waveform-canvas")
+        self.assertContains(response, "data-record-play")
+        self.assertContains(response, "data-record-delete")
         self.assertContains(response, "Find a script")
         self.assertContains(response, "Next random")
 
@@ -481,6 +484,50 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(session.transcript, "")
         self.assertIsNone(session.score)
         self.assertEqual(SessionError.objects.filter(session_id=session.pk).count(), 0)
+
+    def test_session_delete_removes_audio_and_history_entry(self):
+        self._create_legacy_tables()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "delete-me.webm"
+            audio_path.write_bytes(b"audio")
+            session = PracticeSession.objects.create(
+                timestamp="2026-06-14T12:00:00",
+                script_name="Delete Drill",
+                script_text="clear practice text",
+                audio_path=str(audio_path),
+                transcript="clear practice text",
+            )
+            SessionError.objects.create(
+                session_id=session.pk,
+                timestamp=session.timestamp,
+                script_name=session.script_name,
+                ref_token="practice",
+                op="del",
+                error_kind="word_missing",
+            )
+            card = ImprovementCard.objects.create(
+                title="Practice clear",
+                kind=ImprovementCard.KIND_WORD,
+                target_key="clear",
+            )
+            PracticeReview.objects.create(card=card, legacy_session_id=session.pk)
+            job = ScoringJob.objects.create(
+                script_name=session.script_name,
+                script_text=session.script_text,
+                audio_path=str(audio_path),
+                provider="uploaded_transcript",
+                legacy_session_id=session.pk,
+            )
+
+            response = self.client.post(reverse("practice:session_delete", args=[session.pk]))
+
+            self.assertRedirects(response, reverse("practice:sessions"))
+            self.assertFalse(audio_path.exists())
+            self.assertFalse(PracticeSession.objects.filter(pk=session.pk).exists())
+            self.assertEqual(SessionError.objects.filter(session_id=session.pk).count(), 0)
+            self.assertEqual(PracticeReview.objects.filter(legacy_session_id=session.pk).count(), 0)
+            job.refresh_from_db()
+            self.assertIsNone(job.legacy_session_id)
 
     def test_session_audio_supports_byte_ranges_for_seek(self):
         self._create_legacy_tables()

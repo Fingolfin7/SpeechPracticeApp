@@ -2,97 +2,155 @@
 {% load static %}
 {% block title %}Practice | SpeechPractice{% endblock %}
 {% block content %}
-<section class="practice-shell">
-  <div class="practice-copy">
-    <p class="eyebrow">Record and score</p>
-    <h1>Read it once. Let the app remember the hard parts.</h1>
-    <p class="lead">Choose a script, record in the browser or upload audio, then score it into the same history that powers your improvement cards.</p>
-    {% if focus_card %}
-      <div class="focus-brief">
-        <span class="pill">{{ focus_card.get_kind_display }}</span>
-        <strong>{{ focus_card.title }}</strong>
-        <small>Mastery {{ focus_card.mastery|floatformat:2 }} &middot; due {{ focus_card.due_at|date:"M j, H:i" }}</small>
-      </div>
-    {% endif %}
-  </div>
+<form
+  class="practice-workbench"
+  method="post"
+  enctype="multipart/form-data"
+  data-recorder-form
+  data-script-preview-base="{% url 'practice:script_preview' 0 %}"
+>
+  {% csrf_token %}
+  {{ form.card }}
 
-  <form
-    class="recorder-panel"
-    method="post"
-    enctype="multipart/form-data"
-    data-recorder-form
-    data-script-preview-base="{% url 'practice:script_preview' 0 %}"
-  >
-    {% csrf_token %}
-    {{ form.card }}
+  <section class="panel reading-panel practice-script-panel" data-script-preview-panel>
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">Read aloud</p>
+        <h1 data-script-title>{% if selected_script %}{{ selected_script.title }}{% else %}No active scripts yet{% endif %}</h1>
+      </div>
+      <span data-script-word-count>
+        {% if selected_script %}{{ selected_script.word_count }} words{% else %}No script selected{% endif %}
+      </span>
+    </div>
+
     <div class="script-picker-tools">
       <label for="script-search">Find a script</label>
       <div>
         <input id="script-search" type="search" placeholder="Search title, author, or tag" data-script-search>
-        <button type="button" data-random-script>Next random</button>
+        <button class="secondary-button" type="button" data-random-script>Next random</button>
       </div>
     </div>
+
     <div class="field-row">
       {{ form.script.label_tag }}
       {{ form.script }}
       {% if form.script.errors %}<div class="form-error">{{ form.script.errors }}</div>{% endif %}
     </div>
-    <div class="field-row">
-      {{ form.provider.label_tag }}
-      {{ form.provider }}
-    </div>
 
-    <div class="recording-stage" data-recording-stage>
-      <div class="recording-orb" aria-hidden="true"><span></span></div>
+    {% if selected_script %}
+      <p class="script-meta" data-script-meta>
+        {% if selected_script.author %}<span>{{ selected_script.author }}</span>{% endif %}
+        <span>{{ selected_script.get_source_display }}</span>
+        <span>Level {{ selected_script.difficulty }}</span>
+        {% if selected_script.tags %}
+          <span>{{ selected_script.tags|join:", " }}</span>
+        {% endif %}
+      </p>
+      <div class="script-reader" data-script-body>{{ selected_script.body|linebreaks }}</div>
+    {% else %}
+      <p class="script-meta" data-script-meta><span>Upload or create a script to begin.</span></p>
+      <div class="script-reader empty" data-script-body>
+        <p>Your practice text will appear here after a script is available.</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <aside class="recorder-panel practice-recorder-panel">
+    <div class="recorder-header">
       <div>
-        <strong data-recording-status>Ready to record</strong>
-        <small>Browser recording uses WebM when available. Upload remains available as a fallback.</small>
+        <p class="eyebrow">Record and score</p>
+        <h2>Live take</h2>
+        <div class="recorder-provider">
+          {{ form.provider.label_tag }}
+          {{ form.provider }}
+        </div>
+      </div>
+      <div class="recording-time">
+        <span data-recording-time>00:00</span>
+        <small data-recording-duration>No take yet</small>
       </div>
     </div>
 
-    <div class="recorder-actions">
-      <button type="button" data-record-start>Record</button>
-      <button type="button" data-record-stop disabled>Stop</button>
-      <audio controls data-recording-preview hidden></audio>
+    {% if focus_card %}
+      <div class="focus-brief compact">
+        <span class="pill">{{ focus_card.get_kind_display }}</span>
+        <strong>{{ focus_card.title }}</strong>
+        <small>Mastery {{ focus_card.mastery|floatformat:2 }} &middot; due {{ focus_card.due_at|date:"M j, H:i" }}</small>
+      </div>
+    {% endif %}
+
+    <div class="waveform-card" data-waveform-card>
+      <canvas data-waveform-canvas aria-label="Live recording waveform"></canvas>
+      <div class="waveform-empty" data-waveform-empty>
+        <strong>Waiting for audio</strong>
+        <span>Record or upload a take to draw the waveform.</span>
+      </div>
+      <div class="waveform-playhead" data-waveform-playhead aria-hidden="true"></div>
     </div>
 
-    <div class="field-row">
+    <div class="recorder-controls">
+      <div class="recording-stage" data-recording-stage>
+        <div class="recording-orb" aria-hidden="true"><span></span></div>
+        <div>
+          <strong data-recording-status>Ready to record</strong>
+          <small>Browser recording uses WebM when available. Upload remains available as a fallback.</small>
+        </div>
+      </div>
+
+      <div class="transport-bar">
+        <button class="transport-button record-button" type="button" data-record-start aria-label="Start recording">
+          <span aria-hidden="true"></span>
+        </button>
+        <button class="transport-button stop-button" type="button" data-record-stop disabled aria-label="Stop recording">
+          <span aria-hidden="true"></span>
+        </button>
+        <button class="transport-button play-button" type="button" data-record-play disabled aria-label="Play recording">
+          <span aria-hidden="true"></span>
+        </button>
+        <button class="transport-button delete-button" type="button" data-record-delete disabled aria-label="Delete recording">
+          <span aria-hidden="true"></span>
+        </button>
+        <button class="button-link score-button" type="submit">Score recording</button>
+      </div>
+    </div>
+
+    <div class="practice-metrics" aria-live="polite">
+      <strong>Score: -</strong>
+      <span>WER: -</span>
+      <span>CER: -</span>
+      <span>Clarity: -</span>
+      <span>Rate: - wpm</span>
+      <span>Pauses: -</span>
+      <span>Conf: -</span>
+    </div>
+
+    <section class="live-transcript-panel" aria-live="polite">
+      <div class="transcript-heading">
+        <div>
+          <p class="eyebrow">Transcript</p>
+        </div>
+        <small data-transcript-state>Waiting</small>
+      </div>
+      <div class="transcript-legend" aria-label="Transcript highlight legend">
+        <span class="legend-insert">inserted word</span>
+        <span class="legend-char-insert">inserted letters</span>
+        <span class="legend-replace">replaced letters</span>
+        <span class="legend-playhead">playhead</span>
+      </div>
+      <div class="live-transcript-box" data-live-transcript>
+      </div>
+    </section>
+
+    <div class="field-row upload-row">
       {{ form.audio.label_tag }}
       {{ form.audio }}
       {% if form.audio.errors %}<div class="form-error">{{ form.audio.errors }}</div>{% endif %}
       <small>{{ form.audio.help_text }}</small>
     </div>
 
-    <button type="submit">Score recording</button>
-  </form>
-</section>
+    <audio data-recording-preview hidden></audio>
+  </aside>
+</form>
 
-<section class="panel reading-panel" data-script-preview-panel>
-  <div class="panel-heading">
-    <p class="eyebrow">Current script</p>
-    <span data-script-word-count>
-      {% if selected_script %}{{ selected_script.word_count }} words{% else %}No script selected{% endif %}
-    </span>
-  </div>
-  {% if selected_script %}
-    <h2 data-script-title>{{ selected_script.title }}</h2>
-    <p class="script-meta" data-script-meta>
-      {% if selected_script.author %}<span>{{ selected_script.author }}</span>{% endif %}
-      <span>{{ selected_script.get_source_display }}</span>
-      <span>Level {{ selected_script.difficulty }}</span>
-      {% if selected_script.tags %}
-        <span>{{ selected_script.tags|join:", " }}</span>
-      {% endif %}
-    </p>
-    <div class="script-reader" data-script-body>{{ selected_script.body|linebreaks }}</div>
-  {% else %}
-    <h2 data-script-title>No active scripts yet</h2>
-    <p class="script-meta" data-script-meta><span>Upload or create a script to begin.</span></p>
-    <div class="script-reader empty" data-script-body>
-      <p>Your practice text will appear here after a script is available.</p>
-    </div>
-  {% endif %}
-</section>
-
-<script src="{% static 'practice/recorder.js' %}?v=4"></script>
+<script src="{% static 'practice/recorder.js' %}?v=6"></script>
 {% endblock %}

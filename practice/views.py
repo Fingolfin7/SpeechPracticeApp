@@ -12,7 +12,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from .forms import AccountSettingsForm, BulkScriptImportForm, PracticeRunForm, PracticeScriptForm, TranscriptEditForm
-from .models import GeneratedPracticeScript, ImprovementCard, PracticeScript, PracticeSession, PracticeSettings, ScoringJob, SessionError
+from .models import GeneratedPracticeScript, ImprovementCard, PracticeReview, PracticeScript, PracticeSession, PracticeSettings, ScoringJob, SessionError
 from .services.analytics import (
     active_scoring_jobs,
     dashboard_stats,
@@ -189,6 +189,20 @@ def session_detail(request, pk: int):
             "has_audio": audio_exists(session),
         },
     )
+
+
+@require_POST
+def session_delete(request, pk: int):
+    session = get_object_or_404(PracticeSession, pk=pk)
+    script_name = session.script_name
+    audio_deleted = _delete_audio_file(session.audio_path)
+    SessionError.objects.filter(session_id=session.pk).delete()
+    PracticeReview.objects.filter(legacy_session_id=session.pk).delete()
+    ScoringJob.objects.filter(legacy_session_id=session.pk).update(legacy_session_id=None)
+    session.delete()
+    suffix = " and deleted the audio file" if audio_deleted else ""
+    messages.success(request, f"Deleted recording entry for {script_name}{suffix}.")
+    return redirect("practice:sessions")
 
 
 def session_audio(request, pk: int):
@@ -485,6 +499,19 @@ def _save_uploaded_audio(audio: UploadedFile, script_title: str):
 def _safe_extension(filename: str) -> str:
     suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ".webm"
     return suffix if suffix in {".webm", ".wav", ".mp3", ".m4a", ".ogg", ".flac", ".txt"} else ".webm"
+
+
+def _delete_audio_file(audio_path: str | None) -> bool:
+    if not audio_path:
+        return False
+    path = Path(audio_path)
+    if not path.is_file():
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
 
 
 def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:

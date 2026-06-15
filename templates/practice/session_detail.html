@@ -13,6 +13,10 @@
       <input type="hidden" name="action" value="clear_transcript">
       <button class="danger-button" type="submit">Clear transcript</button>
     </form>
+    <form method="post" action="{% url 'practice:session_delete' session.pk %}" onsubmit="return confirm('Delete this recording, audio file, and history entry?');">
+      {% csrf_token %}
+      <button class="danger-button" type="submit">Delete recording and entry</button>
+    </form>
   </div>
 </section>
 

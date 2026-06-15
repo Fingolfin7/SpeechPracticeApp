@@ -22,8 +22,23 @@
       <p>{{ script.body|truncatewords:34 }}</p>
       <div class="script-actions">
         <a class="quiet-link" href="{% url 'practice:practice' %}?script={{ script.pk }}">Practice this</a>
-        <a class="quiet-link" href="{% url 'practice:script_edit' script.pk %}">Edit</a>
-        <a class="quiet-link danger-text" href="{% url 'practice:script_delete' script.pk %}">Delete</a>
+        <a class="script-tool" href="{% url 'practice:script_edit' script.pk %}" aria-label="Edit {{ script.title }}" title="Edit script">
+          <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+            <path d="M4 20h4.7L19.2 9.5a2.3 2.3 0 0 0 0-3.3l-1.4-1.4a2.3 2.3 0 0 0-3.3 0L4 15.3V20Z" />
+            <path d="m13.6 5.8 4.6 4.6" />
+          </svg>
+          <span class="sr-only">Edit</span>
+        </a>
+        <a class="script-tool danger-tool" href="{% url 'practice:script_delete' script.pk %}" aria-label="Delete {{ script.title }}" title="Delete script">
+          <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+            <path d="M5 7h14" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+            <path d="M8 7l.8 12h6.4L16 7" />
+            <path d="M9 7V5h6v2" />
+          </svg>
+          <span class="sr-only">Delete</span>
+        </a>
       </div>
     </article>
   {% empty %}

@@ -9,7 +9,7 @@
 - Session detail with replay audio, waveform seeking, error highlights, transcript editing, rescore, transcript clearing, and recording deletion.
 - Account settings for provider selection, OpenAI/Anthropic models, encrypted API keys, Codex login, and Autumn token storage.
 
-## Missing Or Partial Original Features
+## Original Feature Gaps Audited
 
 - **Timestamped transcript sync:** Original transcript segments highlighted during playback, and clicking transcript text sought the audio. Django only had waveform seek.
 - **Mode parity:** Original app had Script, Quick Practice, and Free Speak. Django only had one scripted scoring flow.
@@ -19,7 +19,7 @@
 - **Autumn timer depth:** Original tracked Autumn project/subproject selection and active timer state. Django stored token/base URL only.
 - **Live partial transcription:** Original showed partial chunk output while long transcription ran. Django queues jobs and refreshes status only.
 - **Error highlight toggles:** Original could toggle highlights on/off. Django always renders highlights.
-- **Model lifecycle controls:** Original unloaded/reloaded local Whisper after settings changes. Django caches models process-wide and does not yet expose a UI action for cache clearing.
+- **Model lifecycle controls:** Original unloaded/reloaded local Whisper after settings changes. Django cached models process-wide and did not expose a UI action for cache clearing.
 
 ## Porting Strategy
 
@@ -28,7 +28,7 @@
 3. Move original Whisper tuning fields into `PracticeSettings` and have the Django transcription provider use them.
 4. Add a dedicated Progress page with date/script filters, canvas charts, and the original trend summaries.
 5. Add lightweight session report export and mistake-copy data to history pages.
-6. Leave deeper live partial transcription and Autumn active timer controls as follow-up work after the web worker/job architecture is settled.
+6. Add live job-status polling, Autumn active timer controls, and explicit Whisper cache clearing.
 
 ## Implementation Status
 
@@ -43,7 +43,7 @@
 - [x] Add Autumn timer start/stop controls backed by saved project/subproject settings.
 - [x] Add explicit local Whisper cache clearing after tuning changes and from Account.
 
-## Remaining Gaps After Current Port
+## Behavior Notes After Current Port
 
-- OpenAI transcription still reports only the final transcript because the upstream request is not chunk-streamed in this app.
-- Local live partials are available for long recordings through the existing chunked Whisper helper and job-status polling; short local recordings may only publish a final transcript because Whisper processes them in one call.
+- OpenAI transcription reports the final transcript when the provider returns because the OpenAI request path is not chunk-streamed in this app.
+- Local live partials are available for long recordings through the existing chunked Whisper helper and job-status polling; short local recordings may publish only the final transcript because Whisper processes them in one call, matching the original worker behavior.

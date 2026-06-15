@@ -825,6 +825,38 @@ select {
   gap: 10px;
 }
 
+.mode-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mode-picker label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff7e8;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.mode-picker input {
+  width: auto;
+}
+
+.practice-workbench.is-free-speak .practice-script-panel {
+  opacity: 0.58;
+}
+
+.practice-workbench.is-free-speak .script-picker-tools,
+.practice-workbench.is-free-speak .field-row:has(select[name="script"]) {
+  pointer-events: none;
+}
+
 .secondary-button {
   background: var(--panel);
   color: var(--accent-dark);
@@ -1256,6 +1288,24 @@ select {
   background: rgba(255, 193, 7, 0.4);
 }
 
+.timed-transcript-segment {
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.timed-transcript-segment:hover,
+.timed-transcript-segment:focus-visible {
+  outline: none;
+  background: rgba(15, 118, 110, 0.16);
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.18);
+}
+
+.timed-transcript-segment.is-active {
+  background: rgba(82, 240, 255, 0.28);
+  box-shadow: 0 0 0 2px rgba(82, 240, 255, 0.22);
+}
+
 .history-player {
   display: grid;
   gap: 12px;
@@ -1287,6 +1337,47 @@ select {
   gap: 18px;
 }
 
+.progress-filters form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.progress-filters p {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.progress-filters label {
+  color: var(--ember);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.progress-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.chart-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.chart-panel canvas {
+  width: 100%;
+  min-height: 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
 .settings-form {
   display: grid;
   gap: 16px;
@@ -1296,6 +1387,43 @@ select {
   display: grid;
   gap: 6px;
   margin: 0;
+}
+
+.settings-section {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff7e8;
+}
+
+.settings-section legend {
+  padding: 0 6px;
+  color: var(--ember);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.settings-subgrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.check-row input {
+  width: auto;
 }
 
 .api-keys-grid {
@@ -1496,9 +1624,13 @@ select {
   .practice-workbench,
   .practice-shell,
   .settings-grid,
+  .settings-subgrid,
   .api-keys-grid,
   .compare-grid,
-  .metric-strip {
+  .metric-strip,
+  .progress-grid,
+  .progress-filters form,
+  .mode-picker {
     grid-template-columns: 1fr;
   }
 

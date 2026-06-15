@@ -1,0 +1,130 @@
+{% extends "practice/base.html" %}
+{% load static %}
+{% block title %}Progress | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">Progress tracker</p>
+    <h1>Measure the trend, not just the take.</h1>
+  </div>
+</section>
+
+<section class="panel progress-filters">
+  <form method="get">
+    <p>
+      <label for="start">From</label>
+      <input id="start" type="date" name="start" value="{{ start_date }}">
+    </p>
+    <p>
+      <label for="end">To</label>
+      <input id="end" type="date" name="end" value="{{ end_date }}">
+    </p>
+    <p>
+      <label for="script">Script</label>
+      <select id="script" name="script">
+        <option value="">All scripts</option>
+        {% for option in script_options %}
+          <option value="{{ option }}" {% if option == selected_script %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </p>
+    <button type="submit">Refresh</button>
+  </form>
+</section>
+
+<section class="progress-grid">
+  <article class="panel chart-panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Score</p>
+      <span>0 to 5</span>
+    </div>
+    <canvas data-progress-chart="score" height="220"></canvas>
+  </article>
+  <article class="panel chart-panel">
+    <div class="panel-heading">
+      <p class="eyebrow">WER</p>
+      <span>lower is better</span>
+    </div>
+    <canvas data-progress-chart="wer" height="220"></canvas>
+  </article>
+  <article class="panel chart-panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Clarity</p>
+      <span>0 to 1</span>
+    </div>
+    <canvas data-progress-chart="clarity" height="220"></canvas>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Trouble words</p>
+    <div class="rank-list">
+      {% for row in summary.words.top_trouble_words %}
+        <div><strong>{{ row.word }}</strong><span>{{ row.errors|floatformat:0 }}/{{ row.attempts|floatformat:0 }} errors</span></div>
+      {% empty %}
+        <p class="empty">No word trend data for this filter.</p>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <p class="eyebrow">Most improved</p>
+    <div class="rank-list">
+      {% for row in summary.words.most_improved_words %}
+        <div><strong>{{ row.word }}</strong><span>{{ row.previous_rate|floatformat:2 }} to {{ row.recent_rate|floatformat:2 }}</span></div>
+      {% empty %}
+        <p class="empty">More prior-window data is needed.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Character patterns</p>
+    <div class="rank-list">
+      {% for row in summary.characters.top_character_kinds %}
+        <div><strong>{{ row.kind }}</strong><span>{{ row.error_rate|floatformat:2 }} error rate</span></div>
+      {% empty %}
+        <p class="empty">No character trend data.</p>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <p class="eyebrow">Position patterns</p>
+    <div class="rank-list">
+      {% for row in summary.positions.top_position_buckets %}
+        <div><strong>{{ row.bucket }}</strong><span>{{ row.errors|floatformat:0 }}/{{ row.attempts|floatformat:0 }} errors</span></div>
+      {% empty %}
+        <p class="empty">No position trend data.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Sound patterns</p>
+    <div class="rank-list">
+      {% for row in summary.sounds.top_trouble_symbols %}
+        <div><strong>{{ row.symbol }}</strong><span>{{ row.error_rate|floatformat:2 }} error rate</span></div>
+      {% empty %}
+        <p class="empty">No sound trend data.</p>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <p class="eyebrow">Coaching focus</p>
+    <ul class="plain-list">
+      {% for line in summary.feedback %}
+        <li>{{ line }}</li>
+      {% empty %}
+        <li>No coaching notes for this filter yet.</li>
+      {% endfor %}
+    </ul>
+  </article>
+</section>
+
+{{ points|json_script:"progress-data" }}
+<script src="{% static 'practice/progress.js' %}?v=1"></script>
+{% endblock %}

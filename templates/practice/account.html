@@ -21,7 +21,31 @@
       <p>{{ form.openai_script_model.label_tag }}{{ form.openai_script_model }}</p>
       <p>{{ form.anthropic_script_model.label_tag }}{{ form.anthropic_script_model }}</p>
       <p>{{ form.openai_transcription_model.label_tag }}{{ form.openai_transcription_model }}</p>
-      <p>{{ form.autumn_base_url.label_tag }}{{ form.autumn_base_url }}</p>
+
+      <fieldset class="settings-section">
+        <legend>Local Whisper tuning</legend>
+        <div class="settings-subgrid">
+          <p>{{ form.whisper_model_name.label_tag }}{{ form.whisper_model_name }}</p>
+          <p>{{ form.whisper_device.label_tag }}{{ form.whisper_device }}</p>
+          <p>{{ form.whisper_preset.label_tag }}{{ form.whisper_preset }}</p>
+          <p>{{ form.whisper_language.label_tag }}{{ form.whisper_language }}</p>
+          <p>{{ form.whisper_beam_size.label_tag }}{{ form.whisper_beam_size }}</p>
+          <p>{{ form.whisper_temperature.label_tag }}{{ form.whisper_temperature }}</p>
+          <p>{{ form.whisper_no_speech_threshold.label_tag }}{{ form.whisper_no_speech_threshold }}</p>
+          <p>{{ form.whisper_chunk_seconds.label_tag }}{{ form.whisper_chunk_seconds }}</p>
+        </div>
+        <label class="check-row">{{ form.whisper_timestamps }} Generate timestamps</label>
+        <label class="check-row">{{ form.whisper_condition_on_previous_text }} Use previous text context</label>
+      </fieldset>
+
+      <fieldset class="settings-section">
+        <legend>Autumn timer</legend>
+        <div class="settings-subgrid">
+          <p>{{ form.autumn_base_url.label_tag }}{{ form.autumn_base_url }}</p>
+          <p>{{ form.autumn_project.label_tag }}{{ form.autumn_project }}</p>
+        </div>
+        <p>{{ form.autumn_subprojects_text.label_tag }}{{ form.autumn_subprojects_text }}</p>
+      </fieldset>
 
       <div class="api-keys-grid">
         <div class="api-key-item">

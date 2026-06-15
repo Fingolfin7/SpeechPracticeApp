@@ -18,6 +18,8 @@
   const recordingTime = form.querySelector("[data-recording-time]");
   const recordingDuration = form.querySelector("[data-recording-duration]");
   const scriptSelect = form.querySelector("select[name='script']");
+  const modeInputs = Array.from(form.querySelectorAll("input[name='mode']"));
+  const modeHelper = form.querySelector("[data-mode-helper]");
   const scriptSearch = form.querySelector("[data-script-search]");
   const randomScriptButton = form.querySelector("[data-random-script]");
   const previewBase = form.dataset.scriptPreviewBase;
@@ -129,6 +131,33 @@
     scriptSelect.addEventListener("change", updateScriptPreview);
   }
 
+  function currentMode() {
+    const checked = modeInputs.find((input) => input.checked);
+    return checked ? checked.value : "script";
+  }
+
+  function updateModeUi() {
+    const mode = currentMode();
+    form.classList.toggle("is-free-speak", mode === "free_speak");
+    form.classList.toggle("is-quick-practice", mode === "quick");
+    if (modeHelper) {
+      if (mode === "free_speak") {
+        modeHelper.textContent = "Free Speak transcribes without scoring or updating cards.";
+      } else if (mode === "quick") {
+        modeHelper.textContent = "Quick Practice starts from a random script and scores normally.";
+      } else {
+        modeHelper.textContent = "Script mode scores your recording against the selected text.";
+      }
+    }
+    if (mode === "quick" && randomScriptButton) {
+      randomScriptButton.click();
+    }
+  }
+
+  modeInputs.forEach((input) => {
+    input.addEventListener("change", updateModeUi);
+  });
+
   function visibleScriptValues() {
     if (!scriptSelect) {
       return [];
@@ -181,6 +210,8 @@
       scriptSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
   }
+
+  updateModeUi();
 
   function formatTime(seconds) {
     const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;

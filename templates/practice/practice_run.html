@@ -31,6 +31,16 @@
       </div>
     </div>
 
+    <div class="mode-picker" data-mode-picker>
+      {% for radio in form.mode %}
+        <label>
+          {{ radio.tag }}
+          <span>{{ radio.choice_label }}</span>
+        </label>
+      {% endfor %}
+      {% if form.mode.errors %}<div class="form-error">{{ form.mode.errors }}</div>{% endif %}
+    </div>
+
     <div class="field-row">
       {{ form.script.label_tag }}
       {{ form.script }}
@@ -93,7 +103,7 @@
         <div class="recording-orb" aria-hidden="true"><span></span></div>
         <div>
           <strong data-recording-status>Ready to record</strong>
-          <small>Browser recording uses WebM when available. Upload remains available as a fallback.</small>
+          <small data-mode-helper>Script mode scores your recording against the selected text.</small>
         </div>
       </div>
 

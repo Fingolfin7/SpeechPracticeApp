@@ -333,6 +333,8 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "data-record-delete")
         self.assertContains(response, "Find a script")
         self.assertContains(response, "Next random")
+        self.assertContains(response, "Free Speak")
+        self.assertContains(response, "Quick Practice")
 
     def test_practice_page_can_start_from_card_context(self):
         card = ImprovementCard.objects.create(
@@ -552,6 +554,51 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(response.headers["Content-Range"], "bytes 2-5/10")
         self.assertEqual(response.content, b"2345")
 
+    def test_session_detail_renders_timed_transcript_segments(self):
+        self._create_legacy_tables()
+        session = PracticeSession.objects.create(
+            timestamp="2026-06-14T12:00:00",
+            script_name="Timed Drill",
+            script_text="clear practice text",
+            audio_path="recording.txt",
+            transcript="clear practice text",
+            segments='[{"text": "clear practice", "start": 1.25, "end": 2.5}, {"text": "text", "start": 2.5, "end": 3.0}]',
+        )
+
+        response = self.client.get(reverse("practice:session_detail", args=[session.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "data-timed-transcript")
+        self.assertContains(response, 'data-start="1.250"')
+
+    def test_session_report_exports_markdown(self):
+        self._create_legacy_tables()
+        session = PracticeSession.objects.create(
+            timestamp="2026-06-14T12:00:00",
+            script_name="Report Drill",
+            script_text="clear practice text",
+            audio_path="recording.txt",
+            transcript="clear text",
+            wer=0.3,
+            clarity=0.7,
+            score=3.0,
+        )
+        SessionError.objects.create(
+            session_id=session.pk,
+            timestamp=session.timestamp,
+            script_name=session.script_name,
+            ref_token="practice",
+            op="del",
+            error_kind="word_missing",
+        )
+
+        response = self.client.get(reverse("practice:session_report", args=[session.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "text/markdown; charset=utf-8")
+        self.assertContains(response, "# SpeechPractice Report: Report Drill")
+        self.assertContains(response, "word_missing")
+
     def test_generated_card_drill_updates_card_review_schedule(self):
         self._create_legacy_tables()
         card = ImprovementCard.objects.create(
@@ -615,6 +662,57 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(ScoringJob.objects.count(), 1)
         enqueue.assert_called_once()
+
+    def test_free_speak_post_queues_transcription_only_job(self):
+        script = PracticeScript.objects.create(
+            title="Unused Drill",
+            body="this text is not required",
+            source=PracticeScript.SOURCE_USER,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "free.txt"
+            path.write_text("free speech transcript", encoding="utf-8")
+            with path.open("rb") as upload:
+                with patch("practice.views.enqueue_scoring_job"):
+                    response = self.client.post(
+                        reverse("practice:practice"),
+                        {
+                            "mode": "free_speak",
+                            "script": script.pk,
+                            "provider": "uploaded_transcript",
+                            "audio": upload,
+                        },
+                    )
+
+        self.assertEqual(response.status_code, 302)
+        job = ScoringJob.objects.get()
+        self.assertEqual(job.mode, ScoringJob.MODE_FREE)
+        self.assertEqual(job.script_name, "Free Speak")
+        self.assertEqual(job.script_text, "")
+
+    def test_free_speak_job_saves_unscored_history_entry(self):
+        self._create_legacy_tables()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "free.txt"
+            path.write_text("free speech transcript", encoding="utf-8")
+            job = ScoringJob.objects.create(
+                script_name="Free Speak",
+                script_text="",
+                audio_path=str(path),
+                provider="uploaded_transcript",
+                mode=ScoringJob.MODE_FREE,
+            )
+
+            with patch("practice.services.jobs.refresh_improvement_cards") as refresh:
+                processed = process_scoring_job(job.pk)
+
+        self.assertEqual(processed.status, ScoringJob.STATUS_SUCCEEDED)
+        session = PracticeSession.objects.get()
+        self.assertEqual(session.script_name, "Free Speak")
+        self.assertEqual(session.transcript, "free speech transcript")
+        self.assertIsNone(session.score)
+        refresh.assert_not_called()
 
     def test_practice_post_preserves_explicit_card_context(self):
         card = ImprovementCard.objects.create(
@@ -699,7 +797,19 @@ class PracticeWebTests(TransactionTestCase):
                 "openai_script_model": "gpt-5.4-mini",
                 "anthropic_script_model": "claude-sonnet-4-6",
                 "openai_transcription_model": "whisper-1",
+                "whisper_model_name": "small.en",
+                "whisper_device": "cpu",
+                "whisper_preset": "fast_cpu",
+                "whisper_language": "en",
+                "whisper_timestamps": "on",
+                "whisper_beam_size": 1,
+                "whisper_temperature": 0.0,
+                "whisper_no_speech_threshold": 0.25,
+                "whisper_condition_on_previous_text": "on",
+                "whisper_chunk_seconds": 90,
                 "autumn_base_url": "https://autumn.example.test",
+                "autumn_project": "Speech Practice",
+                "autumn_subprojects_text": "Drills, Review",
                 "openai_api_key": "sk-test",
                 "anthropic_api_key": "ak-test",
                 "autumn_token": "autumn-test",
@@ -711,6 +821,11 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(settings_obj.transcription_provider, "openai")
         self.assertEqual(settings_obj.openai_script_model, "gpt-5.4-mini")
         self.assertEqual(settings_obj.anthropic_script_model, "claude-sonnet-4-6")
+        self.assertEqual(settings_obj.whisper_model_name, "small.en")
+        self.assertEqual(settings_obj.whisper_preset, "fast_cpu")
+        self.assertEqual(settings_obj.whisper_chunk_seconds, 90)
+        self.assertEqual(settings_obj.autumn_project, "Speech Practice")
+        self.assertEqual(settings_obj.autumn_subprojects, ["Drills", "Review"])
         self.assertEqual(settings_obj.get_secret("openai_api_key"), "sk-test")
         self.assertEqual(settings_obj.get_secret("anthropic_api_key"), "ak-test")
         self.assertEqual(settings_obj.get_secret("autumn_token"), "autumn-test")
@@ -721,6 +836,27 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "GPT-5.5")
         self.assertContains(response, "Claude Sonnet 4.6")
+        self.assertContains(response, "Local Whisper tuning")
+
+    def test_progress_page_renders_filters_and_chart_data(self):
+        self._create_legacy_tables()
+        PracticeSession.objects.create(
+            timestamp="2026-06-14T12:00:00",
+            script_name="Progress Drill",
+            script_text="clear practice text",
+            audio_path="recording.txt",
+            transcript="clear practice text",
+            wer=0.0,
+            clarity=1.0,
+            score=5.0,
+        )
+
+        response = self.client.get(reverse("practice:progress"), {"script": "Progress Drill"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Progress tracker")
+        self.assertContains(response, 'data-progress-chart="score"')
+        self.assertContains(response, "Progress Drill")
 
     def _create_legacy_tables(self):
         existing = set(connection.introspection.table_names())

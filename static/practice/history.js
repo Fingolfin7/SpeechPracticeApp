@@ -6,6 +6,7 @@
 
   const audio = player.querySelector("[data-history-audio]");
   const canvas = player.querySelector("[data-waveform]");
+  const timedTranscript = document.querySelector("[data-timed-transcript]");
   if (!audio || !canvas) {
     return;
   }
@@ -13,6 +14,7 @@
   const ctx = canvas.getContext("2d");
   let waveformBuffer = null;
   let audioContext = null;
+  let activeSegment = null;
   canvas.dataset.seekReady = "true";
 
   function drawEmpty(message) {
@@ -61,6 +63,29 @@
     ctx.fillRect(Math.max(0, x - 1), 0, 3, canvas.height);
   }
 
+  function setActiveTranscriptSegment() {
+    if (!timedTranscript) {
+      return;
+    }
+    const current = audio.currentTime || 0;
+    const next = Array.from(timedTranscript.querySelectorAll("[data-start][data-end]")).find((segment) => {
+      const start = Number(segment.dataset.start || 0);
+      const end = Number(segment.dataset.end || start);
+      return current >= start - 0.05 && current <= end + 0.05;
+    });
+    if (next === activeSegment) {
+      return;
+    }
+    if (activeSegment) {
+      activeSegment.classList.remove("is-active");
+    }
+    activeSegment = next || null;
+    if (activeSegment) {
+      activeSegment.classList.add("is-active");
+      activeSegment.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
   async function loadWaveform() {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) {
@@ -79,6 +104,7 @@
       audio.addEventListener("timeupdate", function () {
         drawWaveform(waveformBuffer);
         drawPlayhead();
+        setActiveTranscriptSegment();
       });
     } catch (error) {
       drawEmpty("Waveform unavailable. Audio controls still work.");
@@ -118,6 +144,31 @@
 
   canvas.addEventListener("pointerdown", seekAndPlay);
   canvas.addEventListener("click", seekAndPlay);
+
+  if (timedTranscript) {
+    timedTranscript.addEventListener("click", function (event) {
+      const segment = event.target.closest("[data-start]");
+      if (!segment || !audio.duration || Number.isNaN(audio.duration)) {
+        return;
+      }
+      audio.currentTime = Number(segment.dataset.start || 0);
+      setActiveTranscriptSegment();
+      audio.play();
+    });
+    timedTranscript.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      const segment = event.target.closest("[data-start]");
+      if (!segment) {
+        return;
+      }
+      event.preventDefault();
+      audio.currentTime = Number(segment.dataset.start || 0);
+      setActiveTranscriptSegment();
+      audio.play();
+    });
+  }
 
   loadWaveform();
 })();

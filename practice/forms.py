@@ -63,6 +63,7 @@ class PracticeRunForm(forms.Form):
     ]
 
     mode = forms.ChoiceField(
+        required=False,
         choices=MODE_CHOICES,
         initial=MODE_SCRIPT,
         widget=forms.RadioSelect,

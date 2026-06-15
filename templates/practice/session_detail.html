@@ -8,6 +8,7 @@
   <p>{{ session.timestamp }}</p>
   <div class="action-row">
     <a class="button-link" href="#edit-transcript">Edit transcript</a>
+    <a class="button-link" href="{% url 'practice:session_report' session.pk %}">Export report</a>
     <form method="post">
       {% csrf_token %}
       <input type="hidden" name="action" value="clear_transcript">
@@ -30,10 +31,10 @@
 
 {% if has_audio %}
 <section class="panel history-player" data-history-player>
-  <div class="panel-heading">
-    <p class="eyebrow">Replay</p>
-    <span>Click waveform to seek and play</span>
-  </div>
+    <div class="panel-heading">
+      <p class="eyebrow">Replay</p>
+      <span>{% if highlighted.has_timed_transcript %}Click waveform or transcript to seek{% else %}Click waveform to seek and play{% endif %}</span>
+    </div>
   <audio controls preload="metadata" src="{% url 'practice:session_audio' session.pk %}" data-history-audio></audio>
   <canvas class="waveform" width="1100" height="140" data-waveform></canvas>
 </section>
@@ -56,8 +57,9 @@
       <span class="legend-chip legend-insert">inserted word</span>
       <span class="legend-chip legend-char-insert">inserted letters</span>
       <span class="legend-chip legend-replace">replacement</span>
+      {% if highlighted.has_timed_transcript %}<span class="legend-chip legend-playhead">playhead</span>{% endif %}
     </div>
-    <div class="script-reader compact highlighted-reader">{{ highlighted.transcript_html }}</div>
+    <div class="script-reader compact highlighted-reader timed-transcript" data-timed-transcript>{{ highlighted.timed_transcript_html }}</div>
   </article>
 </section>
 

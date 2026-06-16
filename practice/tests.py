@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import db as legacy_db
@@ -16,6 +17,8 @@ from django.utils import timezone
 from .models import (
     GeneratedPracticeScript,
     ImprovementCard,
+    PracticeLadder,
+    PracticeLadderStep,
     PracticeReview,
     PracticeScript,
     PracticeSettings,
@@ -26,7 +29,13 @@ from .models import (
 from .services.jobs import create_scoring_job, process_scoring_job
 from .services.scoring import score_transcript
 from .services.script_import import import_script_items, parse_csv_text, parse_json_text
-from .services.script_generation import generate_local_template, parse_generated_script, script_generation_provider_choices
+from .services.script_generation import (
+    _stream_response_text,
+    generate_local_template,
+    parse_generated_ladder,
+    parse_generated_script,
+    script_generation_provider_choices,
+)
 from .services.analytics import build_card_candidates, today_queue
 from .services.transcription import TranscriptResult, UploadedTranscriptProvider
 
@@ -56,7 +65,7 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Reading scripts")
-        self.assertContains(response, "Drills")
+        self.assertContains(response, "Ladders / Drills")
         self.assertContains(response, "Breath Reading")
         self.assertContains(response, "User uploaded readings")
         self.assertContains(response, "Uploaded Reading")
@@ -65,6 +74,8 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "Delete")
 
         drill_response = self.client.get(reverse("practice:scripts"), {"kind": "drill"})
+        self.assertContains(drill_response, "Practice ladders")
+        self.assertContains(drill_response, "Generate ladder")
         self.assertContains(drill_response, "AI generated drills")
         self.assertContains(drill_response, "Generated Drill")
         self.assertNotContains(drill_response, "Breath Reading")
@@ -319,6 +330,38 @@ class PracticeWebTests(TransactionTestCase):
         self.assertIn("Thin things thrive", body)
         self.assertNotIn("TITLE:", body)
 
+    def test_generated_ladder_parser_handles_json_output(self):
+        title, theme, levels = parse_generated_ladder(
+            """
+            {
+              "title": "Rainy R Ladder",
+              "theme": "R practice in a rainy noir scene",
+              "levels": [
+                {"level": 1, "title": "Warm-Up", "focus": ["R"], "lines": ["red rain", "round room"]},
+                {"level": 2, "title": "Contrast", "focus": ["R"], "lines": ["rare river runs"]}
+              ]
+            }
+            """,
+            fallback_title="Fallback",
+        )
+
+        self.assertEqual(title, "Rainy R Ladder")
+        self.assertIn("rainy noir", theme)
+        self.assertEqual(levels[0].level, 1)
+        self.assertIn("red rain", levels[0].body)
+        self.assertEqual(levels[0].focus, ("R",))
+
+    def test_codex_stream_response_text_collects_deltas(self):
+        event_stream = iter(
+            [
+                SimpleNamespace(type="response.output_text.delta", delta='{"title":"'),
+                SimpleNamespace(type="response.output_text.delta", delta='Streamed Ladder"}'),
+                SimpleNamespace(type="response.completed", response=None),
+            ]
+        )
+
+        self.assertEqual(_stream_response_text(event_stream), '{"title":"Streamed Ladder"}')
+
     def test_script_generation_provider_choices_include_offline_default(self):
         choices = dict(script_generation_provider_choices())
 
@@ -420,7 +463,7 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(quick_response, "Practice drill:")
         self.assertNotContains(quick_response, "Reading Only")
 
-    def test_quick_practice_page_surfaces_cards_and_builtin_drills(self):
+    def test_quick_practice_page_runs_selected_ladder_without_generation_controls(self):
         card = ImprovementCard.objects.create(
             title="Word focus: crisp",
             kind=ImprovementCard.KIND_WORD,
@@ -436,7 +479,7 @@ class PracticeWebTests(TransactionTestCase):
             source=PracticeScript.SOURCE_GENERATED,
         )
         GeneratedPracticeScript.objects.create(card=card, script=generated)
-        PracticeScript.objects.create(
+        builtin = PracticeScript.objects.create(
             title="Tongue Twister Level 1: Warm-Up",
             body="Big brown bear.",
             practice_kind=PracticeScript.KIND_DRILL,
@@ -444,16 +487,114 @@ class PracticeWebTests(TransactionTestCase):
             source_ref="builtin:speech-drills:tongue-twister-level-1",
             difficulty=1,
         )
+        ladder = PracticeLadder.objects.create(
+            title="Built-in Tongue Twister Ladder",
+            theme="From warm-up to mastery",
+            source=PracticeLadder.SOURCE_BUILTIN,
+        )
+        PracticeLadderStep.objects.create(
+            ladder=ladder,
+            script=builtin,
+            level=1,
+            title="Warm-Up",
+            focus=["tongue-twister"],
+        )
 
         response = self.client.get(reverse("practice:practice"), {"mode": "quick"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Work the next rough edges")
+        self.assertContains(response, "Run a drill ladder")
+        self.assertContains(response, "Manage ladders")
+        self.assertContains(response, "Drill ladder")
+        self.assertContains(response, "data-ladder-select")
+        self.assertContains(response, "Tongue Twister Level 1: Warm-Up")
+        self.assertNotContains(response, "Generate drill")
+        self.assertNotContains(response, "Generate ladder")
+
+    def test_drill_library_shows_ladders_and_focus_card_picker(self):
+        card = ImprovementCard.objects.create(
+            title="Word focus: crisp",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="crisp",
+            prompt="Practice crisp endings.",
+            mastery=0.25,
+            due_at=timezone.now() - timezone.timedelta(minutes=10),
+        )
+        later_card = ImprovementCard.objects.create(
+            title="Phrase focus: slow rain",
+            kind=ImprovementCard.KIND_PHRASE,
+            target_key="slow rain",
+            prompt="Practice slow rain in phrases.",
+            mastery=0.7,
+            due_at=timezone.now() + timezone.timedelta(days=3),
+        )
+        script = PracticeScript.objects.create(
+            title="Crisp Ladder Level 1",
+            body="crisp clips click cleanly",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+        )
+        ladder = PracticeLadder.objects.create(
+            title="Crisp Courtroom Ladder",
+            theme="Crisp endings in a courtroom drama.",
+            source=PracticeLadder.SOURCE_GENERATED,
+            model_provider="local_template",
+            auth_source="local",
+        )
+        ladder.cards.add(card)
+        PracticeLadderStep.objects.create(
+            ladder=ladder,
+            script=script,
+            level=1,
+            title="Opening statement",
+            focus=["crisp"],
+        )
+
+        response = self.client.get(reverse("practice:scripts"), {"kind": "drill"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Ladders / Drills")
+        self.assertContains(response, "Use selected focus cards")
         self.assertContains(response, "Word focus: crisp")
-        self.assertContains(response, "Use latest drill")
-        self.assertContains(response, "Generate drill")
-        self.assertContains(response, "Built-in ladder")
-        self.assertContains(response, "Latest crisp drill")
+        self.assertContains(response, "Phrase focus: slow rain")
+        self.assertContains(response, "Crisp Courtroom Ladder")
+        self.assertContains(response, "Crisp endings in a courtroom drama.")
+        self.assertContains(response, 'name="cards" value="%s"' % card.pk)
+        self.assertContains(response, 'name="cards" value="%s"' % later_card.pk)
+
+    def test_generate_ladder_view_creates_steps_and_auth_metadata(self):
+        cards = [
+            ImprovementCard.objects.create(
+                title=f"Sound pattern: R {idx}",
+                kind=ImprovementCard.KIND_SOUND,
+                target_key=f"R{idx}",
+                prompt="Practice R without dropping endings.",
+                mastery=0.2,
+            )
+            for idx in range(1, 6)
+        ]
+
+        response = self.client.post(
+            reverse("practice:generate_ladder"),
+            {
+                "provider": "local_template",
+                "theme": "courtroom drama",
+                "cards": [str(card.pk) for card in cards],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        ladder = PracticeLadder.objects.get(source=PracticeLadder.SOURCE_GENERATED)
+        self.assertIn("courtroom drama", ladder.theme)
+        self.assertEqual(ladder.auth_source, "local")
+        self.assertEqual(ladder.cards.count(), 5)
+        self.assertEqual(ladder.steps.count(), 5)
+        self.assertEqual(PracticeScript.objects.filter(source_ref__startswith=f"ladder:{ladder.pk}:").count(), 5)
+        self.assertEqual(
+            GeneratedPracticeScript.objects.filter(card__in=cards, auth_source="local").count(),
+            25,
+        )
+        self.assertIn(f"ladder={ladder.pk}", response["Location"])
 
     def test_script_preview_endpoint_returns_metadata(self):
         script = PracticeScript.objects.create(
@@ -917,6 +1058,7 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(response.status_code, 302)
         record = GeneratedPracticeScript.objects.get(card=card)
         self.assertEqual(record.model_provider, "local_template")
+        self.assertEqual(record.auth_source, "local")
         self.assertEqual(record.script.practice_kind, PracticeScript.KIND_DRILL)
         self.assertEqual(record.script.source_ref, f"card:{card.pk}")
         self.assertIn("mode=quick", response["Location"])

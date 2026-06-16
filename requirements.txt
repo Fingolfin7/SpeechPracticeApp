@@ -4,8 +4,9 @@ sounddevice>=0.4
 numpy>=1.24
 pyqtgraph>=0.13
 openai-whisper>=20231117
+# Cloud generation providers:
+openai>=1.66
 # Optional cloud providers:
-# openai>=1.0
 # anthropic>=0.30
 jiwer>=3.0
 SQLAlchemy>=1.4

@@ -1089,8 +1089,13 @@ select {
   box-shadow: inset 4px 0 0 rgba(56, 88, 199, 0.22);
 }
 
+.practice-workbench.is-quick-practice .script-picker-tools,
+.practice-workbench.is-quick-practice .field-row:has(select[name="script"]) {
+  display: none;
+}
+
 .quick-panel-heading,
-.builtin-drill-strip {
+.ladder-main {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -1156,24 +1161,44 @@ select {
   font-size: 14px;
 }
 
-.builtin-drill-strip {
+.ladder-panel {
+  display: grid;
+  gap: 12px;
   padding: 12px;
   border: 1px solid rgba(36, 31, 26, 0.12);
   border-radius: 8px;
   background: #f2e3cf;
 }
 
-.builtin-drill-strip p {
+.ladder-panel h3,
+.ladder-panel p {
+  margin: 0;
+}
+
+.ladder-panel h3 {
+  font-size: 18px;
+}
+
+.ladder-panel small,
+.ladder-theme {
+  color: var(--muted);
+}
+
+.ladder-main select {
+  max-width: 320px;
+}
+
+.ladder-panel .eyebrow {
   margin-bottom: 2px;
 }
 
-.builtin-drill-links {
+.ladder-level-links {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
 }
 
-.builtin-drill-links a {
+.ladder-level-links a {
   display: grid;
   place-items: center;
   width: 34px;
@@ -1185,6 +1210,122 @@ select {
   font-family: Georgia, serif;
   font-weight: 700;
   text-decoration: none;
+}
+
+.ladder-level-links a.is-active {
+  background: var(--accent);
+  color: #fffaf0;
+  border-color: var(--accent-dark);
+}
+
+.ladder-library-panel {
+  display: grid;
+  gap: 16px;
+  margin: 0 0 18px;
+  padding: 18px;
+  border: 1px solid rgba(36, 31, 26, 0.14);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 250, 240, 0.94), rgba(242, 227, 207, 0.78));
+  box-shadow: inset 4px 0 0 rgba(15, 118, 110, 0.18);
+}
+
+.ladder-library-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.ladder-builder,
+.ladder-row {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(36, 31, 26, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.84);
+}
+
+.ladder-builder h3 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.ladder-builder p,
+.ladder-row p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.ladder-card-picker {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  max-height: 310px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.ladder-card-picker label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  padding: 9px 10px;
+  border: 1px solid rgba(36, 31, 26, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.ladder-card-picker strong,
+.ladder-card-picker small,
+.ladder-row strong,
+.ladder-row small {
+  display: block;
+}
+
+.ladder-card-picker small,
+.ladder-row small {
+  color: var(--muted);
+}
+
+.ladder-builder-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(180px, 0.75fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding-top: 10px;
+  border-top: 1px solid rgba(36, 31, 26, 0.12);
+}
+
+.ladder-builder-controls > div {
+  display: grid;
+  gap: 6px;
+}
+
+.ladder-builder-controls label {
+  color: var(--ember);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ladder-builder-controls button {
+  white-space: nowrap;
+}
+
+.ladder-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ladder-row-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
 }
 
 .secondary-button {
@@ -2060,16 +2201,27 @@ select {
   .progress-grid,
   .progress-filters form,
   .mode-picker,
-  .quick-card-grid {
+  .quick-card-grid,
+  .ladder-library-grid {
     grid-template-columns: 1fr;
   }
 
   .script-source-heading,
   .quick-panel-heading,
-  .builtin-drill-strip,
+  .ladder-main,
+  .ladder-row-head,
   .script-row-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .ladder-main select,
+  .ladder-builder-controls {
+    width: 100%;
+  }
+
+  .ladder-builder-controls {
+    grid-template-columns: 1fr;
   }
 
   .progress-filters {

@@ -19,7 +19,18 @@ from django.views.decorators.http import require_POST
 from autumn_client import AutumnClient, AutumnError
 
 from .forms import AccountSettingsForm, BulkScriptImportForm, PracticeRunForm, PracticeScriptForm, TranscriptEditForm
-from .models import GeneratedPracticeScript, ImprovementCard, PracticeReview, PracticeScript, PracticeSession, PracticeSettings, ScoringJob, SessionError
+from .models import (
+    GeneratedPracticeScript,
+    ImprovementCard,
+    PracticeLadder,
+    PracticeLadderStep,
+    PracticeReview,
+    PracticeScript,
+    PracticeSession,
+    PracticeSettings,
+    ScoringJob,
+    SessionError,
+)
 from .services.analytics import (
     active_scoring_jobs,
     dashboard_stats,
@@ -46,7 +57,11 @@ from .services.codex_auth import (
 )
 from .services.session_display import audio_exists, highlighted_session_text, session_segments
 from .services.script_import import import_script_items, parse_script_upload
-from .services.script_generation import generate_script_draft, script_generation_provider_choices
+from .services.script_generation import (
+    generate_ladder_draft,
+    generate_script_draft,
+    script_generation_provider_choices,
+)
 from .services.transcription import TranscriptResult
 from .services.transcription import clear_local_whisper_cache, provider_label
 
@@ -95,12 +110,15 @@ def progress(request):
 
 def practice_run(request):
     quick_queue = today_queue(limit=4)
-    builtin_drills = _builtin_drills(limit=5)
+    practice_ladders = _practice_ladders()
     requested_mode = request.POST.get("mode") if request.method == "POST" else request.GET.get("mode")
     if not requested_mode and request.method == "GET" and request.GET.get("card"):
         requested_mode = PracticeRunForm.MODE_QUICK
     mode = requested_mode or PracticeRunForm.MODE_SCRIPT
     script_kind = _script_kind_for_mode(mode)
+    selected_ladder = None
+    ladder_steps: list[PracticeLadderStep] = []
+    selected_ladder_step = None
     if request.method == "POST":
         form = PracticeRunForm(request.POST, request.FILES, script_kind=script_kind)
         if form.is_valid():
@@ -136,6 +154,8 @@ def practice_run(request):
     else:
         script_id = request.GET.get("script")
         card_id = request.GET.get("card")
+        requested_ladder_id = request.GET.get("ladder")
+        requested_level = _positive_int(request.GET.get("level"))
         initial_card = None
         initial_script = None
         if card_id:
@@ -153,11 +173,25 @@ def practice_run(request):
                 ).first()
             if initial_script is None and initial_card is not None:
                 initial_script = _latest_script_for_card(initial_card)
+            selected_ladder = _select_ladder_for_request(
+                practice_ladders,
+                requested_ladder_id=requested_ladder_id,
+                script=initial_script,
+            )
+            if selected_ladder is not None:
+                ladder_steps = _ladder_steps(selected_ladder)
+                selected_ladder_step = _select_ladder_step(
+                    ladder_steps,
+                    requested_level=requested_level,
+                    script=initial_script,
+                )
+                if initial_script is None and selected_ladder_step is not None:
+                    initial_script = selected_ladder_step.script
             if initial_script is None and quick_queue:
                 initial_card = quick_queue[0].card
                 initial_script = quick_queue[0].script
             if initial_script is None:
-                initial_script = builtin_drills[0] if builtin_drills else None
+                initial_script = _first_builtin_drill()
         elif script_id:
             initial_script = PracticeScript.objects.filter(
                 pk=script_id,
@@ -189,12 +223,20 @@ def practice_run(request):
     card_value = form["card"].value()
     if card_value:
         focus_card = ImprovementCard.objects.filter(pk=card_value).first()
+    if mode == PracticeRunForm.MODE_QUICK and selected_ladder is None and selected_script is not None:
+        selected_ladder = _select_ladder_for_request(practice_ladders, script=selected_script)
+        if selected_ladder is not None:
+            ladder_steps = _ladder_steps(selected_ladder)
+            selected_ladder_step = _select_ladder_step(ladder_steps, script=selected_script)
     context = {
         "form": form,
         "selected_script": selected_script,
         "focus_card": focus_card,
         "quick_queue": quick_queue,
-        "builtin_drills": builtin_drills,
+        "practice_ladders": practice_ladders,
+        "selected_ladder": selected_ladder,
+        "ladder_steps": ladder_steps,
+        "selected_ladder_step": selected_ladder_step,
         "generation_provider_choices": script_generation_provider_choices(),
     }
     return render(request, "practice/practice_run.html", context)
@@ -429,7 +471,7 @@ def script_list(request):
     kind_tabs = [
         {
             "value": value,
-            "label": "Reading scripts" if value == PracticeScript.KIND_READING else "Drills",
+            "label": "Reading scripts" if value == PracticeScript.KIND_READING else "Ladders / Drills",
             "count": kind_counts.get(value, 0),
             "active": kind_filter == value,
         }
@@ -455,6 +497,10 @@ def script_list(request):
             "total_count": total_count,
             "source_groups": groups,
             "source_tabs": source_tabs,
+            "practice_ladders": _practice_ladders() if kind_filter == PracticeScript.KIND_DRILL else [],
+            "ladder_candidate_cards": _ladder_candidate_cards() if kind_filter == PracticeScript.KIND_DRILL else [],
+            "default_ladder_card_ids": _default_ladder_card_ids() if kind_filter == PracticeScript.KIND_DRILL else set(),
+            "generation_provider_choices": script_generation_provider_choices(),
         },
     )
 
@@ -612,12 +658,102 @@ def generate_script_for_card(request, pk: int):
         card=card,
         script=script,
         model_provider=draft.provider,
+        auth_source=draft.auth_source,
         prompt_snapshot=draft.prompt_snapshot,
     )
-    messages.success(request, "Generated a starter practice script for this card.")
+    messages.success(
+        request,
+        f"Generated a starter practice script for this card using {_generation_source_label(draft.provider, draft.auth_source)}.",
+    )
     if request.POST.get("next") == "practice":
         return redirect(f"{reverse('practice:practice')}?mode=quick&script={script.pk}&card={card.pk}")
     return redirect("practice:scripts")
+
+
+@require_POST
+def generate_practice_ladder(request):
+    provider = request.POST.get("provider") or None
+    theme = (request.POST.get("theme") or "").strip()[:512]
+    cards = _cards_for_ladder_generation(request.POST.getlist("cards"))
+    if not cards:
+        messages.error(request, "Add or refresh improvement cards before generating a practice ladder.")
+        return redirect(f"{reverse('practice:practice')}?mode=quick")
+
+    try:
+        draft = generate_ladder_draft(cards, theme=theme, provider_name=provider)
+    except Exception as exc:
+        messages.error(request, f"Practice ladder generation failed: {exc}")
+        return redirect(f"{reverse('practice:practice')}?mode=quick")
+
+    ladder = PracticeLadder.objects.create(
+        title=draft.title,
+        theme=draft.theme or theme,
+        source=PracticeLadder.SOURCE_GENERATED,
+        source_ref="cards:" + ",".join(str(card.pk) for card in cards),
+        model_provider=draft.provider,
+        auth_source=draft.auth_source,
+        prompt_snapshot=draft.prompt_snapshot,
+    )
+    ladder.cards.set(cards)
+    target_patterns = [
+        {"kind": card.kind, "target": card.target_key}
+        for card in cards
+        if card.target_key
+    ]
+    created_steps = []
+    used_levels: set[int] = set()
+    for level_draft in sorted(draft.levels, key=lambda item: item.level)[:5]:
+        requested_level = max(1, min(5, int(level_draft.level or len(created_steps) + 1)))
+        level = requested_level if requested_level not in used_levels else 0
+        if not level:
+            level = next(candidate for candidate in range(1, 6) if candidate not in used_levels)
+        used_levels.add(level)
+        tags = _unique_tags(
+            ["generated-ladder", f"level-{level}", *level_draft.focus]
+            + [card.target_key for card in cards if card.target_key]
+        )
+        script = PracticeScript.objects.create(
+            title=f"{ladder.title}: {level_draft.title}",
+            body=level_draft.body,
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+            source_ref=f"ladder:{ladder.pk}:level:{level}",
+            tags=tags,
+            target_patterns=target_patterns,
+            difficulty=level,
+        )
+        step = PracticeLadderStep.objects.create(
+            ladder=ladder,
+            script=script,
+            level=level,
+            title=level_draft.title,
+            focus=list(level_draft.focus),
+        )
+        created_steps.append(step)
+        for card in cards:
+            GeneratedPracticeScript.objects.create(
+                card=card,
+                script=script,
+                model_provider=draft.provider,
+                auth_source=draft.auth_source,
+                prompt_snapshot=draft.prompt_snapshot,
+            )
+
+    if not created_steps:
+        ladder.delete()
+        messages.error(request, "Practice ladder generation did not return any usable levels.")
+        return redirect(f"{reverse('practice:practice')}?mode=quick")
+
+    first_step = sorted(created_steps, key=lambda item: item.level)[0]
+    messages.success(
+        request,
+        f"Generated a five-step practice ladder using {_generation_source_label(draft.provider, draft.auth_source)}.",
+    )
+    if request.POST.get("next") == "scripts":
+        return redirect(f"{reverse('practice:scripts')}?kind=drill")
+    return redirect(
+        f"{reverse('practice:practice')}?mode=quick&ladder={ladder.pk}&level={first_step.level}&script={first_step.script_id}"
+    )
 
 
 def account_settings(request):
@@ -737,6 +873,133 @@ def _latest_script_for_card(card: ImprovementCard) -> PracticeScript | None:
         .first()
     )
     return generated.script if generated and generated.script else None
+
+
+def _practice_ladders() -> list[PracticeLadder]:
+    return list(
+        PracticeLadder.objects.filter(active=True)
+        .prefetch_related("cards", "steps__script")
+        .order_by("source", "-created_at", "title")
+    )
+
+
+def _select_ladder_for_request(
+    ladders: list[PracticeLadder],
+    requested_ladder_id: str | None = None,
+    script: PracticeScript | None = None,
+) -> PracticeLadder | None:
+    if requested_ladder_id:
+        for ladder in ladders:
+            if str(ladder.pk) == str(requested_ladder_id):
+                return ladder
+    if script is not None:
+        step = (
+            PracticeLadderStep.objects.select_related("ladder")
+            .filter(script=script, ladder__active=True)
+            .order_by("ladder__source", "-ladder__created_at", "level")
+            .first()
+        )
+        if step is not None:
+            return step.ladder
+    return ladders[0] if ladders else None
+
+
+def _ladder_steps(ladder: PracticeLadder) -> list[PracticeLadderStep]:
+    return list(
+        ladder.steps.select_related("script")
+        .filter(script__active=True)
+        .order_by("level")
+    )
+
+
+def _select_ladder_step(
+    steps: list[PracticeLadderStep],
+    requested_level: int | None = None,
+    script: PracticeScript | None = None,
+) -> PracticeLadderStep | None:
+    if script is not None:
+        for step in steps:
+            if step.script_id == script.pk:
+                return step
+    if requested_level is not None:
+        for step in steps:
+            if step.level == requested_level:
+                return step
+    return steps[0] if steps else None
+
+
+def _first_builtin_drill() -> PracticeScript | None:
+    return (
+        PracticeScript.objects.filter(
+            active=True,
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_BUILTIN,
+            source_ref__startswith="builtin:speech-drills:",
+        )
+        .order_by("difficulty", "title")
+        .first()
+    )
+
+
+def _cards_for_ladder_generation(card_ids: list[str]) -> list[ImprovementCard]:
+    if card_ids:
+        ids = [_positive_int(raw) for raw in card_ids]
+        id_order = [card_id for card_id in ids if card_id]
+        cards = list(
+            ImprovementCard.objects.exclude(status=ImprovementCard.STATUS_PAUSED).filter(
+                pk__in=id_order,
+            )
+        )
+        cards_by_id = {card.pk: card for card in cards}
+        ordered = [cards_by_id[card_id] for card_id in id_order if card_id in cards_by_id]
+        if ordered:
+            return ordered
+    return [item.card for item in today_queue(limit=4)]
+
+
+def _ladder_candidate_cards() -> list[ImprovementCard]:
+    return list(
+        ImprovementCard.objects.exclude(status=ImprovementCard.STATUS_PAUSED)
+        .order_by("due_at", "mastery", "title")[:120]
+    )
+
+
+def _default_ladder_card_ids() -> set[int]:
+    return {item.card.pk for item in today_queue(limit=4)}
+
+
+def _positive_int(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _unique_tags(tags: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for tag in tags:
+        clean = str(tag or "").strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        result.append(clean)
+    return result[:12]
+
+
+def _generation_source_label(provider: str, auth_source: str) -> str:
+    if auth_source == "codex":
+        return f"{provider} through Codex auth"
+    if auth_source == "api_key":
+        return f"{provider} with an API key"
+    if auth_source == "api_key_fallback":
+        return f"{provider} with an API key after Codex auth failed"
+    if auth_source == "local":
+        return provider
+    return provider
 
 
 def _script_kind_for_mode(mode: str | None) -> str | None:

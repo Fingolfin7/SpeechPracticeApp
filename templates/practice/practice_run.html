@@ -59,47 +59,62 @@
       <div class="quick-panel-heading">
         <div>
           <p class="eyebrow">Quick Practice</p>
-          <h2>Work the next rough edges</h2>
+          <h2>Run a drill ladder</h2>
         </div>
-        <a class="quiet-link" href="{% url 'practice:cards' %}?refresh=1">Refresh cards</a>
+        <a class="quiet-link" href="{% url 'practice:scripts' %}?kind=drill">Manage ladders</a>
       </div>
 
-      <div class="quick-card-grid">
-        {% for item in quick_queue %}
-          <article class="quick-card {% if item.is_due %}is-due{% endif %}">
-            <span class="pill">{{ item.card.get_kind_display }}</span>
-            <strong>{{ item.card.title }}</strong>
-            <p>{{ item.card.prompt }}</p>
-            <small>
-              {% if item.is_due %}Due now{% else %}Upcoming{% endif %}
-              &middot; mastery {{ item.card.mastery|floatformat:2 }}
-            </small>
-            <div class="quick-card-actions">
-              {% if item.script %}
-                <a class="button-link" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ item.script.pk }}&amp;card={{ item.card.pk }}">Use latest drill</a>
-              {% endif %}
-              <button class="secondary-button" type="submit" form="quick-generate-{{ item.card.pk }}">Generate drill</button>
-            </div>
-          </article>
-        {% empty %}
-          <article class="quick-card">
-            <strong>No priority cards yet</strong>
-            <p>Score a few sessions or refresh cards from history to create targeted practice.</p>
-            <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh cards</a>
-          </article>
-        {% endfor %}
-      </div>
-
-      <div class="builtin-drill-strip" aria-label="Built-in speech drills">
-        <div>
-          <p class="eyebrow">Built-in ladder</p>
-          <span>From warm-up to mastery</span>
+      <div class="ladder-panel" aria-label="Practice ladder">
+        <div class="ladder-main">
+          <div>
+            <p class="eyebrow">Drill ladder</p>
+            {% if selected_ladder %}
+              <h3>{{ selected_ladder.title }}</h3>
+              <small>
+                {{ selected_ladder.get_source_display }}
+                {% if selected_ladder.model_provider %}&middot; {{ selected_ladder.model_provider }}{% endif %}
+                {% if selected_ladder.auth_source %}&middot; {{ selected_ladder.auth_source }} auth{% endif %}
+              </small>
+            {% else %}
+              <h3>No ladders yet</h3>
+              <small>Generate one from your priority cards.</small>
+            {% endif %}
+          </div>
+          <label class="sr-label" for="ladder-select">Choose ladder</label>
+          <select id="ladder-select" data-ladder-select {% if not practice_ladders %}disabled{% endif %}>
+            {% for ladder in practice_ladders %}
+              <option value="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ ladder.pk }}" {% if selected_ladder and selected_ladder.pk == ladder.pk %}selected{% endif %}>
+                {{ ladder.title }}
+              </option>
+            {% empty %}
+              <option>No practice ladders available</option>
+            {% endfor %}
+          </select>
         </div>
-        <div class="builtin-drill-links">
-          {% for drill in builtin_drills %}
-            <a href="{% url 'practice:practice' %}?mode=quick&amp;script={{ drill.pk }}">{{ drill.difficulty }}</a>
+
+        {% if selected_ladder and selected_ladder.theme %}
+          <p class="ladder-theme">{{ selected_ladder.theme }}</p>
+        {% endif %}
+
+        {% if selected_ladder %}
+          <div class="script-tags" aria-label="Ladder focus cards">
+            {% for card in selected_ladder.cards.all %}
+              <span>{{ card.title }}</span>
+            {% empty %}
+              <span>General ladder</span>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        <div class="ladder-level-links" aria-label="Ladder levels">
+          {% for step in ladder_steps %}
+            <a
+              class="{% if selected_ladder_step and selected_ladder_step.pk == step.pk %}is-active{% endif %}"
+              href="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ selected_ladder.pk }}&amp;level={{ step.level }}&amp;script={{ step.script.pk }}"
+              title="{{ step.title }}"
+            >{{ step.level }}</a>
           {% empty %}
-            <span class="empty">Run migrations to load built-in drills.</span>
+            <span class="empty">Run migrations or generate a ladder to load levels.</span>
           {% endfor %}
         </div>
       </div>
@@ -221,12 +236,5 @@
   </aside>
 </form>
 
-<script src="{% static 'practice/recorder.js' %}?v=8"></script>
-
-{% for item in quick_queue %}
-  <form id="quick-generate-{{ item.card.pk }}" method="post" action="{% url 'practice:generate_script' item.card.pk %}" hidden>
-    {% csrf_token %}
-    <input type="hidden" name="next" value="practice">
-  </form>
-{% endfor %}
+<script src="{% static 'practice/recorder.js' %}?v=9"></script>
 {% endblock %}

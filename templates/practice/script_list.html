@@ -4,7 +4,7 @@
 <section class="page-title">
   <div>
     <p class="eyebrow">Practice library</p>
-    <h1>{% if kind_filter == "drill" %}Drills{% else %}Reading scripts{% endif %}</h1>
+    <h1>{% if kind_filter == "drill" %}Ladders / Drills{% else %}Reading scripts{% endif %}</h1>
   </div>
   <div class="action-row">
     <a class="button-link" href="{% url 'practice:script_import' %}">Import corpus</a>
@@ -13,12 +13,102 @@
 </section>
 
 <nav class="kind-tabs" aria-label="Library type filters">
-  {% for tab in kind_tabs %}
+{% for tab in kind_tabs %}
     <a class="{% if tab.active %}is-active{% endif %}" href="{% url 'practice:scripts' %}?kind={{ tab.value }}">
       {{ tab.label }} <span>{{ tab.count }}</span>
     </a>
   {% endfor %}
 </nav>
+
+{% if kind_filter == "drill" %}
+  <section class="ladder-library-panel">
+    <div class="script-source-heading">
+      <div>
+        <p class="eyebrow">Practice ladders</p>
+        <h2>Build and choose drill progressions</h2>
+      </div>
+      <a class="quiet-link" href="{% url 'practice:practice' %}?mode=quick">Open Quick Practice</a>
+    </div>
+
+    <div class="ladder-library-grid">
+      <article class="ladder-builder">
+        <div>
+          <p class="eyebrow">Generate ladder</p>
+          <h3>Use selected focus cards</h3>
+          <p>Choose any active cards that should shape the next five-level practice ladder. Priority cards start checked.</p>
+        </div>
+        <form method="post" action="{% url 'practice:generate_ladder' %}">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="scripts">
+          <div class="ladder-card-picker">
+            {% for card in ladder_candidate_cards %}
+              <label>
+                <input type="checkbox" name="cards" value="{{ card.pk }}" {% if card.pk in default_ladder_card_ids %}checked{% endif %}>
+                <span>
+                  <strong>{{ card.title }}</strong>
+                  <small>{{ card.get_kind_display }} &middot; {{ card.get_status_display }} &middot; mastery {{ card.mastery|floatformat:2 }}</small>
+                </span>
+              </label>
+            {% empty %}
+              <p class="empty">Refresh cards from practice history before generating a targeted ladder.</p>
+            {% endfor %}
+          </div>
+          <div class="ladder-builder-controls">
+            <div>
+              <label for="script-ladder-theme">Theme</label>
+              <input
+                id="script-ladder-theme"
+                name="theme"
+                maxlength="512"
+                placeholder="courtroom drama, moonbase radio, rainy noir..."
+              >
+            </div>
+            <div>
+              <label for="script-ladder-provider">Generator</label>
+              <select id="script-ladder-provider" name="provider">
+                {% for value, label in generation_provider_choices %}
+                  <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <button type="submit">Generate ladder</button>
+          </div>
+        </form>
+      </article>
+
+      <div class="ladder-list">
+        {% for ladder in practice_ladders %}
+          <article class="ladder-row">
+            <div class="ladder-row-head">
+              <div>
+                <strong>{{ ladder.title }}</strong>
+                <small>
+                  {{ ladder.get_source_display }}
+                  {% if ladder.model_provider %}&middot; {{ ladder.model_provider }}{% endif %}
+                  {% if ladder.auth_source %}&middot; {{ ladder.auth_source }} auth{% endif %}
+                </small>
+              </div>
+              <a class="quiet-link" href="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ ladder.pk }}">Practice</a>
+            </div>
+            {% if ladder.theme %}<p>{{ ladder.theme }}</p>{% endif %}
+            <div class="script-tags" aria-label="Ladder focus cards">
+              {% for card in ladder.cards.all %}
+                <span>{{ card.title }}</span>
+              {% empty %}
+                <span>General ladder</span>
+              {% endfor %}
+            </div>
+          </article>
+        {% empty %}
+          <article class="ladder-row">
+            <strong>No ladders yet</strong>
+            <p>Run migrations to load the built-in ladder, or generate one from focus cards.</p>
+          </article>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+{% endif %}
 
 <nav class="source-tabs" aria-label="Script source filters">
   <a class="{% if not source_filter %}is-active{% endif %}" href="{% url 'practice:scripts' %}?kind={{ kind_filter }}">All <span>{{ total_count }}</span></a>

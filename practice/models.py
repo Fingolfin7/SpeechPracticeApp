@@ -250,11 +250,74 @@ class GeneratedPracticeScript(models.Model):
         null=True,
     )
     model_provider = models.CharField(max_length=64, default="manual")
+    auth_source = models.CharField(max_length=64, blank=True)
     prompt_snapshot = models.TextField(blank=True)
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class PracticeLadder(models.Model):
+    SOURCE_BUILTIN = PracticeScript.SOURCE_BUILTIN
+    SOURCE_USER = PracticeScript.SOURCE_USER
+    SOURCE_GENERATED = PracticeScript.SOURCE_GENERATED
+    SOURCE_CHOICES = [
+        (SOURCE_BUILTIN, "Built-in"),
+        (SOURCE_USER, "User"),
+        (SOURCE_GENERATED, "Generated"),
+    ]
+
+    title = models.CharField(max_length=255)
+    theme = models.CharField(max_length=512, blank=True)
+    source = models.CharField(max_length=32, choices=SOURCE_CHOICES, default=SOURCE_USER)
+    source_ref = models.CharField(max_length=512, blank=True)
+    model_provider = models.CharField(max_length=96, blank=True)
+    auth_source = models.CharField(max_length=64, blank=True)
+    prompt_snapshot = models.TextField(blank=True)
+    cards = models.ManyToManyField(ImprovementCard, related_name="practice_ladders", blank=True)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["source", "-created_at", "title"]
+        indexes = [
+            models.Index(fields=["source", "active"]),
+            models.Index(fields=["created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.title
+
+
+class PracticeLadderStep(models.Model):
+    ladder = models.ForeignKey(
+        PracticeLadder,
+        on_delete=models.CASCADE,
+        related_name="steps",
+    )
+    script = models.ForeignKey(
+        PracticeScript,
+        on_delete=models.CASCADE,
+        related_name="ladder_steps",
+    )
+    level = models.PositiveSmallIntegerField()
+    title = models.CharField(max_length=255)
+    focus = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["ladder", "level"]
+        constraints = [
+            models.UniqueConstraint(fields=["ladder", "level"], name="unique_ladder_level"),
+        ]
+        indexes = [
+            models.Index(fields=["ladder", "level"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.ladder}: level {self.level}"
 
 
 _FERNET = None

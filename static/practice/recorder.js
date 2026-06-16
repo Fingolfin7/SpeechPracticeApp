@@ -28,6 +28,7 @@
   const scriptMeta = document.querySelector("[data-script-meta]");
   const scriptWordCount = document.querySelector("[data-script-word-count]");
   const scriptBody = document.querySelector("[data-script-body]");
+  const ladderSelect = document.querySelector("[data-ladder-select]");
 
   let recorder = null;
   let chunks = [];
@@ -217,6 +218,14 @@
       }
       scriptSelect.value = next;
       scriptSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
+  if (ladderSelect) {
+    ladderSelect.addEventListener("change", function () {
+      if (ladderSelect.value) {
+        window.location.assign(ladderSelect.value);
+      }
     });
   }
 

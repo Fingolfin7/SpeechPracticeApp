@@ -119,6 +119,27 @@ def exchange_code_for_tokens(authorization_code: str, code_verifier: str) -> dic
     return _validate_token_bundle(response.json())
 
 
+def refresh_token_bundle(bundle: dict[str, Any]) -> dict[str, str]:
+    refresh_token = str(bundle.get("refresh_token") or "").strip()
+    if not refresh_token:
+        raise CodexAuthError("Codex login does not include a refresh token.")
+    response = requests.post(
+        f"{_issuer()}/oauth/token",
+        json={
+            "client_id": settings.CODEX_CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        },
+        headers={"Content-Type": "application/json"},
+        timeout=20,
+    )
+    if not response.ok:
+        raise CodexAuthError(f"Codex token refresh failed with status {response.status_code}.")
+    refreshed = response.json()
+    merged = {**bundle, **{key: value for key, value in refreshed.items() if value}}
+    return _validate_token_bundle(merged)
+
+
 def serialize_token_bundle(bundle: dict[str, Any]) -> str:
     return json.dumps(_validate_token_bundle(bundle), separators=(",", ":"))
 
@@ -157,6 +178,20 @@ def token_bundle_summary(bundle: dict[str, Any] | None) -> dict[str, Any]:
                 tz=dt_timezone.utc,
             ).isoformat()
     return summary
+
+
+def access_token_expires_soon(bundle: dict[str, Any], leeway_seconds: int = 300) -> bool:
+    access_token = bundle.get("access_token")
+    if not isinstance(access_token, str):
+        return True
+    payload = decode_jwt_payload(access_token)
+    if not payload:
+        return False
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return False
+    expires_at = datetime.fromtimestamp(exp, tz=dt_timezone.utc)
+    return expires_at <= datetime.now(dt_timezone.utc) + timedelta(seconds=leeway_seconds)
 
 
 def decode_jwt_payload(jwt: str) -> dict[str, Any] | None:

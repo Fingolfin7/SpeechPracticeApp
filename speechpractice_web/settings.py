@@ -116,3 +116,7 @@ ANTHROPIC_SCRIPT_MODEL_CHOICES = [
 DEFAULT_AUTUMN_BASE_URL = os.getenv("AUTUMN_BASE_URL", "http://127.0.0.1:8000")
 CODEX_CLIENT_ID = os.getenv("CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 CODEX_AUTH_ISSUER = os.getenv("CODEX_AUTH_ISSUER", "https://auth.openai.com")
+CODEX_CHATGPT_BASE_URL = os.getenv(
+    "CODEX_CHATGPT_BASE_URL",
+    "https://chatgpt.com/backend-api/codex",
+)

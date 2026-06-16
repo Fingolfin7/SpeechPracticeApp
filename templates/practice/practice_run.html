@@ -23,28 +23,36 @@
       </span>
     </div>
 
-    <div class="script-picker-tools">
-      <label for="script-search">Find a script</label>
-      <div>
-        <input id="script-search" type="search" placeholder="Search title, author, or tag" data-script-search>
-        <button class="secondary-button" type="button" data-random-script>Next random</button>
-      </div>
-    </div>
-
-    <div class="mode-picker" data-mode-picker>
-      {% for radio in form.mode %}
+    <div class="script-control-panel">
+      <div class="mode-picker" data-mode-picker aria-label="Recording mode">
         <label>
-          {{ radio.tag }}
-          <span>{{ radio.choice_label }}</span>
+          <input type="radio" name="mode" value="script" {% if form.mode.value == "script" or not form.mode.value %}checked{% endif %}>
+          <span>Script</span>
         </label>
-      {% endfor %}
-      {% if form.mode.errors %}<div class="form-error">{{ form.mode.errors }}</div>{% endif %}
-    </div>
+        <label>
+          <input type="radio" name="mode" value="quick" {% if form.mode.value == "quick" %}checked{% endif %}>
+          <span>Quick Practice</span>
+        </label>
+        <label>
+          <input type="radio" name="mode" value="free_speak" {% if form.mode.value == "free_speak" %}checked{% endif %}>
+          <span>Free Speak</span>
+        </label>
+        {% if form.mode.errors %}<div class="form-error">{{ form.mode.errors }}</div>{% endif %}
+      </div>
 
-    <div class="field-row">
-      {{ form.script.label_tag }}
-      {{ form.script }}
-      {% if form.script.errors %}<div class="form-error">{{ form.script.errors }}</div>{% endif %}
+      <div class="script-picker-tools">
+        <label for="script-search">Find a script</label>
+        <div>
+          <input id="script-search" type="search" placeholder="Search title, author, or tag" data-script-search>
+          <button class="secondary-button" type="button" data-random-script>Random</button>
+        </div>
+      </div>
+
+      <div class="field-row script-select-row">
+        {{ form.script.label_tag }}
+        {{ form.script }}
+        {% if form.script.errors %}<div class="form-error">{{ form.script.errors }}</div>{% endif %}
+      </div>
     </div>
 
     {% if selected_script %}

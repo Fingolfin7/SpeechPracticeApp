@@ -332,7 +332,7 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "data-record-play")
         self.assertContains(response, "data-record-delete")
         self.assertContains(response, "Find a script")
-        self.assertContains(response, "Next random")
+        self.assertContains(response, "Random")
         self.assertContains(response, "Free Speak")
         self.assertContains(response, "Quick Practice")
 

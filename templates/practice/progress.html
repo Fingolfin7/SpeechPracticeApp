@@ -2,14 +2,14 @@
 {% load static %}
 {% block title %}Progress | SpeechPractice{% endblock %}
 {% block content %}
-<section class="page-title">
+<section class="page-title progress-title">
   <div>
     <p class="eyebrow">Progress tracker</p>
     <h1>Measure the trend, not just the take.</h1>
   </div>
 </section>
 
-<section class="panel progress-filters">
+<section class="progress-filters">
   <form method="get">
     <p>
       <label for="start">From</label>
@@ -32,27 +32,45 @@
   </form>
 </section>
 
+<section class="progress-stat-strip" aria-label="Progress metric summaries">
+  <article data-progress-stat="score">
+    <span>Score</span>
+    <strong>-</strong>
+    <small>latest take</small>
+  </article>
+  <article data-progress-stat="wer">
+    <span>WER</span>
+    <strong>-</strong>
+    <small>latest take</small>
+  </article>
+  <article data-progress-stat="clarity">
+    <span>Clarity</span>
+    <strong>-</strong>
+    <small>latest take</small>
+  </article>
+</section>
+
 <section class="progress-grid">
   <article class="panel chart-panel">
     <div class="panel-heading">
       <p class="eyebrow">Score</p>
       <span>0 to 5</span>
     </div>
-    <canvas data-progress-chart="score" height="220"></canvas>
+    <canvas data-progress-chart="score" height="260"></canvas>
   </article>
   <article class="panel chart-panel">
     <div class="panel-heading">
       <p class="eyebrow">WER</p>
       <span>lower is better</span>
     </div>
-    <canvas data-progress-chart="wer" height="220"></canvas>
+    <canvas data-progress-chart="wer" height="260"></canvas>
   </article>
   <article class="panel chart-panel">
     <div class="panel-heading">
       <p class="eyebrow">Clarity</p>
       <span>0 to 1</span>
     </div>
-    <canvas data-progress-chart="clarity" height="220"></canvas>
+    <canvas data-progress-chart="clarity" height="260"></canvas>
   </article>
 </section>
 
@@ -126,5 +144,5 @@
 </section>
 
 {{ points|json_script:"progress-data" }}
-<script src="{% static 'practice/progress.js' %}?v=1"></script>
+<script src="{% static 'practice/progress.js' %}?v=3"></script>
 {% endblock %}

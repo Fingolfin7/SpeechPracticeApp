@@ -98,7 +98,11 @@ def _latest_generated_scripts(cards: list[ImprovementCard]) -> dict[int, Practic
         return {}
     rows = (
         GeneratedPracticeScript.objects.select_related("script")
-        .filter(card_id__in=card_ids, script__active=True)
+        .filter(
+            card_id__in=card_ids,
+            script__active=True,
+            script__practice_kind=PracticeScript.KIND_DRILL,
+        )
         .order_by("card_id", "-created_at")
     )
     scripts: dict[int, PracticeScript] = {}

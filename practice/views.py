@@ -8,6 +8,7 @@ from pathlib import Path
 
 from django.contrib import messages
 from django.core.files.uploadedfile import UploadedFile
+from django.db import models
 from django.db.utils import OperationalError, ProgrammingError
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -93,8 +94,15 @@ def progress(request):
 
 
 def practice_run(request):
+    quick_queue = today_queue(limit=4)
+    builtin_drills = _builtin_drills(limit=5)
+    requested_mode = request.POST.get("mode") if request.method == "POST" else request.GET.get("mode")
+    if not requested_mode and request.method == "GET" and request.GET.get("card"):
+        requested_mode = PracticeRunForm.MODE_QUICK
+    mode = requested_mode or PracticeRunForm.MODE_SCRIPT
+    script_kind = _script_kind_for_mode(mode)
     if request.method == "POST":
-        form = PracticeRunForm(request.POST, request.FILES)
+        form = PracticeRunForm(request.POST, request.FILES, script_kind=script_kind)
         if form.is_valid():
             mode = form.cleaned_data.get("mode") or PracticeRunForm.MODE_SCRIPT
             script = form.cleaned_data.get("script")
@@ -128,7 +136,6 @@ def practice_run(request):
     else:
         script_id = request.GET.get("script")
         card_id = request.GET.get("card")
-        mode = request.GET.get("mode") or PracticeRunForm.MODE_SCRIPT
         initial_card = None
         initial_script = None
         if card_id:
@@ -138,23 +145,46 @@ def practice_run(request):
                 .first()
             )
         if mode == PracticeRunForm.MODE_QUICK:
-            initial_script = PracticeScript.objects.filter(active=True).order_by("?").first()
+            if script_id:
+                initial_script = PracticeScript.objects.filter(
+                    pk=script_id,
+                    active=True,
+                    practice_kind=PracticeScript.KIND_DRILL,
+                ).first()
+            if initial_script is None and initial_card is not None:
+                initial_script = _latest_script_for_card(initial_card)
+            if initial_script is None and quick_queue:
+                initial_card = quick_queue[0].card
+                initial_script = quick_queue[0].script
+            if initial_script is None:
+                initial_script = builtin_drills[0] if builtin_drills else None
         elif script_id:
-            initial_script = PracticeScript.objects.filter(pk=script_id, active=True).first()
+            initial_script = PracticeScript.objects.filter(
+                pk=script_id,
+                active=True,
+                practice_kind=PracticeScript.KIND_READING,
+            ).first()
         elif initial_card is not None:
             initial_script = _latest_script_for_card(initial_card)
         form = PracticeRunForm(
             initial_script=initial_script,
             initial_card=initial_card,
+            script_kind=script_kind,
             initial={"mode": mode},
         )
 
     selected_script = None
     script_value = form["script"].value()
     if script_value:
-        selected_script = PracticeScript.objects.filter(pk=script_value).first()
+        selected_query = PracticeScript.objects.filter(pk=script_value)
+        if script_kind:
+            selected_query = selected_query.filter(practice_kind=script_kind)
+        selected_script = selected_query.first()
     if selected_script is None:
-        selected_script = PracticeScript.objects.filter(active=True).first()
+        fallback_scripts = PracticeScript.objects.filter(active=True)
+        if script_kind:
+            fallback_scripts = fallback_scripts.filter(practice_kind=script_kind)
+        selected_script = fallback_scripts.first()
     focus_card = None
     card_value = form["card"].value()
     if card_value:
@@ -163,6 +193,9 @@ def practice_run(request):
         "form": form,
         "selected_script": selected_script,
         "focus_card": focus_card,
+        "quick_queue": quick_queue,
+        "builtin_drills": builtin_drills,
+        "generation_provider_choices": script_generation_provider_choices(),
     }
     return render(request, "practice/practice_run.html", context)
 
@@ -373,8 +406,57 @@ def retry_scoring_job(request, pk: int):
 
 
 def script_list(request):
-    scripts = PracticeScript.objects.all()
-    return render(request, "practice/script_list.html", {"scripts": scripts})
+    kind_filter = (request.GET.get("kind") or PracticeScript.KIND_READING).strip()
+    valid_kinds = {value for value, _label in PracticeScript.KIND_CHOICES}
+    if kind_filter not in valid_kinds:
+        kind_filter = PracticeScript.KIND_READING
+    scripts = PracticeScript.objects.filter(practice_kind=kind_filter)
+    source_filter = (request.GET.get("source") or "").strip()
+    total_count = scripts.count()
+    if source_filter:
+        scripts = scripts.filter(source=source_filter)
+    groups = _script_source_groups(scripts)
+    kind_counts = {
+        row["practice_kind"]: row["count"]
+        for row in PracticeScript.objects.values("practice_kind").annotate(count=models.Count("id"))
+    }
+    source_counts = {
+        row["source"]: row["count"]
+        for row in PracticeScript.objects.filter(practice_kind=kind_filter)
+        .values("source")
+        .annotate(count=models.Count("id"))
+    }
+    kind_tabs = [
+        {
+            "value": value,
+            "label": "Reading scripts" if value == PracticeScript.KIND_READING else "Drills",
+            "count": kind_counts.get(value, 0),
+            "active": kind_filter == value,
+        }
+        for value, _label in PracticeScript.KIND_CHOICES
+    ]
+    source_tabs = [
+        {
+            "value": value,
+            "label": label,
+            "count": source_counts.get(value, 0),
+            "active": source_filter == value,
+        }
+        for value, label in PracticeScript.SOURCE_CHOICES
+    ]
+    return render(
+        request,
+        "practice/script_list.html",
+        {
+            "scripts": scripts,
+            "kind_filter": kind_filter,
+            "kind_tabs": kind_tabs,
+            "source_filter": source_filter,
+            "total_count": total_count,
+            "source_groups": groups,
+            "source_tabs": source_tabs,
+        },
+    )
 
 
 def script_create(request):
@@ -385,7 +467,13 @@ def script_create(request):
             messages.success(request, "Practice script saved.")
             return redirect("practice:scripts")
     else:
-        form = PracticeScriptForm(initial={"source": PracticeScript.SOURCE_USER, "difficulty": 1})
+        form = PracticeScriptForm(
+            initial={
+                "practice_kind": PracticeScript.KIND_READING,
+                "source": PracticeScript.SOURCE_USER,
+                "difficulty": 1,
+            }
+        )
     return render(request, "practice/script_form.html", {"form": form})
 
 
@@ -429,6 +517,7 @@ def script_preview(request, pk: int):
             "author": script.author,
             "body": script.body,
             "word_count": script.word_count,
+            "practice_kind": script.get_practice_kind_display(),
             "source": script.get_source_display(),
             "difficulty": script.difficulty,
             "tags": script.tags or [],
@@ -452,6 +541,7 @@ def script_import(request):
                 )
             results = import_script_items(
                 items,
+                source=PracticeScript.SOURCE_UPLOADED,
                 extra_tags=form.tags(),
                 replace=form.cleaned_data.get("replace", True),
             )
@@ -485,6 +575,7 @@ def card_detail(request, pk: int):
     reviews = card.reviews.all()[:8]
     generated_scripts = PracticeScript.objects.filter(
         generation_records__card=card,
+        practice_kind=PracticeScript.KIND_DRILL,
     ).distinct()[:8]
     return render(
         request,
@@ -510,6 +601,7 @@ def generate_script_for_card(request, pk: int):
     script = PracticeScript.objects.create(
         title=draft.title,
         body=draft.body,
+        practice_kind=PracticeScript.KIND_DRILL,
         source=PracticeScript.SOURCE_GENERATED,
         source_ref=f"card:{card.pk}",
         tags=[card.kind, card.target_key],
@@ -523,6 +615,8 @@ def generate_script_for_card(request, pk: int):
         prompt_snapshot=draft.prompt_snapshot,
     )
     messages.success(request, "Generated a starter practice script for this card.")
+    if request.POST.get("next") == "practice":
+        return redirect(f"{reverse('practice:practice')}?mode=quick&script={script.pk}&card={card.pk}")
     return redirect("practice:scripts")
 
 
@@ -638,11 +732,59 @@ def account_settings(request):
 def _latest_script_for_card(card: ImprovementCard) -> PracticeScript | None:
     generated = (
         GeneratedPracticeScript.objects.select_related("script")
-        .filter(card=card, script__active=True)
+        .filter(card=card, script__active=True, script__practice_kind=PracticeScript.KIND_DRILL)
         .order_by("-created_at")
         .first()
     )
     return generated.script if generated and generated.script else None
+
+
+def _script_kind_for_mode(mode: str | None) -> str | None:
+    if mode == PracticeRunForm.MODE_QUICK:
+        return PracticeScript.KIND_DRILL
+    if mode == PracticeRunForm.MODE_FREE:
+        return None
+    return PracticeScript.KIND_READING
+
+
+def _builtin_drills(limit: int = 5):
+    return list(
+        PracticeScript.objects.filter(
+            active=True,
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_BUILTIN,
+            source_ref__startswith="builtin:speech-drills:",
+        ).order_by("difficulty", "title")[:limit]
+    )
+
+
+def _script_source_groups(scripts):
+    labels = dict(PracticeScript.SOURCE_CHOICES)
+    source_order = [
+        PracticeScript.SOURCE_GENERATED,
+        PracticeScript.SOURCE_UPLOADED,
+        PracticeScript.SOURCE_USER,
+        PracticeScript.SOURCE_BUILTIN,
+        PracticeScript.SOURCE_IMPORTED,
+    ]
+    rows = list(scripts)
+    groups = []
+    for source in source_order:
+        group_scripts = [script for script in rows if script.source == source]
+        if group_scripts:
+            groups.append(
+                {
+                    "source": source,
+                    "label": labels.get(source, source.title()),
+                    "scripts": group_scripts,
+                }
+            )
+    other_scripts = [
+        script for script in rows if script.source not in set(source_order)
+    ]
+    if other_scripts:
+        groups.append({"source": "other", "label": "Other", "scripts": other_scripts})
+    return groups
 
 
 def _save_uploaded_audio(audio: UploadedFile, script_title: str):

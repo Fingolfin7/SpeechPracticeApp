@@ -62,13 +62,22 @@ class SessionError(models.Model):
 
 
 class PracticeScript(models.Model):
+    KIND_READING = "reading"
+    KIND_DRILL = "drill"
+    KIND_CHOICES = [
+        (KIND_READING, "Reading script"),
+        (KIND_DRILL, "Drill"),
+    ]
+
     SOURCE_BUILTIN = "builtin"
     SOURCE_USER = "user"
+    SOURCE_UPLOADED = "uploaded"
     SOURCE_IMPORTED = "imported"
     SOURCE_GENERATED = "generated"
     SOURCE_CHOICES = [
         (SOURCE_BUILTIN, "Built-in"),
         (SOURCE_USER, "User"),
+        (SOURCE_UPLOADED, "Uploaded"),
         (SOURCE_IMPORTED, "Imported"),
         (SOURCE_GENERATED, "Generated"),
     ]
@@ -76,6 +85,7 @@ class PracticeScript(models.Model):
     title = models.CharField(max_length=255)
     author = models.CharField(max_length=255, blank=True)
     body = models.TextField()
+    practice_kind = models.CharField(max_length=32, choices=KIND_CHOICES, default=KIND_READING)
     source = models.CharField(max_length=32, choices=SOURCE_CHOICES, default=SOURCE_USER)
     source_ref = models.CharField(max_length=512, blank=True)
     tags = models.JSONField(default=list, blank=True)
@@ -89,6 +99,7 @@ class PracticeScript(models.Model):
         ordering = ["title"]
         indexes = [
             models.Index(fields=["source", "active"]),
+            models.Index(fields=["practice_kind", "active"]),
             models.Index(fields=["difficulty"]),
         ]
 

@@ -72,6 +72,7 @@
 
   function renderMeta(script) {
     const values = [
+      script.practice_kind,
       script.author,
       script.source,
       `Level ${script.difficulty}`,
@@ -136,7 +137,7 @@
     return checked ? checked.value : "script";
   }
 
-  function updateModeUi() {
+  function updateModeUi(navigate) {
     const mode = currentMode();
     form.classList.toggle("is-free-speak", mode === "free_speak");
     form.classList.toggle("is-quick-practice", mode === "quick");
@@ -144,18 +145,26 @@
       if (mode === "free_speak") {
         modeHelper.textContent = "Free Speak transcribes without scoring or updating cards.";
       } else if (mode === "quick") {
-        modeHelper.textContent = "Quick Practice starts from a random script and scores normally.";
+        modeHelper.textContent = "Quick Practice scores focused drills from your priority cards.";
       } else {
         modeHelper.textContent = "Script mode scores your recording against the selected text.";
       }
     }
-    if (mode === "quick" && randomScriptButton) {
-      randomScriptButton.click();
+    if (navigate && !hasTake()) {
+      const url = new URL(window.location.href);
+      if ((url.searchParams.get("mode") || "script") !== mode) {
+        url.searchParams.set("mode", mode);
+        url.searchParams.delete("script");
+        url.searchParams.delete("card");
+        window.location.assign(url.toString());
+      }
     }
   }
 
   modeInputs.forEach((input) => {
-    input.addEventListener("change", updateModeUi);
+    input.addEventListener("change", function () {
+      updateModeUi(true);
+    });
   });
 
   function visibleScriptValues() {
@@ -211,7 +220,7 @@
     });
   }
 
-  updateModeUi();
+  updateModeUi(false);
 
   function formatTime(seconds) {
     const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;

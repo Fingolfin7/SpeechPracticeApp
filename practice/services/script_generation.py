@@ -26,13 +26,16 @@ class ScriptGenerationProvider(Protocol):
 
 def build_generation_prompt(card: ImprovementCard) -> str:
     return (
-        "Create a short speech-practice script for one learner.\n"
+        "Create a short speech-practice drill for one learner.\n"
         f"Focus area: {card.title}\n"
         f"Target key: {card.target_key}\n"
         f"Reason: {card.prompt}\n"
         f"Recent evidence: {card.stats}\n"
-        "Use 8 short lines. Start easy, then increase difficulty. "
-        "Keep it natural enough to say out loud.\n"
+        "Use the pattern of a leveled tongue-twister ladder: begin with simple, "
+        "clean repetitions, then add denser phrases, then one or two harder control "
+        "lines. Keep every line speakable out loud. Favor clarity over speed. "
+        "Include the target in varied word positions when that makes sense.\n"
+        "Use 8 lines total. Do not include coaching notes, bullets, numbering, or markdown.\n"
         "Return exactly this format:\n"
         "TITLE: <short title>\n"
         "SCRIPT:\n"
@@ -52,11 +55,11 @@ class LocalTemplateScriptProvider:
             body = "\n".join(
                 [
                     f"{target}.",
+                    f"{target}, clear and steady.",
                     f"I say {target} with an even pace.",
-                    f"I pause, breathe, and repeat: {target}.",
-                    f"The words around {target} stay relaxed.",
-                    f"Before the phrase, I stay steady; {target}.",
-                    f"After the phrase, I keep the same clear rhythm.",
+                    f"Slow breath first, then {target}.",
+                    f"The words before {target} stay relaxed.",
+                    f"The words after {target} keep the same rhythm.",
                     f"I can place {target} inside a longer sentence without rushing.",
                     f"One clean phrase becomes the next clean phrase.",
                 ]
@@ -70,14 +73,14 @@ class LocalTemplateScriptProvider:
             )
         body = "\n".join(
             [
-                f"I notice {target} clearly and calmly.",
-                f"Today I practice {target} with steady breath.",
+                f"{target}.",
+                f"{target}, clean and calm.",
+                f"I practice {target} with steady breath.",
                 f"The phrase stays crisp when {target} appears early.",
                 f"The phrase stays crisp when {target} appears late.",
                 f"I slow down, reset, and say {target} again.",
                 f"Short words, long words, and {target} all stay clear.",
                 f"I keep my pace even while the sentence grows around {target}.",
-                f"One clean repetition becomes the next clean repetition.",
             ]
         )
         prompt = build_generation_prompt(card)

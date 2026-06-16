@@ -1,10 +1,10 @@
 {% extends "practice/base.html" %}
-{% block title %}Scripts | SpeechPractice{% endblock %}
+{% block title %}Library | SpeechPractice{% endblock %}
 {% block content %}
 <section class="page-title">
   <div>
-    <p class="eyebrow">Reading library</p>
-    <h1>Practice scripts</h1>
+    <p class="eyebrow">Practice library</p>
+    <h1>{% if kind_filter == "drill" %}Drills{% else %}Reading scripts{% endif %}</h1>
   </div>
   <div class="action-row">
     <a class="button-link" href="{% url 'practice:script_import' %}">Import corpus</a>
@@ -12,37 +12,95 @@
   </div>
 </section>
 
-<section class="script-list">
-  {% for script in scripts %}
-    <article class="script-row">
-      <div>
-        <strong>{{ script.title }}</strong>
-        <small>{{ script.get_source_display }}{% if script.author %} &middot; {{ script.author }}{% endif %} &middot; {{ script.word_count }} words</small>
+<nav class="kind-tabs" aria-label="Library type filters">
+  {% for tab in kind_tabs %}
+    <a class="{% if tab.active %}is-active{% endif %}" href="{% url 'practice:scripts' %}?kind={{ tab.value }}">
+      {{ tab.label }} <span>{{ tab.count }}</span>
+    </a>
+  {% endfor %}
+</nav>
+
+<nav class="source-tabs" aria-label="Script source filters">
+  <a class="{% if not source_filter %}is-active{% endif %}" href="{% url 'practice:scripts' %}?kind={{ kind_filter }}">All <span>{{ total_count }}</span></a>
+  {% for tab in source_tabs %}
+    <a class="{% if tab.active %}is-active{% endif %}" href="{% url 'practice:scripts' %}?kind={{ kind_filter }}&amp;source={{ tab.value }}">
+      {{ tab.label }} <span>{{ tab.count }}</span>
+    </a>
+  {% endfor %}
+</nav>
+
+<section class="script-library">
+  {% for group in source_groups %}
+    <section class="script-source-section" aria-labelledby="source-{{ group.source }}">
+      <div class="script-source-heading">
+        <div>
+          <p class="eyebrow">{{ group.label }}</p>
+          <h2 id="source-{{ group.source }}">
+            {% if kind_filter == "drill" %}
+              {% if group.source == "generated" %}AI generated drills
+              {% elif group.source == "builtin" %}Built-in drills
+              {% elif group.source == "uploaded" %}Uploaded drills
+              {% elif group.source == "user" %}Handwritten drills
+              {% else %}Imported drills{% endif %}
+            {% else %}
+              {% if group.source == "uploaded" %}User uploaded readings
+              {% elif group.source == "user" %}Handwritten readings
+              {% elif group.source == "builtin" %}Built-in readings
+              {% elif group.source == "generated" %}AI generated readings
+              {% else %}Imported corpus{% endif %}
+            {% endif %}
+          </h2>
+        </div>
+        <span>{{ group.scripts|length }}</span>
       </div>
-      <p>{{ script.body|truncatewords:34 }}</p>
-      <div class="script-actions">
-        <a class="quiet-link" href="{% url 'practice:practice' %}?script={{ script.pk }}">Practice this</a>
-        <a class="script-tool" href="{% url 'practice:script_edit' script.pk %}" aria-label="Edit {{ script.title }}" title="Edit script">
-          <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
-            <path d="M4 20h4.7L19.2 9.5a2.3 2.3 0 0 0 0-3.3l-1.4-1.4a2.3 2.3 0 0 0-3.3 0L4 15.3V20Z" />
-            <path d="m13.6 5.8 4.6 4.6" />
-          </svg>
-          <span class="sr-only">Edit</span>
-        </a>
-        <a class="script-tool danger-tool" href="{% url 'practice:script_delete' script.pk %}" aria-label="Delete {{ script.title }}" title="Delete script">
-          <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
-            <path d="M5 7h14" />
-            <path d="M10 11v6" />
-            <path d="M14 11v6" />
-            <path d="M8 7l.8 12h6.4L16 7" />
-            <path d="M9 7V5h6v2" />
-          </svg>
-          <span class="sr-only">Delete</span>
-        </a>
+
+      <div class="script-list">
+        {% for script in group.scripts %}
+          <article class="script-row source-{{ script.source }}">
+            <div class="script-row-head">
+              <div>
+                <strong>{{ script.title }}</strong>
+                <small>{% if script.author %}{{ script.author }} &middot; {% endif %}{{ script.word_count }} words &middot; Level {{ script.difficulty }}</small>
+              </div>
+              <div class="script-badge-stack">
+                <span class="source-badge source-badge-kind">{{ script.get_practice_kind_display }}</span>
+                <span class="source-badge source-badge-{{ script.source }}">{{ script.get_source_display }}</span>
+              </div>
+            </div>
+            <p>{{ script.body|truncatewords:34 }}</p>
+            {% if script.tags %}
+              <div class="script-tags" aria-label="Script tags">
+                {% for tag in script.tags|slice:":5" %}
+                  <span>{{ tag }}</span>
+                {% endfor %}
+              </div>
+            {% endif %}
+            <div class="script-actions">
+              <a class="quiet-link" href="{% url 'practice:practice' %}?{% if kind_filter == "drill" %}mode=quick&amp;{% endif %}script={{ script.pk }}">Practice this</a>
+              <a class="script-tool" href="{% url 'practice:script_edit' script.pk %}" aria-label="Edit {{ script.title }}" title="Edit script">
+                <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                  <path d="M4 20h4.7L19.2 9.5a2.3 2.3 0 0 0 0-3.3l-1.4-1.4a2.3 2.3 0 0 0-3.3 0L4 15.3V20Z" />
+                  <path d="m13.6 5.8 4.6 4.6" />
+                </svg>
+                <span class="sr-only">Edit</span>
+              </a>
+              <a class="script-tool danger-tool" href="{% url 'practice:script_delete' script.pk %}" aria-label="Delete {{ script.title }}" title="Delete script">
+                <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                  <path d="M5 7h14" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                  <path d="M8 7l.8 12h6.4L16 7" />
+                  <path d="M9 7V5h6v2" />
+                </svg>
+                <span class="sr-only">Delete</span>
+              </a>
+            </div>
+          </article>
+        {% endfor %}
       </div>
-    </article>
+    </section>
   {% empty %}
-    <p class="empty">No scripts imported yet. Run <code>python manage.py import_legacy_scripts</code>.</p>
+    <p class="empty">No {% if kind_filter == "drill" %}drills{% else %}reading scripts{% endif %} match this source yet.</p>
   {% endfor %}
 </section>
 {% endblock %}

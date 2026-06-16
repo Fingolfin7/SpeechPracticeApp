@@ -17,7 +17,7 @@
       <button type="submit">Generate starter script</button>
     </form>
     {% if generated_scripts %}
-      <a class="button-link" href="{% url 'practice:practice' %}?script={{ generated_scripts.0.pk }}&amp;card={{ card.pk }}">Practice latest drill</a>
+      <a class="button-link" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ generated_scripts.0.pk }}&amp;card={{ card.pk }}">Practice latest drill</a>
     {% endif %}
   </div>
 </section>
@@ -44,7 +44,7 @@
     </div>
     <div class="drill-list">
       {% for script in generated_scripts %}
-        <a class="drill-row" href="{% url 'practice:practice' %}?script={{ script.pk }}&amp;card={{ card.pk }}">
+        <a class="drill-row" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ script.pk }}&amp;card={{ card.pk }}">
           <strong>{{ script.title }}</strong>
           <small>{{ script.word_count }} words &middot; practice now</small>
         </a>

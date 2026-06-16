@@ -32,7 +32,7 @@ class PracticeScriptForm(forms.ModelForm):
 
     class Meta:
         model = PracticeScript
-        fields = ["title", "author", "body", "source", "difficulty", "active"]
+        fields = ["title", "author", "body", "practice_kind", "source", "difficulty", "active"]
         widgets = {
             "body": forms.Textarea(attrs={"rows": 14}),
         }
@@ -93,8 +93,16 @@ class PracticeRunForm(forms.Form):
     def __init__(self, *args, **kwargs):
         initial_script = kwargs.pop("initial_script", None)
         initial_card = kwargs.pop("initial_card", None)
+        script_kind = kwargs.pop("script_kind", PracticeScript.KIND_READING)
         super().__init__(*args, **kwargs)
-        self.fields["script"].queryset = PracticeScript.objects.filter(active=True)
+        scripts = PracticeScript.objects.filter(active=True)
+        if script_kind:
+            scripts = scripts.filter(practice_kind=script_kind)
+        self.fields["script"].queryset = scripts
+        if script_kind == PracticeScript.KIND_DRILL:
+            self.fields["script"].label = "Practice drill"
+        elif script_kind == PracticeScript.KIND_READING:
+            self.fields["script"].label = "Reading script"
         self.fields["card"].queryset = ImprovementCard.objects.exclude(
             status=ImprovementCard.STATUS_PAUSED
         )
@@ -135,7 +143,7 @@ class BulkScriptImportForm(forms.Form):
         required=False,
         label="Tags",
         help_text="Comma-separated tags added to every imported script.",
-        initial="imported",
+        initial="uploaded",
     )
     replace = forms.BooleanField(
         required=False,

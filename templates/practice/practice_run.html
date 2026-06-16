@@ -41,7 +41,7 @@
       </div>
 
       <div class="script-picker-tools">
-        <label for="script-search">Find a script</label>
+        <label for="script-search">{% if form.mode.value == "quick" %}Find a drill{% else %}Find a script{% endif %}</label>
         <div>
           <input id="script-search" type="search" placeholder="Search title, author, or tag" data-script-search>
           <button class="secondary-button" type="button" data-random-script>Random</button>
@@ -55,8 +55,59 @@
       </div>
     </div>
 
+    <section class="quick-practice-panel" data-quick-practice-panel>
+      <div class="quick-panel-heading">
+        <div>
+          <p class="eyebrow">Quick Practice</p>
+          <h2>Work the next rough edges</h2>
+        </div>
+        <a class="quiet-link" href="{% url 'practice:cards' %}?refresh=1">Refresh cards</a>
+      </div>
+
+      <div class="quick-card-grid">
+        {% for item in quick_queue %}
+          <article class="quick-card {% if item.is_due %}is-due{% endif %}">
+            <span class="pill">{{ item.card.get_kind_display }}</span>
+            <strong>{{ item.card.title }}</strong>
+            <p>{{ item.card.prompt }}</p>
+            <small>
+              {% if item.is_due %}Due now{% else %}Upcoming{% endif %}
+              &middot; mastery {{ item.card.mastery|floatformat:2 }}
+            </small>
+            <div class="quick-card-actions">
+              {% if item.script %}
+                <a class="button-link" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ item.script.pk }}&amp;card={{ item.card.pk }}">Use latest drill</a>
+              {% endif %}
+              <button class="secondary-button" type="submit" form="quick-generate-{{ item.card.pk }}">Generate drill</button>
+            </div>
+          </article>
+        {% empty %}
+          <article class="quick-card">
+            <strong>No priority cards yet</strong>
+            <p>Score a few sessions or refresh cards from history to create targeted practice.</p>
+            <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh cards</a>
+          </article>
+        {% endfor %}
+      </div>
+
+      <div class="builtin-drill-strip" aria-label="Built-in speech drills">
+        <div>
+          <p class="eyebrow">Built-in ladder</p>
+          <span>From warm-up to mastery</span>
+        </div>
+        <div class="builtin-drill-links">
+          {% for drill in builtin_drills %}
+            <a href="{% url 'practice:practice' %}?mode=quick&amp;script={{ drill.pk }}">{{ drill.difficulty }}</a>
+          {% empty %}
+            <span class="empty">Run migrations to load built-in drills.</span>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
     {% if selected_script %}
       <p class="script-meta" data-script-meta>
+        <span>{{ selected_script.get_practice_kind_display }}</span>
         {% if selected_script.author %}<span>{{ selected_script.author }}</span>{% endif %}
         <span>{{ selected_script.get_source_display }}</span>
         <span>Level {{ selected_script.difficulty }}</span>
@@ -170,5 +221,12 @@
   </aside>
 </form>
 
-<script src="{% static 'practice/recorder.js' %}?v=6"></script>
+<script src="{% static 'practice/recorder.js' %}?v=8"></script>
+
+{% for item in quick_queue %}
+  <form id="quick-generate-{{ item.card.pk }}" method="post" action="{% url 'practice:generate_script' item.card.pk %}" hidden>
+    {% csrf_token %}
+    <input type="hidden" name="next" value="practice">
+  </form>
+{% endfor %}
 {% endblock %}

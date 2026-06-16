@@ -34,17 +34,40 @@ from .services.transcription import TranscriptResult, UploadedTranscriptProvider
 class PracticeWebTests(TransactionTestCase):
     def test_script_library_page_renders(self):
         PracticeScript.objects.create(
-            title="Breath Drill",
+            title="Breath Reading",
             body="A clean phrase begins with a calm breath.",
+            practice_kind=PracticeScript.KIND_READING,
             source=PracticeScript.SOURCE_USER,
+        )
+        PracticeScript.objects.create(
+            title="Uploaded Reading",
+            body="A user uploaded line.",
+            practice_kind=PracticeScript.KIND_READING,
+            source=PracticeScript.SOURCE_UPLOADED,
+        )
+        PracticeScript.objects.create(
+            title="Generated Drill",
+            body="A generated focus line.",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
         )
 
         response = self.client.get(reverse("practice:scripts"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Breath Drill")
+        self.assertContains(response, "Reading scripts")
+        self.assertContains(response, "Drills")
+        self.assertContains(response, "Breath Reading")
+        self.assertContains(response, "User uploaded readings")
+        self.assertContains(response, "Uploaded Reading")
+        self.assertNotContains(response, "Generated Drill")
         self.assertContains(response, "Edit")
         self.assertContains(response, "Delete")
+
+        drill_response = self.client.get(reverse("practice:scripts"), {"kind": "drill"})
+        self.assertContains(drill_response, "AI generated drills")
+        self.assertContains(drill_response, "Generated Drill")
+        self.assertNotContains(drill_response, "Breath Reading")
 
     def test_script_edit_view_updates_script(self):
         script = PracticeScript.objects.create(
@@ -60,6 +83,7 @@ class PracticeWebTests(TransactionTestCase):
                 "title": "Updated Breath Drill",
                 "author": "Coach",
                 "body": "A calmer phrase begins with a better breath.",
+                "practice_kind": PracticeScript.KIND_READING,
                 "source": PracticeScript.SOURCE_USER,
                 "difficulty": 2,
                 "active": "on",
@@ -98,6 +122,7 @@ class PracticeWebTests(TransactionTestCase):
         script = PracticeScript.objects.create(
             title="Drill: ready",
             body="ready words rise",
+            practice_kind=PracticeScript.KIND_DRILL,
             source=PracticeScript.SOURCE_GENERATED,
         )
         GeneratedPracticeScript.objects.create(card=due_card, script=script)
@@ -121,6 +146,7 @@ class PracticeWebTests(TransactionTestCase):
         script = PracticeScript.objects.create(
             title="Drill: S",
             body="soft sounds stay steady",
+            practice_kind=PracticeScript.KIND_DRILL,
             source=PracticeScript.SOURCE_GENERATED,
         )
         GeneratedPracticeScript.objects.create(card=card, script=script)
@@ -180,6 +206,8 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "Import result")
         script = PracticeScript.objects.get(title="Custom Drill")
         self.assertEqual(script.author, "Test Poet")
+        self.assertEqual(script.practice_kind, PracticeScript.KIND_READING)
+        self.assertEqual(script.source, PracticeScript.SOURCE_UPLOADED)
         self.assertIn("upload", script.tags)
 
     def test_card_script_generation_template(self):
@@ -196,6 +224,7 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(draft.provider, "local_template")
         self.assertIn("river", draft.body)
         self.assertIn("Focus area: Word focus: river", draft.prompt_snapshot)
+        self.assertIn("leveled tongue-twister ladder", draft.prompt_snapshot)
 
     def test_phrase_script_generation_template_repeats_full_phrase(self):
         card = ImprovementCard.objects.create(
@@ -347,11 +376,13 @@ class PracticeWebTests(TransactionTestCase):
         older_script = PracticeScript.objects.create(
             title="Older steady drill",
             body="steady starts here",
+            practice_kind=PracticeScript.KIND_DRILL,
             source=PracticeScript.SOURCE_GENERATED,
         )
         latest_script = PracticeScript.objects.create(
             title="Latest steady drill",
             body="steady speech stays ready",
+            practice_kind=PracticeScript.KIND_DRILL,
             source=PracticeScript.SOURCE_GENERATED,
         )
         GeneratedPracticeScript.objects.create(card=card, script=older_script)
@@ -363,6 +394,66 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "Word focus: steady")
         self.assertContains(response, "Latest steady drill")
         self.assertContains(response, f'name="card" value="{card.pk}"')
+        self.assertContains(response, 'value="quick" checked')
+
+    def test_script_and_quick_modes_use_separate_script_kinds(self):
+        reading = PracticeScript.objects.create(
+            title="Reading Only",
+            body="This is a normal reading passage.",
+            practice_kind=PracticeScript.KIND_READING,
+            source=PracticeScript.SOURCE_USER,
+        )
+        drill = PracticeScript.objects.create(
+            title="Drill Only",
+            body="drill drill clearly",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+        )
+
+        script_response = self.client.get(reverse("practice:practice"), {"script": reading.pk})
+        self.assertContains(script_response, "Reading Only")
+        self.assertContains(script_response, "Reading script:")
+        self.assertNotContains(script_response, "Drill Only")
+
+        quick_response = self.client.get(reverse("practice:practice"), {"mode": "quick", "script": drill.pk})
+        self.assertContains(quick_response, "Drill Only")
+        self.assertContains(quick_response, "Practice drill:")
+        self.assertNotContains(quick_response, "Reading Only")
+
+    def test_quick_practice_page_surfaces_cards_and_builtin_drills(self):
+        card = ImprovementCard.objects.create(
+            title="Word focus: crisp",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="crisp",
+            prompt="Practice crisp endings.",
+            mastery=0.25,
+            due_at=timezone.now() - timezone.timedelta(minutes=10),
+        )
+        generated = PracticeScript.objects.create(
+            title="Latest crisp drill",
+            body="crisp clips click cleanly",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+        )
+        GeneratedPracticeScript.objects.create(card=card, script=generated)
+        PracticeScript.objects.create(
+            title="Tongue Twister Level 1: Warm-Up",
+            body="Big brown bear.",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_BUILTIN,
+            source_ref="builtin:speech-drills:tongue-twister-level-1",
+            difficulty=1,
+        )
+
+        response = self.client.get(reverse("practice:practice"), {"mode": "quick"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Work the next rough edges")
+        self.assertContains(response, "Word focus: crisp")
+        self.assertContains(response, "Use latest drill")
+        self.assertContains(response, "Generate drill")
+        self.assertContains(response, "Built-in ladder")
+        self.assertContains(response, "Latest crisp drill")
 
     def test_script_preview_endpoint_returns_metadata(self):
         script = PracticeScript.objects.create(
@@ -381,6 +472,7 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(payload["title"], "Sibilant Steps")
         self.assertEqual(payload["author"], "Practice Lab")
         self.assertEqual(payload["word_count"], 8)
+        self.assertEqual(payload["practice_kind"], "Reading script")
         self.assertEqual(payload["source"], "Imported")
         self.assertEqual(payload["difficulty"], 3)
         self.assertEqual(payload["tags"], ["sibilants", "phrases"])
@@ -630,6 +722,7 @@ class PracticeWebTests(TransactionTestCase):
         script = PracticeScript.objects.create(
             title="Drill: clear",
             body="clear practice text",
+            practice_kind=PracticeScript.KIND_DRILL,
             source=PracticeScript.SOURCE_GENERATED,
             source_ref=f"card:{card.pk}",
         )
@@ -776,6 +869,7 @@ class PracticeWebTests(TransactionTestCase):
         script = PracticeScript.objects.create(
             title="Drill: TH",
             body="thin things thrive",
+            practice_kind=PracticeScript.KIND_DRILL,
             source=PracticeScript.SOURCE_GENERATED,
         )
         GeneratedPracticeScript.objects.create(card=card, script=script)
@@ -799,13 +893,16 @@ class PracticeWebTests(TransactionTestCase):
 
         response = self.client.post(
             reverse("practice:generate_script", args=[card.pk]),
-            {"provider": "local_template"},
+            {"provider": "local_template", "next": "practice"},
         )
 
         self.assertEqual(response.status_code, 302)
         record = GeneratedPracticeScript.objects.get(card=card)
         self.assertEqual(record.model_provider, "local_template")
+        self.assertEqual(record.script.practice_kind, PracticeScript.KIND_DRILL)
         self.assertEqual(record.script.source_ref, f"card:{card.pk}")
+        self.assertIn("mode=quick", response["Location"])
+        self.assertIn(f"script={record.script.pk}", response["Location"])
 
     def test_account_page_saves_encrypted_settings_and_models(self):
         with patch("practice.views.clear_local_whisper_cache") as clear_cache:

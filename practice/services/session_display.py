@@ -150,19 +150,22 @@ def _segment_ranges_for_transcript(
     if not transcript_text or not segments:
         return []
     ranges = []
+    normalized_text, offset_map = _normalized_text_with_offsets(transcript_text)
     cursor = 0
-    lower_text = transcript_text.lower()
     for segment in segments:
         cleaned = _clean_segment_text(str(segment.get("text", "")))
         if not cleaned:
             continue
-        found = lower_text.find(cleaned, cursor)
+        found = normalized_text.find(cleaned, cursor)
         if found < 0:
-            found = lower_text.find(cleaned)
+            found = normalized_text.find(cleaned)
         if found < 0:
             continue
-        start = found
-        end = found + len(cleaned)
+        clean_end = found + len(cleaned)
+        start = offset_map.get(found)
+        end = offset_map.get(clean_end)
+        if start is None or end is None or end <= start:
+            continue
         try:
             start_time = float(segment.get("start", 0.0))
             end_time = float(segment.get("end", start_time))
@@ -177,6 +180,39 @@ def _clean_segment_text(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"\s+", " ", text)
     return re.sub(r"[^\w\s]", "", text)
+
+
+def _normalized_text_with_offsets(text: str) -> tuple[str, dict[int, int]]:
+    """
+    Build the same punctuation-light text used for segment matching while keeping
+    a map back to display-text offsets. This lets timestamp spans survive when a
+    transcript has punctuation or uneven whitespace.
+    """
+    parts: list[str] = []
+    offsets: dict[int, int] = {0: 0}
+    clean_idx = 0
+    in_space = False
+    for idx, char in enumerate(text.lower()):
+        if char.isspace():
+            if not in_space and parts:
+                parts.append(" ")
+                clean_idx += 1
+                offsets[clean_idx] = idx + 1
+            in_space = True
+            continue
+        if char.isalnum() or char == "_":
+            parts.append(char)
+            clean_idx += 1
+            offsets[clean_idx] = idx + 1
+            in_space = False
+            continue
+        in_space = False
+    if parts and parts[-1] == " ":
+        parts.pop()
+        clean_idx -= 1
+        offsets[clean_idx] = len(text)
+    offsets[len(parts)] = len(text) if parts else 0
+    return "".join(parts), offsets
 
 
 def _normalize_offsets(text: str) -> dict[int, int]:

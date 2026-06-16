@@ -682,6 +682,24 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "data-timed-transcript")
         self.assertContains(response, 'data-start="1.250"')
 
+    def test_session_detail_timed_segments_survive_punctuation(self):
+        self._create_legacy_tables()
+        session = PracticeSession.objects.create(
+            timestamp="2026-06-14T12:00:00",
+            script_name="Punctuated Timed Drill",
+            script_text="Hello world again",
+            audio_path="recording.txt",
+            transcript="Hello, world again.",
+            segments='[{"text": "Hello world", "start": 0.5, "end": 1.25}, {"text": "again", "start": 1.25, "end": 1.8}]',
+        )
+
+        response = self.client.get(reverse("practice:session_detail", args=[session.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-start="0.500"')
+        self.assertContains(response, 'data-end="1.250"')
+        self.assertContains(response, 'class="timed-transcript-segment"', count=2)
+
     def test_session_report_exports_markdown(self):
         self._create_legacy_tables()
         session = PracticeSession.objects.create(

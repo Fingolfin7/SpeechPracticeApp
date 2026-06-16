@@ -100,7 +100,13 @@
       return;
     }
     const current = audio.currentTime || 0;
-    const next = Array.from(timedTranscript.querySelectorAll("[data-start][data-end]")).find((segment) => {
+    const segments = Array.from(timedTranscript.querySelectorAll("[data-start][data-end]"));
+    const next = segments.find((segment, index) => {
+      const start = Number(segment.dataset.start || 0);
+      const end = Number(segment.dataset.end || start);
+      const isLast = index === segments.length - 1;
+      return current >= start && (current < end || (isLast && current <= end + 0.05));
+    }) || segments.find((segment) => {
       const start = Number(segment.dataset.start || 0);
       const end = Number(segment.dataset.end || start);
       return current >= start - 0.05 && current <= end + 0.05;
@@ -118,6 +124,38 @@
     }
   }
 
+  function closestTimedSegment(target) {
+    if (!target) {
+      return null;
+    }
+    const element = target instanceof Element ? target : target.parentElement;
+    return element ? element.closest("[data-start]") : null;
+  }
+
+  function seekAudioTo(targetTime) {
+    const safeTime = Math.max(0, Number(targetTime) || 0);
+    function applySeek() {
+      audio.currentTime = safeTime;
+      setActiveTranscriptSegment();
+      const playPromise = audio.play();
+      if (playPromise) {
+        playPromise.catch(function () {
+          if (canvas && waveformBuffer) {
+            drawWaveform(waveformBuffer);
+            drawPlayhead();
+          }
+        });
+      }
+    }
+
+    if (audio.readyState < 1) {
+      audio.addEventListener("loadedmetadata", applySeek, { once: true });
+      audio.load();
+      return;
+    }
+    applySeek();
+  }
+
   async function loadWaveform() {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) {
@@ -133,11 +171,6 @@
       const buffer = await audioContext.decodeAudioData(bytes);
       waveformBuffer = buffer;
       drawWaveform(buffer);
-      audio.addEventListener("timeupdate", function () {
-        drawWaveform(waveformBuffer);
-        drawPlayhead();
-        setActiveTranscriptSegment();
-      });
     } catch (error) {
       drawEmpty("Waveform unavailable. Audio controls still work.");
     }
@@ -153,7 +186,6 @@
     const ratio = Math.max(0, Math.min(1, localX / rect.width));
     const targetTime = Math.max(0, Math.min(audio.duration, ratio * audio.duration));
     canvas.dataset.seekTarget = targetTime.toFixed(3);
-    audio.currentTime = targetTime;
     if (audioContext && audioContext.state === "suspended") {
       audioContext.resume();
     }
@@ -162,43 +194,45 @@
       drawPlayhead();
     }
     canvas.dataset.playState = "requested";
-    const playPromise = audio.play();
-    if (playPromise) {
-      playPromise.then(function () {
+    seekAudioTo(targetTime);
+    window.setTimeout(function () {
+      if (!audio.paused) {
+        canvas.dataset.playState = "playing";
+      } else {
         canvas.dataset.playState = audio.paused ? "paused-after-play" : "playing";
-      }).catch(function (error) {
-        canvas.dataset.playState = "blocked";
-        canvas.dataset.playError = error.name || "playback-error";
-        drawEmpty("Click the audio controls to allow playback.");
-      });
-    }
+      }
+    }, 50);
   }
 
   canvas.addEventListener("pointerdown", seekAndPlay);
   canvas.addEventListener("click", seekAndPlay);
+  audio.addEventListener("timeupdate", function () {
+    if (waveformBuffer) {
+      drawWaveform(waveformBuffer);
+      drawPlayhead();
+    }
+    setActiveTranscriptSegment();
+  });
+  audio.addEventListener("loadedmetadata", setActiveTranscriptSegment);
 
   if (timedTranscript) {
     timedTranscript.addEventListener("click", function (event) {
-      const segment = event.target.closest("[data-start]");
-      if (!segment || !audio.duration || Number.isNaN(audio.duration)) {
+      const segment = closestTimedSegment(event.target);
+      if (!segment) {
         return;
       }
-      audio.currentTime = Number(segment.dataset.start || 0);
-      setActiveTranscriptSegment();
-      audio.play();
+      seekAudioTo(segment.dataset.start);
     });
     timedTranscript.addEventListener("keydown", function (event) {
       if (event.key !== "Enter" && event.key !== " ") {
         return;
       }
-      const segment = event.target.closest("[data-start]");
+      const segment = closestTimedSegment(event.target);
       if (!segment) {
         return;
       }
       event.preventDefault();
-      audio.currentTime = Number(segment.dataset.start || 0);
-      setActiveTranscriptSegment();
-      audio.play();
+      seekAudioTo(segment.dataset.start);
     });
   }
 

@@ -596,6 +596,58 @@ class PracticeWebTests(TransactionTestCase):
         )
         self.assertIn(f"ladder={ladder.pk}", response["Location"])
 
+    def test_delete_ladder_removes_generated_steps_and_scripts(self):
+        script = PracticeScript.objects.create(
+            title="Generated Ladder Level 1",
+            body="level one line",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+            source_ref="ladder:placeholder:level:1",
+        )
+        ladder = PracticeLadder.objects.create(
+            title="Delete Me Ladder",
+            source=PracticeLadder.SOURCE_GENERATED,
+        )
+        script.source_ref = f"ladder:{ladder.pk}:level:1"
+        script.save(update_fields=["source_ref", "updated_at"])
+        PracticeLadderStep.objects.create(
+            ladder=ladder,
+            script=script,
+            level=1,
+            title="Level 1",
+        )
+
+        response = self.client.post(reverse("practice:delete_ladder", args=[ladder.pk]))
+
+        self.assertRedirects(response, f"{reverse('practice:scripts')}?kind=drill")
+        self.assertFalse(PracticeLadder.objects.filter(pk=ladder.pk).exists())
+        self.assertFalse(PracticeScript.objects.filter(pk=script.pk).exists())
+
+    def test_delete_ladder_blocks_builtin_ladder(self):
+        script = PracticeScript.objects.create(
+            title="Builtin Ladder Level 1",
+            body="level one line",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_BUILTIN,
+            source_ref="builtin:speech-drills:tongue-twister-level-1",
+        )
+        ladder = PracticeLadder.objects.create(
+            title="Built-in Ladder",
+            source=PracticeLadder.SOURCE_BUILTIN,
+        )
+        PracticeLadderStep.objects.create(
+            ladder=ladder,
+            script=script,
+            level=1,
+            title="Level 1",
+        )
+
+        response = self.client.post(reverse("practice:delete_ladder", args=[ladder.pk]))
+
+        self.assertRedirects(response, f"{reverse('practice:scripts')}?kind=drill")
+        self.assertTrue(PracticeLadder.objects.filter(pk=ladder.pk).exists())
+        self.assertTrue(PracticeScript.objects.filter(pk=script.pk).exists())
+
     def test_script_preview_endpoint_returns_metadata(self):
         script = PracticeScript.objects.create(
             title="Sibilant Steps",

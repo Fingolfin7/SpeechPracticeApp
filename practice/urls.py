@@ -28,5 +28,6 @@ urlpatterns = [
     path("cards/<int:pk>/", views.card_detail, name="card_detail"),
     path("cards/<int:pk>/generate-script/", views.generate_script_for_card, name="generate_script"),
     path("practice/generate-ladder/", views.generate_practice_ladder, name="generate_ladder"),
+    path("practice/ladders/<int:pk>/delete/", views.delete_practice_ladder, name="delete_ladder"),
     path("account/", views.account_settings, name="account"),
 ]

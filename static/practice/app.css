@@ -653,10 +653,12 @@ th {
   justify-content: center;
   width: 32px;
   height: 32px;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fffaf1;
   color: var(--accent-dark);
+  line-height: 1;
   box-shadow: 0 1px 0 rgba(31, 24, 18, 0.08);
   transition:
     background 150ms ease,
@@ -1326,6 +1328,22 @@ select {
   gap: 12px;
   align-items: flex-start;
   justify-content: space-between;
+}
+
+.ladder-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.ladder-row-actions form {
+  margin: 0;
+}
+
+.ladder-row-actions .script-tool {
+  cursor: pointer;
 }
 
 .secondary-button {

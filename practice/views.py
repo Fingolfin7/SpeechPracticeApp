@@ -756,6 +756,30 @@ def generate_practice_ladder(request):
     )
 
 
+@require_POST
+def delete_practice_ladder(request, pk: int):
+    ladder = get_object_or_404(PracticeLadder, pk=pk)
+    if ladder.source == PracticeLadder.SOURCE_BUILTIN:
+        messages.error(request, "Built-in ladders cannot be deleted.")
+        return redirect(f"{reverse('practice:scripts')}?kind=drill")
+
+    title = ladder.title
+    script_ids = list(
+        ladder.steps.filter(
+            script__source=PracticeScript.SOURCE_GENERATED,
+            script__source_ref__startswith=f"ladder:{ladder.pk}:",
+        ).values_list("script_id", flat=True)
+    )
+    ladder.delete()
+    scripts_to_delete = PracticeScript.objects.filter(pk__in=script_ids)
+    deleted_scripts = scripts_to_delete.count()
+    if deleted_scripts:
+        scripts_to_delete.delete()
+    suffix = f" and {deleted_scripts} generated drill scripts" if deleted_scripts else ""
+    messages.success(request, f"Deleted ladder: {title}{suffix}.")
+    return redirect(f"{reverse('practice:scripts')}?kind=drill")
+
+
 def account_settings(request):
     settings_obj = PracticeSettings.load()
     if request.method == "POST":

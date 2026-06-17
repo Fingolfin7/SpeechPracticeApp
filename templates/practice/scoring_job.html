@@ -8,7 +8,7 @@
     <h1 data-job-status-label>{{ job.get_status_display }}</h1>
     <p class="lead">{{ job.script_name }}</p>
     {% if job.card %}
-      <p><a class="quiet-link" href="{% url 'practice:card_detail' job.card.pk %}">{{ job.card.title }}</a></p>
+      <p><a class="quiet-link" href="{% url 'practice:card_detail' job.card.pk %}">{{ job.card.display_title }}</a></p>
     {% endif %}
   </div>
   <div class="job-stamp">

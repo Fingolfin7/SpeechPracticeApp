@@ -45,7 +45,7 @@
               <label>
                 <input type="checkbox" name="cards" value="{{ card.pk }}" {% if card.pk in default_ladder_card_ids %}checked{% endif %}>
                 <span>
-                  <strong>{{ card.title }}</strong>
+                  <strong>{{ card.display_title }}</strong>
                   <small>{{ card.get_kind_display }} &middot; {{ card.get_status_display }} &middot; mastery {{ card.mastery|floatformat:2 }}</small>
                 </span>
               </label>
@@ -116,7 +116,7 @@
             {% if ladder.theme %}<p>{{ ladder.theme }}</p>{% endif %}
             <div class="script-tags" aria-label="Ladder focus cards">
               {% for card in ladder.cards.all %}
-                <span>{{ card.title }}</span>
+                <span>{{ card.get_kind_display }}: {{ card.display_title }}</span>
               {% empty %}
                 <span>General ladder</span>
               {% endfor %}

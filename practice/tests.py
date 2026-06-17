@@ -26,6 +26,7 @@ from .models import (
     ScoringJob,
     SessionError,
 )
+from .context_processors import static_version
 from .services.jobs import create_scoring_job, process_scoring_job
 from .services.scoring import score_transcript
 from .services.script_import import import_script_items, parse_csv_text, parse_json_text
@@ -41,6 +42,12 @@ from .services.transcription import TranscriptResult, UploadedTranscriptProvider
 
 
 class PracticeWebTests(TransactionTestCase):
+    def test_static_version_uses_app_css_mtime(self):
+        version = static_version(None)["static_version"]
+
+        self.assertIn("app", version)
+        self.assertGreater(version["app"], 0)
+
     def test_script_library_page_renders(self):
         PracticeScript.objects.create(
             title="Breath Reading",
@@ -166,7 +173,8 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Next reps")
-        self.assertContains(response, "Sound pattern: S")
+        self.assertContains(response, "Sound")
+        self.assertContains(response, "S")
         self.assertContains(response, "Practice drill")
 
     def test_poetry_foundation_csv_import_shape(self):
@@ -234,7 +242,7 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(draft.provider, "local_template")
         self.assertIn("river", draft.body)
-        self.assertIn("Focus area: Word focus: river", draft.prompt_snapshot)
+        self.assertIn("Focus area: river", draft.prompt_snapshot)
         self.assertIn("leveled tongue-twister ladder", draft.prompt_snapshot)
 
     def test_phrase_script_generation_template_repeats_full_phrase(self):
@@ -434,7 +442,7 @@ class PracticeWebTests(TransactionTestCase):
         response = self.client.get(reverse("practice:practice"), {"card": card.pk})
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Word focus: steady")
+        self.assertContains(response, "steady")
         self.assertContains(response, "Latest steady drill")
         self.assertContains(response, f'name="card" value="{card.pk}"')
         self.assertContains(response, 'value="quick" checked')
@@ -555,8 +563,8 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Ladders / Drills")
         self.assertContains(response, "Use selected focus cards")
-        self.assertContains(response, "Word focus: crisp")
-        self.assertContains(response, "Phrase focus: slow rain")
+        self.assertContains(response, "crisp")
+        self.assertContains(response, "slow rain")
         self.assertContains(response, "Crisp Courtroom Ladder")
         self.assertContains(response, "Crisp endings in a courtroom drama.")
         self.assertContains(response, 'name="cards" value="%s"' % card.pk)
@@ -1092,6 +1100,70 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "Drill: TH")
         self.assertContains(response, "Review history")
         self.assertContains(response, "Local template")
+
+    def test_card_detail_shows_matching_mistake_snippets(self):
+        self._create_legacy_tables()
+        card = ImprovementCard.objects.create(
+            title="Word focus: night",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="night",
+            prompt="Practice night.",
+            mastery=0.0,
+        )
+        script_text = "Silent night arrives before the bright morning."
+        session = PracticeSession.objects.create(
+            timestamp="2026-06-17T10:00:00",
+            script_name="Solstice Drill",
+            script_text=script_text,
+            audio_path="",
+            transcript="silent light arrives before the bright morning",
+            score=2.0,
+        )
+        start = script_text.lower().index("night")
+        SessionError.objects.create(
+            session_id=session.pk,
+            timestamp=session.timestamp,
+            script_name=session.script_name,
+            ref_token="night",
+            hyp_token="light",
+            op="sub",
+            error_kind="char_replace",
+            ref_start=start,
+            ref_end=start + len("night"),
+            ref_local_start=0,
+            ref_local_end=len("night"),
+            ref_token_len=len("night"),
+        )
+
+        response = self.client.get(reverse("practice:card_detail", args=[card.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Solstice Drill")
+        self.assertContains(response, "<mark>night</mark>", html=True)
+        self.assertContains(response, "Expected night")
+        self.assertContains(response, "heard light")
+
+    def test_card_delete_removes_card_but_keeps_generated_script(self):
+        card = ImprovementCard.objects.create(
+            title="Word focus: clear",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="clear",
+            prompt="Practice clear.",
+            mastery=0.3,
+        )
+        script = PracticeScript.objects.create(
+            title="Drill: clear",
+            body="clear words carry",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+        )
+        GeneratedPracticeScript.objects.create(card=card, script=script)
+
+        response = self.client.post(reverse("practice:card_delete", args=[card.pk]))
+
+        self.assertRedirects(response, reverse("practice:cards"))
+        self.assertFalse(ImprovementCard.objects.filter(pk=card.pk).exists())
+        self.assertTrue(PracticeScript.objects.filter(pk=script.pk).exists())
 
     def test_generate_script_view_records_provider_metadata(self):
         card = ImprovementCard.objects.create(

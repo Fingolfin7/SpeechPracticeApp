@@ -28,7 +28,7 @@
             <div class="today-index">{{ forloop.counter }}</div>
             <div class="today-copy">
               <span class="pill">{{ item.card.get_kind_display }}</span>
-              <h2>{{ item.card.title }}</h2>
+              <h2>{{ item.card.display_title }}</h2>
               <p>{{ item.card.prompt }}</p>
               <small>
                 {% if item.is_due %}Due now{% else %}Upcoming{% endif %}

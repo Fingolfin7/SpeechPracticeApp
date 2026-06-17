@@ -1,24 +1,79 @@
 {% extends "practice/base.html" %}
 {% block title %}Cards | SpeechPractice{% endblock %}
 {% block content %}
-<section class="page-title">
+<section class="page-title card-page-title">
   <div>
     <p class="eyebrow">Adaptive loop</p>
     <h1>Improvement cards</h1>
+    <p>Keep the useful focus areas, remove stale ones, and let the next drills follow the cards that still matter.</p>
   </div>
-  <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh from history</a>
+  <div class="card-page-actions">
+    <span class="card-count">{{ total_count }}</span>
+    <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh from history</a>
+  </div>
 </section>
 
-<section class="card-grid">
-  {% for card in cards %}
-    <a class="practice-card large" href="{% url 'practice:card_detail' card.pk %}">
-      <span class="pill">{{ card.get_kind_display }}</span>
-      <strong>{{ card.title }}</strong>
-      <small>{{ card.get_status_display }} &middot; mastery {{ card.mastery|floatformat:2 }}</small>
-      <small>Due {{ card.due_at|date:"M j, H:i" }}</small>
-    </a>
-  {% empty %}
-    <p class="empty">No cards yet. Refresh from history to create the first set.</p>
-  {% endfor %}
-</section>
+{% if grouped_cards %}
+  <section class="card-type-stack" aria-label="Improvement cards grouped by type">
+    {% for group in grouped_cards %}
+      <article class="card-type-section card-type-{{ group.kind }}">
+        <header class="card-type-header">
+          <div>
+            <span class="pill">{{ group.label }}</span>
+            <h2>{{ group.label }} cards</h2>
+          </div>
+          <div class="card-type-stats">
+            <span>{{ group.count }} total</span>
+            <span>{{ group.due_count }} due</span>
+          </div>
+        </header>
+
+        <div class="card-tile-grid">
+          {% for card in group.cards %}
+            <article class="managed-card">
+              <div class="managed-card-topline">
+                <span class="pill">{{ card.get_kind_display }}</span>
+                <form class="managed-card-delete" method="post" action="{% url 'practice:card_delete' card.pk %}">
+                  {% csrf_token %}
+                  <button
+                    class="script-tool danger-tool"
+                    type="submit"
+                    aria-label="Delete {{ card.display_title }}"
+                    title="Delete card"
+                    onclick="return confirm('Delete this improvement card? Existing drills and history will be kept.');"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                      <path d="M5 7h14" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
+                      <path d="M8 7l.8 12h6.4L16 7" />
+                      <path d="M9 7V5h6v2" />
+                    </svg>
+                    <span class="sr-only">Delete</span>
+                  </button>
+                </form>
+              </div>
+              <a class="managed-card-title" href="{% url 'practice:card_detail' card.pk %}">{{ card.display_title }}</a>
+              <p>{{ card.prompt }}</p>
+              <div class="card-meta-line">
+                <span>{{ card.get_status_display }}</span>
+                <span>Mastery {{ card.mastery|floatformat:2 }}</span>
+                <span>Due {{ card.due_at|date:"M j, H:i" }}</span>
+                {% if card.stats.errors is not None and card.stats.attempts is not None %}
+                  <span>{{ card.stats.errors|floatformat:0 }}/{{ card.stats.attempts|floatformat:0 }} misses</span>
+                {% endif %}
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      </article>
+    {% endfor %}
+  </section>
+{% else %}
+  <section class="empty-card-state">
+    <p class="eyebrow">No cards yet</p>
+    <h2>Refresh from scored sessions to build your first focus set.</h2>
+    <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh from history</a>
+  </section>
+{% endif %}
 {% endblock %}

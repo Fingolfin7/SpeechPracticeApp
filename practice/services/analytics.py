@@ -270,7 +270,7 @@ def build_card_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "kind": ImprovementCard.KIND_WORD,
                 "target_key": str(word),
-                "title": f"Word focus: {word}",
+                "title": str(word),
                 "prompt": f"Practice short phrases that place '{word}' at the beginning, middle, and end of a sentence.",
                 "stats": row,
                 "mastery": _mastery_from_error_rate(rate),
@@ -286,7 +286,7 @@ def build_card_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "kind": ImprovementCard.KIND_SOUND,
                 "target_key": str(symbol),
-                "title": f"Sound pattern: {symbol}",
+                "title": str(symbol),
                 "prompt": f"Generate minimal-pair and sentence drills that emphasize the {symbol} sound.",
                 "stats": row,
                 "mastery": _mastery_from_error_rate(rate),
@@ -302,7 +302,7 @@ def build_card_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "kind": ImprovementCard.KIND_PHRASE,
                 "target_key": str(phrase),
-                "title": f"Phrase focus: {phrase}",
+                "title": str(phrase),
                 "prompt": (
                     "Practice this phrase in isolation, then inside short surrounding "
                     "sentences while keeping pace and articulation steady."
@@ -321,7 +321,7 @@ def build_card_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "kind": ImprovementCard.KIND_POSITION,
                 "target_key": str(bucket),
-                "title": f"Word position: {bucket}",
+                "title": str(bucket),
                 "prompt": f"Practice crisp articulation for sounds at the {bucket} of words.",
                 "stats": row,
                 "mastery": _mastery_from_error_rate(rate),

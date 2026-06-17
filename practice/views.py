@@ -17,6 +17,11 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from autumn_client import AutumnClient, AutumnError
+from error_analytics import (
+    _position_bucket,
+    _word_to_phoneme_symbols,
+    clean_text_for_alignment,
+)
 
 from .forms import AccountSettingsForm, BulkScriptImportForm, PracticeRunForm, PracticeScriptForm, TranscriptEditForm
 from .models import (
@@ -144,7 +149,7 @@ def practice_run(request):
                         card=card,
                     )
                 enqueue_scoring_job(job)
-                focus_label = f" for {card.title}" if card else ""
+                focus_label = f" for {card.display_title}" if card else ""
                 mode_label = "Free Speak transcription" if mode == PracticeRunForm.MODE_FREE else "Scoring"
                 messages.success(
                     request,
@@ -612,8 +617,30 @@ def card_list(request):
         created = refresh_improvement_cards()
         messages.success(request, f"Cards refreshed. {created} new focus areas created.")
         return redirect("practice:cards")
-    cards = ImprovementCard.objects.all()
-    return render(request, "practice/card_list.html", {"cards": cards})
+    cards = list(ImprovementCard.objects.all())
+    grouped_cards = []
+    for kind, label in ImprovementCard.KIND_CHOICES:
+        group_cards = [card for card in cards if card.kind == kind]
+        if not group_cards:
+            continue
+        grouped_cards.append(
+            {
+                "kind": kind,
+                "label": label,
+                "cards": group_cards,
+                "count": len(group_cards),
+                "due_count": sum(1 for card in group_cards if card.due_at <= timezone.now()),
+            }
+        )
+    return render(
+        request,
+        "practice/card_list.html",
+        {
+            "cards": cards,
+            "grouped_cards": grouped_cards,
+            "total_count": len(cards),
+        },
+    )
 
 
 def card_detail(request, pk: int):
@@ -623,6 +650,7 @@ def card_detail(request, pk: int):
         generation_records__card=card,
         practice_kind=PracticeScript.KIND_DRILL,
     ).distinct()[:8]
+    evidence_rows = _card_evidence_rows(card)
     return render(
         request,
         "practice/card_detail.html",
@@ -630,9 +658,19 @@ def card_detail(request, pk: int):
             "card": card,
             "reviews": reviews,
             "generated_scripts": generated_scripts,
+            "evidence_rows": evidence_rows,
             "generation_provider_choices": script_generation_provider_choices(),
         },
     )
+
+
+@require_POST
+def card_delete(request, pk: int):
+    card = get_object_or_404(ImprovementCard, pk=pk)
+    title = card.display_title
+    card.delete()
+    messages.success(request, f"Deleted card: {title}. Existing drills and history were kept.")
+    return redirect("practice:cards")
 
 
 @require_POST
@@ -1182,6 +1220,167 @@ def _whisper_settings_snapshot(settings_obj: PracticeSettings) -> tuple:
         .values_list(*field_names)
         .get()
     )
+
+
+def _card_evidence_rows(card: ImprovementCard, limit: int = 8) -> list[dict]:
+    try:
+        rows = list(
+            SessionError.objects.exclude(ref_token__isnull=True)
+            .exclude(ref_token="")
+            .filter(op__in=["sub", "del"])
+            .order_by("-timestamp", "-id")[:800]
+        )
+    except (OperationalError, ProgrammingError):
+        return []
+    evidence = []
+    sessions: dict[int, PracticeSession | None] = {}
+    for error in rows:
+        session_id = int(error.session_id)
+        if session_id not in sessions:
+            sessions[session_id] = PracticeSession.objects.filter(pk=session_id).first()
+        session = sessions[session_id]
+        if session is None or not _error_matches_card(card, error, session):
+            continue
+        snippet = _evidence_snippet(card, error, session)
+        evidence.append(
+            {
+                "script_name": session.script_name or error.script_name or "Practice session",
+                "timestamp": session.timestamp or error.timestamp,
+                "error_kind": error.error_kind or error.op or "speech error",
+                "expected": error.ref_token or "[nothing]",
+                "heard": error.hyp_token or "[nothing]",
+                "before": snippet["before"],
+                "focus": snippet["focus"],
+                "after": snippet["after"],
+            }
+        )
+        if len(evidence) >= limit:
+            break
+    return evidence or _fallback_card_evidence_rows(card, limit=limit)
+
+
+def _error_matches_card(
+    card: ImprovementCard,
+    error: SessionError,
+    session: PracticeSession,
+) -> bool:
+    target = clean_text_for_alignment(card.target_key)
+    ref_token = clean_text_for_alignment(error.ref_token or "")
+    if not target or not ref_token:
+        return False
+
+    if card.kind == ImprovementCard.KIND_WORD:
+        return ref_token == target
+
+    if card.kind == ImprovementCard.KIND_PHRASE:
+        script = clean_text_for_alignment(session.script_text or "")
+        target_words = set(target.split())
+        return target in script and ref_token in target_words
+
+    if card.kind == ImprovementCard.KIND_SOUND:
+        return card.target_key.strip().upper() in _word_to_phoneme_symbols(ref_token)
+
+    if card.kind == ImprovementCard.KIND_POSITION:
+        bucket = _position_bucket(
+            error.ref_local_start,
+            error.ref_local_end,
+            error.ref_token_len,
+        )
+        return bucket == target
+
+    if card.kind == ImprovementCard.KIND_CHARACTER:
+        return (error.error_kind or "").strip().lower() == target
+
+    return False
+
+
+def _evidence_snippet(
+    card: ImprovementCard,
+    error: SessionError,
+    session: PracticeSession,
+) -> dict[str, str]:
+    script = clean_text_for_alignment(session.script_text or "")
+    target = clean_text_for_alignment(card.target_key)
+    ref_token = clean_text_for_alignment(error.ref_token or "")
+    focus = target if card.kind == ImprovementCard.KIND_PHRASE and target in script else ref_token
+    return _snippet_parts(script, focus, error.ref_start, error.ref_end)
+
+
+def _fallback_card_evidence_rows(card: ImprovementCard, limit: int = 8) -> list[dict]:
+    if card.kind not in {ImprovementCard.KIND_WORD, ImprovementCard.KIND_PHRASE}:
+        return []
+    target = clean_text_for_alignment(card.target_key)
+    if not target:
+        return []
+    try:
+        sessions = list(
+            PracticeSession.objects.exclude(score__isnull=True)
+            .exclude(script_text="")
+            .order_by("-timestamp", "-id")[:300]
+        )
+    except (OperationalError, ProgrammingError):
+        return []
+
+    evidence = []
+    for session in sessions:
+        script = clean_text_for_alignment(session.script_text or "")
+        transcript = clean_text_for_alignment(session.transcript or "")
+        if target not in script:
+            continue
+        if card.kind == ImprovementCard.KIND_WORD:
+            transcript_has_target = target in set(transcript.split())
+        else:
+            transcript_has_target = target in transcript
+        if transcript_has_target:
+            continue
+        snippet = _snippet_parts(script, target)
+        evidence.append(
+            {
+                "script_name": session.script_name or "Practice session",
+                "timestamp": session.timestamp,
+                "error_kind": "target missing in transcript",
+                "expected": card.target_key,
+                "heard": "[target not found]",
+                "before": snippet["before"],
+                "focus": snippet["focus"],
+                "after": snippet["after"],
+            }
+        )
+        if len(evidence) >= limit:
+            break
+    return evidence
+
+
+def _snippet_parts(
+    text: str,
+    focus: str,
+    fallback_start: int | None = None,
+    fallback_end: int | None = None,
+    radius: int = 68,
+) -> dict[str, str]:
+    clean_focus = clean_text_for_alignment(focus)
+    start = text.find(clean_focus) if clean_focus else -1
+    end = start + len(clean_focus) if start >= 0 else -1
+    if start < 0 and fallback_start is not None:
+        start = max(0, min(int(fallback_start), len(text)))
+        fallback = int(fallback_end) if fallback_end is not None else start + len(clean_focus)
+        end = max(start, min(fallback, len(text)))
+    if start < 0 or end <= start:
+        start, end = 0, min(len(text), radius)
+
+    before_start = max(0, start - radius)
+    after_end = min(len(text), end + radius)
+    before = text[before_start:start].strip()
+    after = text[end:after_end].strip()
+    if before_start > 0:
+        before = f"... {before}"
+    if after_end < len(text):
+        after = f"{after} ..."
+    return {
+        "before": before,
+        "focus": text[start:end].strip() or clean_focus or "target",
+        "after": after,
+    }
 
 
 def _mistake_lines(session: PracticeSession) -> list[str]:

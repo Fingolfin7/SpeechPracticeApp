@@ -99,7 +99,7 @@
         {% if selected_ladder %}
           <div class="script-tags" aria-label="Ladder focus cards">
             {% for card in selected_ladder.cards.all %}
-              <span>{{ card.title }}</span>
+              <span>{{ card.get_kind_display }}: {{ card.display_title }}</span>
             {% empty %}
               <span>General ladder</span>
             {% endfor %}
@@ -158,7 +158,7 @@
     {% if focus_card %}
       <div class="focus-brief compact">
         <span class="pill">{{ focus_card.get_kind_display }}</span>
-        <strong>{{ focus_card.title }}</strong>
+        <strong>{{ focus_card.display_title }}</strong>
         <small>Mastery {{ focus_card.mastery|floatformat:2 }} &middot; due {{ focus_card.due_at|date:"M j, H:i" }}</small>
       </div>
     {% endif %}

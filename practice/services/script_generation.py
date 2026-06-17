@@ -61,7 +61,7 @@ class ScriptGenerationProvider(Protocol):
 def build_generation_prompt(card: ImprovementCard) -> str:
     return (
         "Create a short speech-practice drill for one learner.\n"
-        f"Focus area: {card.title}\n"
+        f"Focus area: {card.display_title}\n"
         f"Target key: {card.target_key}\n"
         f"Reason: {card.prompt}\n"
         f"Recent evidence: {card.stats}\n"
@@ -85,7 +85,7 @@ def build_ladder_generation_prompt(cards: list[ImprovementCard], theme: str = ""
         card_lines.append(
             "\n".join(
                 [
-                    f"- Title: {card.title}",
+                    f"- Title: {card.display_title}",
                     f"  Type: {card.get_kind_display()}",
                     f"  Target: {card.target_key}",
                     f"  Why it matters: {card.prompt}",
@@ -128,7 +128,7 @@ class LocalTemplateScriptProvider:
 
     def generate(self, card: ImprovementCard) -> GeneratedScriptDraft:
         target = card.target_key
-        title = f"Drill: {card.title}"
+        title = f"Drill: {card.display_title}"
         if card.kind == ImprovementCard.KIND_PHRASE:
             body = "\n".join(
                 [
@@ -244,7 +244,7 @@ class OpenAIScriptProvider:
             user_prompt=prompt,
             max_output_tokens=700,
         )
-        title, body = parse_generated_script(text, fallback_title=f"Drill: {card.title}")
+        title, body = parse_generated_script(text, fallback_title=f"Drill: {card.display_title}")
         return GeneratedScriptDraft(
             title=title,
             body=body,
@@ -397,7 +397,7 @@ class AnthropicScriptProvider:
             text = getattr(block, "text", None)
             if text:
                 parts.append(text)
-        title, body = parse_generated_script("\n".join(parts), fallback_title=f"Drill: {card.title}")
+        title, body = parse_generated_script("\n".join(parts), fallback_title=f"Drill: {card.display_title}")
         return GeneratedScriptDraft(
             title=title,
             body=body,

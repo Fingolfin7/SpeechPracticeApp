@@ -49,6 +49,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "practice.context_processors.static_version",
             ],
         },
     },
@@ -70,6 +71,10 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
+STATIC_VERSION_CACHE_TIMEOUT = {
+    "debug": 0,
+    "production": 3600,
+}
 
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"

@@ -163,6 +163,21 @@ class ImprovementCard(models.Model):
     def __str__(self) -> str:
         return self.title
 
+    @property
+    def display_title(self) -> str:
+        title = (self.title or "").strip()
+        prefixes = (
+            "Word focus:",
+            "Sound pattern:",
+            "Phrase focus:",
+            "Word position:",
+        )
+        for prefix in prefixes:
+            if title.lower().startswith(prefix.lower()):
+                cleaned = title[len(prefix) :].strip()
+                return cleaned or self.target_key or title
+        return title or self.target_key
+
 
 class PracticeReview(models.Model):
     card = models.ForeignKey(ImprovementCard, on_delete=models.CASCADE, related_name="reviews")

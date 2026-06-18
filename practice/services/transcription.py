@@ -12,7 +12,7 @@ from django.db.utils import OperationalError, ProgrammingError
 
 from practice.models import PracticeSettings
 from practice.services.codex_auth import codex_access_token
-from transcribe_worker import transcribe_source
+from practice.services.local_whisper import transcribe_source
 
 OPENAI_TIMESTAMPED_TRANSCRIPTION_MODEL = "whisper-1"
 

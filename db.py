@@ -126,10 +126,6 @@ def get_all_sessions(db):
     )
 
 
-def get_session_by_id(db, sess_id: int):
-    return db.get(PracticeSession, sess_id)
-
-
 def add_session(
     db,
     script_name: str,
@@ -167,69 +163,6 @@ def add_session(
     db.commit()
     db.refresh(sess)
     return sess
-
-
-def update_session_scores(
-    db,
-    sess_id: int,
-    transcript: str,
-    wer: float,
-    clarity: float,
-    score: float,
-    segments_json: str | None = None,
-    cer: float | None = None,
-    artic_rate: float | None = None,
-    pause_ratio: float | None = None,
-    filled_pauses: float | None = None,
-    avg_conf: float | None = None,
-):
-    sess = db.get(PracticeSession, sess_id)
-    if not sess:
-        return None
-    sess.transcript = transcript
-    sess.wer = wer
-    sess.clarity = clarity
-    sess.score = score
-    if segments_json is not None:
-        sess.segments = segments_json
-    if cer is not None:
-        sess.cer = cer
-    if artic_rate is not None:
-        sess.artic_rate = artic_rate
-    if pause_ratio is not None:
-        sess.pause_ratio = pause_ratio
-    if filled_pauses is not None:
-        sess.filled_pauses = filled_pauses
-    if avg_conf is not None:
-        sess.avg_conf = avg_conf
-    db.commit()
-    db.refresh(sess)
-    return sess
-
-
-def delete_session(db, sess_id: int):
-    sess = db.get(PracticeSession, sess_id)
-    if not sess:
-        return
-    try:
-        db.query(SessionError).filter(SessionError.session_id == sess.id).delete()
-    except Exception:
-        pass
-    exists = (
-        db.query(PracticeSession)
-        .filter(
-            PracticeSession.audio_path == sess.audio_path,
-            PracticeSession.id != sess.id,
-        )
-        .first()
-    )
-    if not exists:
-        try:
-            os.remove(sess.audio_path)
-        except Exception:
-            pass
-    db.delete(sess)
-    db.commit()
 
 
 def replace_session_errors(

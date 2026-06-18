@@ -64,5 +64,5 @@
     <p class="empty">Free Speak sessions do not have a target script.</p>
   {% endif %}
 </section>
-<script src="{% static 'practice/job_status.js' %}?v=1"></script>
+<script src="{% static 'practice/job_status.js' %}?v={{ static_version.job_status_js }}"></script>
 {% endblock %}

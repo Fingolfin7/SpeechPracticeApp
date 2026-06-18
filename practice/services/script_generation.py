@@ -9,11 +9,8 @@ from django.db.utils import OperationalError, ProgrammingError
 
 from practice.models import ImprovementCard, PracticeSettings
 from practice.services.codex_auth import (
-    CodexAuthError,
-    access_token_expires_soon,
+    codex_access_token,
     deserialize_token_bundle,
-    refresh_token_bundle,
-    serialize_token_bundle,
 )
 
 
@@ -296,7 +293,7 @@ class OpenAIScriptProvider:
     ) -> tuple[str, str]:
         app_settings = _practice_settings()
         api_key = (app_settings.get_secret("openai_api_key") if app_settings else None) or settings.OPENAI_API_KEY
-        codex_token = _codex_access_token(app_settings)
+        codex_token = codex_access_token(app_settings)
         if codex_token:
             try:
                 text = self._codex_response(
@@ -605,21 +602,3 @@ def _stream_response_text(event_stream) -> str:
             if completed_text and not chunks:
                 chunks.append(completed_text)
     return "".join(chunks).strip()
-
-
-def _codex_access_token(app_settings: PracticeSettings | None) -> str | None:
-    if app_settings is None:
-        return None
-    bundle = deserialize_token_bundle(app_settings.get_secret("codex_token_bundle"))
-    if not bundle:
-        return None
-    if not access_token_expires_soon(bundle):
-        return bundle.get("access_token")
-    try:
-        refreshed = refresh_token_bundle(bundle)
-    except CodexAuthError:
-        return bundle.get("access_token")
-    if refreshed != bundle:
-        app_settings.set_secret("codex_token_bundle", serialize_token_bundle(refreshed))
-        app_settings.save(update_fields=["codex_token_bundle_enc", "updated_at"])
-    return refreshed.get("access_token")

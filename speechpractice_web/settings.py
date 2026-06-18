@@ -87,6 +87,9 @@ LEGACY_SCRIPTS_DIR = Path(os.getenv("SPEECHPRACTICE_SCRIPTS_DIR", BASE_DIR / "sc
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER", "local_whisper")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_TRANSCRIPTION_MODEL = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1")
+OPENAI_TRANSCRIPTION_MODEL_CHOICES = [
+    ("whisper-1", "Whisper-1 - cloud, timestamped"),
+]
 
 WHISPER_MODEL_NAME = os.getenv("WHISPER_MODEL_NAME", "base.en")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")

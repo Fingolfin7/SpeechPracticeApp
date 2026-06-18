@@ -1,17 +1,8 @@
 {% extends "practice/base.html" %}
 {% block title %}Today | SpeechPractice{% endblock %}
 {% block content %}
-<section class="today-hero">
-  <div>
-    <p class="eyebrow">Today's practice queue</p>
-    <h1>Start where your history says it matters.</h1>
-    <p class="lead">Review due cards, jump into generated drills, and keep scoring jobs visible while the app updates your progress map.</p>
-  </div>
-  <div class="hero-metrics" aria-label="Practice metrics">
-    <div><strong>{{ stats.session_count }}</strong><span>sessions</span></div>
-    <div><strong>{{ stats.scored_count }}</strong><span>scored</span></div>
-    <div><strong>{% if stats.average_score %}{{ stats.average_score|floatformat:2 }}{% else %}-{% endif %}</strong><span>avg score</span></div>
-  </div>
+<section class="page-title">
+  <h1>Today</h1>
 </section>
 
 <section class="today-layout">

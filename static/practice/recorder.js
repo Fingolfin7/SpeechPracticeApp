@@ -29,6 +29,13 @@
   const scriptWordCount = document.querySelector("[data-script-word-count]");
   const scriptBody = document.querySelector("[data-script-body]");
   const ladderSelect = document.querySelector("[data-ladder-select]");
+  const scoreButton = form.querySelector(".score-button");
+  const copyScoreButton = form.querySelector("[data-copy-practice-score]");
+  const autumnButton = form.querySelector("[data-autumn-toggle]");
+  const autumnForm = document.querySelector("#autumn-timer-form");
+  const transcriptState = form.querySelector("[data-transcript-state]");
+  const liveTranscript = form.querySelector("[data-live-transcript]");
+  const practiceMetrics = form.querySelector("[data-practice-metrics]");
 
   let recorder = null;
   let chunks = [];
@@ -43,6 +50,10 @@
   let recordingUrl = null;
   let decodedBuffer = null;
   let renderedPeaks = [];
+  let activeTranscriptSegment = null;
+  let activeJobStatusUrl = "";
+  let jobPollTimeout = null;
+  let latestScoreText = "";
 
   const originalScriptOptions = scriptSelect
     ? Array.from(scriptSelect.options).map((option) => ({
@@ -238,6 +249,197 @@
     return `${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`;
   }
 
+  function setTranscriptState(text) {
+    if (transcriptState) {
+      transcriptState.textContent = text;
+    }
+  }
+
+  async function copyTextToClipboard(text) {
+    if (!text) {
+      return false;
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  }
+
+  function setLiveTranscriptText(text) {
+    if (!liveTranscript) {
+      return;
+    }
+    liveTranscript.classList.remove("timed-transcript", "highlighted-reader");
+    liveTranscript.textContent = text || "";
+    activeTranscriptSegment = null;
+  }
+
+  function setLiveTranscriptHtml(html) {
+    if (!liveTranscript) {
+      return;
+    }
+    liveTranscript.classList.add("timed-transcript", "highlighted-reader");
+    liveTranscript.innerHTML = html || '<span class="empty">No transcript yet.</span>';
+    activeTranscriptSegment = null;
+    setActiveTranscriptSegment();
+  }
+
+  function renderPracticeMetrics(metrics) {
+    if (!practiceMetrics || !metrics) {
+      return;
+    }
+    const values = [
+      { tag: "strong", text: `Score: ${metrics.score || "-"}` },
+      { tag: "span", text: `WER: ${metrics.wer || "-"}` },
+      { tag: "span", text: `CER: ${metrics.cer || "-"}` },
+      { tag: "span", text: `Clarity: ${metrics.clarity || "-"}` },
+      { tag: "span", text: `Rate: ${metrics.artic_rate || "- wpm"}` },
+      { tag: "span", text: `Pauses: ${metrics.pause_ratio || "-"}` },
+      { tag: "span", text: `Conf: ${metrics.avg_conf || "-"}` },
+    ];
+    practiceMetrics.replaceChildren(
+      ...values.map((item) => {
+        const element = document.createElement(item.tag);
+        element.textContent = item.text;
+        return element;
+      })
+    );
+  }
+
+  function buildScoreText(metrics) {
+    if (!metrics) {
+      return "";
+    }
+    return [
+      `Score: ${metrics.score || "-"}/5`,
+      `WER: ${metrics.wer || "-"}`,
+      `CER: ${metrics.cer || "-"}`,
+      `Clarity: ${metrics.clarity || "-"}`,
+      `Rate: ${metrics.artic_rate || "- wpm"}`,
+      `Pauses: ${metrics.pause_ratio || "-"}`,
+      `Conf: ${metrics.avg_conf || "-"}`,
+    ].join(" | ");
+  }
+
+  function setCopyScoreEnabled(enabled) {
+    if (!copyScoreButton) {
+      return;
+    }
+    copyScoreButton.disabled = !enabled;
+    if (!enabled) {
+      copyScoreButton.textContent = "Copy score";
+    }
+  }
+
+  function setAutumnButtonBusy(busy) {
+    if (!autumnButton) {
+      return;
+    }
+    autumnButton.disabled = busy;
+    if (busy) {
+      autumnButton.dataset.previousText = autumnButton.textContent.trim();
+      autumnButton.textContent = "Updating...";
+    } else if (autumnButton.dataset.previousText) {
+      autumnButton.textContent = autumnButton.dataset.previousText;
+      delete autumnButton.dataset.previousText;
+    }
+  }
+
+  function updateAutumnButton(payload) {
+    if (!autumnButton || !payload) {
+      return;
+    }
+    const active = Boolean(payload.active);
+    autumnButton.disabled = false;
+    autumnButton.classList.toggle("is-active", active);
+    autumnButton.name = payload.button_name || (active ? "stop_autumn_timer" : "start_autumn_timer");
+    autumnButton.textContent = payload.button_label || (active ? "Stop Autumn" : "Start Autumn");
+    delete autumnButton.dataset.previousText;
+  }
+
+  function timedTranscriptSegments() {
+    if (!liveTranscript) {
+      return [];
+    }
+    return Array.from(liveTranscript.querySelectorAll("[data-start][data-end]"));
+  }
+
+  function setActiveTranscriptSegment() {
+    const segments = timedTranscriptSegments();
+    if (!segments.length || !preview) {
+      if (activeTranscriptSegment) {
+        activeTranscriptSegment.classList.remove("is-active");
+        activeTranscriptSegment = null;
+      }
+      return;
+    }
+    const current = preview.currentTime || 0;
+    const next = segments.find((segment, index) => {
+      const start = Number(segment.dataset.start || 0);
+      const end = Number(segment.dataset.end || start);
+      const isLast = index === segments.length - 1;
+      return current >= start && (current < end || (isLast && current <= end + 0.05));
+    }) || segments.find((segment) => {
+      const start = Number(segment.dataset.start || 0);
+      const end = Number(segment.dataset.end || start);
+      return current >= start - 0.05 && current <= end + 0.05;
+    });
+    if (next === activeTranscriptSegment) {
+      return;
+    }
+    if (activeTranscriptSegment) {
+      activeTranscriptSegment.classList.remove("is-active");
+    }
+    activeTranscriptSegment = next || null;
+    if (activeTranscriptSegment) {
+      activeTranscriptSegment.classList.add("is-active");
+      activeTranscriptSegment.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  function closestTimedSegment(target) {
+    if (!target) {
+      return null;
+    }
+    const element = target instanceof Element ? target : target.parentElement;
+    return element ? element.closest("[data-start]") : null;
+  }
+
+  function seekPreviewTo(targetTime) {
+    if (!preview || !preview.src) {
+      return;
+    }
+    const safeTime = Math.max(0, Number(targetTime) || 0);
+    function applySeek() {
+      preview.currentTime = safeTime;
+      updatePlaybackState();
+      setActiveTranscriptSegment();
+      const playPromise = preview.play();
+      if (playPromise) {
+        playPromise.catch(function () {
+          updatePlaybackState();
+        });
+      }
+    }
+
+    if (preview.readyState < 1) {
+      preview.addEventListener("loadedmetadata", applySeek, { once: true });
+      preview.load();
+      return;
+    }
+    applySeek();
+  }
+
   function getAudioContext() {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) {
@@ -424,6 +626,7 @@
     } else {
       setPlayhead(progress);
     }
+    setActiveTranscriptSegment();
   }
 
   function animatePlayhead() {
@@ -493,6 +696,213 @@
     }
   }
 
+  function setScoreButtonBusy(busy) {
+    if (!scoreButton) {
+      return;
+    }
+    scoreButton.disabled = busy;
+    scoreButton.textContent = busy ? "Scoring..." : "Score recording";
+  }
+
+  function renderPracticeJobStatus(payload) {
+    if (!payload) {
+      return;
+    }
+    if (payload.is_pending) {
+      setTranscriptState(payload.partial_transcript ? "Transcribing" : payload.status_label || "Queued");
+      if (payload.partial_transcript) {
+        setLiveTranscriptText(payload.partial_transcript);
+      }
+      if (status) {
+        status.textContent = payload.status_label === "Running" ? "Transcribing..." : "Scoring queued";
+      }
+      return;
+    }
+
+    if (payload.is_done) {
+      setTranscriptState("Finished");
+      if (payload.transcript_html) {
+        setLiveTranscriptHtml(payload.transcript_html);
+      } else if (payload.partial_transcript) {
+        setLiveTranscriptText(payload.partial_transcript);
+      }
+      renderPracticeMetrics(payload.metrics);
+      latestScoreText = payload.score_text || buildScoreText(payload.metrics);
+      setCopyScoreEnabled(Boolean(latestScoreText));
+      if (status) {
+        status.textContent = "Scoring finished";
+      }
+      setScoreButtonBusy(false);
+      return;
+    }
+
+    if (payload.is_failed) {
+      setTranscriptState("Failed");
+      setLiveTranscriptText(payload.error_message || "Scoring failed.");
+      if (status) {
+        status.textContent = "Scoring failed";
+      }
+      setScoreButtonBusy(false);
+    }
+  }
+
+  async function pollPracticeJobStatus() {
+    if (!activeJobStatusUrl) {
+      return;
+    }
+    try {
+      const response = await fetch(activeJobStatusUrl, {
+        headers: { Accept: "application/json" },
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        throw new Error("Job status failed.");
+      }
+      const payload = await response.json();
+      renderPracticeJobStatus(payload);
+      if (payload.is_pending) {
+        jobPollTimeout = window.setTimeout(pollPracticeJobStatus, 1800);
+      } else {
+        activeJobStatusUrl = "";
+        jobPollTimeout = null;
+      }
+    } catch (error) {
+      setTranscriptState("Status unavailable");
+      jobPollTimeout = window.setTimeout(pollPracticeJobStatus, 2400);
+    }
+  }
+
+  function startPracticeJobPolling(statusUrl) {
+    activeJobStatusUrl = statusUrl || "";
+    if (jobPollTimeout) {
+      window.clearTimeout(jobPollTimeout);
+      jobPollTimeout = null;
+    }
+    if (activeJobStatusUrl) {
+      pollPracticeJobStatus();
+    }
+  }
+
+  async function submitPracticeForScoring(event) {
+    event.preventDefault();
+    if (jobPollTimeout) {
+      window.clearTimeout(jobPollTimeout);
+      jobPollTimeout = null;
+    }
+    latestScoreText = "";
+    setCopyScoreEnabled(false);
+    setScoreButtonBusy(true);
+    setTranscriptState("Queued");
+    setLiveTranscriptText("");
+    if (status) {
+      status.textContent = "Queueing scoring job...";
+    }
+
+    try {
+      const response = await fetch(form.action || window.location.href, {
+        method: "POST",
+        body: new FormData(form),
+        headers: {
+          Accept: "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        credentials: "same-origin",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "Scoring could not be queued.");
+      }
+      if (status && payload.message) {
+        status.textContent = payload.message;
+      }
+      renderPracticeJobStatus(payload);
+      startPracticeJobPolling(payload.status_url);
+    } catch (error) {
+      setTranscriptState("Needs audio");
+      setLiveTranscriptText(error.message || "Record or upload audio before scoring.");
+      if (status) {
+        status.textContent = error.message || "Scoring could not be queued.";
+      }
+      setScoreButtonBusy(false);
+    }
+  }
+
+  form.addEventListener("submit", submitPracticeForScoring);
+
+  if (autumnButton && autumnForm) {
+    autumnButton.addEventListener("click", async function (event) {
+      event.preventDefault();
+      const payload = new FormData(autumnForm);
+      payload.set(autumnButton.name, autumnButton.value || "1");
+      setAutumnButtonBusy(true);
+      try {
+        const response = await fetch(autumnForm.action, {
+          method: "POST",
+          body: payload,
+          headers: {
+            Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+          credentials: "same-origin",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.message || "Autumn timer update failed.");
+        }
+        updateAutumnButton(data);
+        if (status && data.message) {
+          status.textContent = data.message;
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message || "Autumn timer update failed.";
+        }
+        setAutumnButtonBusy(false);
+      }
+    });
+  }
+
+  if (copyScoreButton) {
+    copyScoreButton.addEventListener("click", async function () {
+      if (!latestScoreText) {
+        return;
+      }
+      try {
+        const copied = await copyTextToClipboard(latestScoreText);
+        if (copied) {
+          copyScoreButton.textContent = "Copied";
+          window.setTimeout(function () {
+            copyScoreButton.textContent = "Copy score";
+          }, 1300);
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = latestScoreText;
+        }
+      }
+    });
+  }
+
+  if (liveTranscript) {
+    liveTranscript.addEventListener("click", function (event) {
+      const segment = closestTimedSegment(event.target);
+      if (segment) {
+        seekPreviewTo(segment.dataset.start);
+      }
+    });
+    liveTranscript.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      const segment = closestTimedSegment(event.target);
+      if (!segment) {
+        return;
+      }
+      event.preventDefault();
+      seekPreviewTo(segment.dataset.start);
+    });
+  }
+
   if (waveformCanvas) {
     clearWaveform();
     window.addEventListener("resize", function () {
@@ -549,6 +959,8 @@
       setPlayhead(0);
       recordingTime.textContent = "00:00";
     });
+    preview.addEventListener("timeupdate", setActiveTranscriptSegment);
+    preview.addEventListener("loadedmetadata", setActiveTranscriptSegment);
   }
 
   if (playButton) {

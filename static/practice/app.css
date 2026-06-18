@@ -326,11 +326,17 @@ small {
 
 .page-title {
   margin: 8px 0 18px;
+  justify-content: flex-start;
 }
 
 .page-title h1,
 .detail-header h1 {
-  font-size: clamp(34px, 5vw, 58px);
+  font-size: clamp(30px, 3.2vw, 42px);
+  line-height: 1.12;
+}
+
+.today-main > .panel-heading {
+  margin-bottom: 18px;
 }
 
 .card-stack,
@@ -1200,9 +1206,10 @@ select {
 }
 
 .practice-recorder-panel {
+  display: flex;
+  flex-direction: column;
   padding: clamp(16px, 2.4vw, 22px);
   overflow: auto;
-  grid-template-rows: auto auto minmax(230px, 0.82fr) auto auto minmax(150px, 0.58fr) auto;
   border-color: #173230;
   color: #fffaf0;
   background:
@@ -1670,6 +1677,17 @@ select {
   border-color: var(--accent-dark);
 }
 
+.autumn-button {
+  min-width: 128px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.autumn-button.is-active {
+  background: var(--ember);
+  border-color: #7f2410;
+}
+
 .field-row label {
   color: var(--ember);
   font-size: 12px;
@@ -1729,7 +1747,8 @@ select {
 
 .waveform-card {
   position: relative;
-  min-height: clamp(220px, 34vh, 360px);
+  flex: 0 0 auto;
+  min-height: clamp(180px, 26vh, 300px);
   overflow: hidden;
   border: 1px solid rgba(82, 240, 255, 0.24);
   border-radius: 8px;
@@ -1747,7 +1766,7 @@ select {
 .waveform-card canvas {
   display: block;
   width: 100%;
-  height: clamp(220px, 34vh, 360px);
+  height: clamp(180px, 26vh, 300px);
 }
 
 .waveform-empty {
@@ -1919,6 +1938,12 @@ select {
   font-weight: 700;
 }
 
+.copy-score-button {
+  flex: 0 0 auto;
+  min-width: 112px;
+  text-align: center;
+}
+
 .practice-metrics {
   display: flex;
   flex-wrap: wrap;
@@ -1937,7 +1962,8 @@ select {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 4px;
-  min-height: 0;
+  flex: 1 1 260px;
+  min-height: 260px;
 }
 
 .transcript-heading {
@@ -1973,7 +1999,7 @@ select {
 }
 
 .live-transcript-box {
-  min-height: 120px;
+  min-height: 220px;
   max-height: none;
   overflow: auto;
   padding: 14px;
@@ -1988,8 +2014,25 @@ select {
 }
 
 .upload-row {
-  padding-top: 2px;
+  display: grid;
+  gap: 4px;
+  flex: 0 0 auto;
+  align-content: start;
+  padding-top: 0;
   opacity: 0.82;
+}
+
+.upload-row input[type="file"] {
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.2;
+  color: #22302e;
+  background: rgba(255, 250, 240, 0.82);
+}
+
+.upload-row small {
+  line-height: 1.25;
 }
 
 .form-error {
@@ -2038,10 +2081,12 @@ select {
   font-family: Georgia, "Times New Roman", serif;
   font-size: 18px;
   line-height: 1.62;
+  white-space: pre-line;
 }
 
 .script-reader p {
   margin: 0 0 1em;
+  white-space: pre-line;
 }
 
 .script-reader p:last-child {
@@ -2319,6 +2364,72 @@ select {
   gap: 12px;
 }
 
+.autumn-login-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.autumn-login-grid p {
+  min-width: 0;
+}
+
+.autumn-subprojects-box {
+  display: grid;
+  gap: 10px;
+}
+
+.subproject-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ember);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.subproject-heading small {
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.autumn-subprojects-box #id_autumn_subprojects {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.76);
+}
+
+.autumn-subprojects-box label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid rgba(36, 31, 26, 0.12);
+  border-radius: 6px;
+  background: #fffaf0;
+  font-weight: 700;
+}
+
+.autumn-subprojects-box input {
+  width: auto;
+}
+
+.autumn-subprojects-box.is-loading {
+  opacity: 0.65;
+}
+
 .check-row {
   display: flex;
   align-items: center;
@@ -2530,6 +2641,7 @@ select {
   .practice-shell,
   .settings-grid,
   .settings-subgrid,
+  .autumn-login-grid,
   .api-keys-grid,
   .compare-grid,
   .metric-strip,
@@ -2671,7 +2783,8 @@ select {
     width: 60px;
   }
 
-  .transport-bar .score-button {
+  .transport-bar .score-button,
+  .transport-bar .autumn-button {
     width: auto;
   }
 }

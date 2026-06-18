@@ -195,10 +195,26 @@
           <span aria-hidden="true"></span>
         </button>
         <button class="button-link score-button" type="submit">Score recording</button>
+        <button class="button-link copy-score-button" type="button" data-copy-practice-score disabled>Copy score</button>
+        {% if autumn_timer.configured %}
+          <button
+            class="button-link autumn-button{% if autumn_timer.active %} is-active{% endif %}"
+            type="submit"
+            form="autumn-timer-form"
+            name="{% if autumn_timer.active %}stop_autumn_timer{% else %}start_autumn_timer{% endif %}"
+            value="1"
+            title="{{ autumn_timer.project }}{% if autumn_timer.subprojects %}: {{ autumn_timer.subprojects|join:', ' }}{% endif %}"
+            data-autumn-toggle
+          >
+            {% if autumn_timer.active %}Stop Autumn{% else %}Start Autumn{% endif %}
+          </button>
+        {% else %}
+          <a class="button-link secondary-button autumn-button" href="{% url 'practice:account' %}">Connect Autumn</a>
+        {% endif %}
       </div>
     </div>
 
-    <div class="practice-metrics" aria-live="polite">
+    <div class="practice-metrics" aria-live="polite" data-practice-metrics>
       <strong>Score: -</strong>
       <span>WER: -</span>
       <span>CER: -</span>
@@ -236,5 +252,13 @@
   </aside>
 </form>
 
-<script src="{% static 'practice/recorder.js' %}?v=9"></script>
+{% if autumn_timer.configured %}
+  <form id="autumn-timer-form" method="post" action="{% url 'practice:autumn_timer' %}" hidden>
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <input type="hidden" name="autumn_note" value="{{ autumn_timer.note }}">
+  </form>
+{% endif %}
+
+<script src="{% static 'practice/recorder.js' %}?v={{ static_version.recorder_js }}"></script>
 {% endblock %}

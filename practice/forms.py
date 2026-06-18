@@ -189,6 +189,19 @@ class AccountSettingsForm(forms.ModelForm):
             attrs={"autocomplete": "new-password", "placeholder": "Autumn API token"},
         ),
     )
+    autumn_username = forms.CharField(
+        required=False,
+        label="Autumn username",
+        widget=forms.TextInput(attrs={"autocomplete": "username", "placeholder": "username"}),
+    )
+    autumn_password = forms.CharField(
+        required=False,
+        label="Autumn password",
+        widget=forms.PasswordInput(
+            render_value=False,
+            attrs={"autocomplete": "current-password", "placeholder": "password"},
+        ),
+    )
     clear_openai_api_key = forms.BooleanField(required=False, label="Clear OpenAI key")
     clear_anthropic_api_key = forms.BooleanField(required=False, label="Clear Anthropic key")
     clear_autumn_token = forms.BooleanField(required=False, label="Clear Autumn token")
@@ -196,6 +209,13 @@ class AccountSettingsForm(forms.ModelForm):
         required=False,
         label="Autumn subprojects",
         help_text="Comma-separated Autumn subprojects.",
+        widget=forms.HiddenInput,
+    )
+    autumn_subprojects = forms.MultipleChoiceField(
+        required=False,
+        label="Autumn subprojects",
+        choices=[],
+        widget=forms.CheckboxSelectMultiple,
     )
 
     class Meta:
@@ -221,12 +241,17 @@ class AccountSettingsForm(forms.ModelForm):
         ]
 
     def __init__(self, *args, **kwargs):
+        autumn_projects = kwargs.pop("autumn_projects", None) or []
+        autumn_subproject_options = kwargs.pop("autumn_subproject_options", None) or []
         super().__init__(*args, **kwargs)
         self.fields["openai_script_model"].widget = forms.Select(
             choices=settings.OPENAI_SCRIPT_MODEL_CHOICES
         )
         self.fields["anthropic_script_model"].widget = forms.Select(
             choices=settings.ANTHROPIC_SCRIPT_MODEL_CHOICES
+        )
+        self.fields["openai_transcription_model"].widget = forms.Select(
+            choices=settings.OPENAI_TRANSCRIPTION_MODEL_CHOICES
         )
         self.fields["whisper_model_name"].widget = forms.Select(
             choices=[
@@ -247,19 +272,38 @@ class AccountSettingsForm(forms.ModelForm):
         self.fields["openai_api_key"].initial = ""
         self.fields["anthropic_api_key"].initial = ""
         self.fields["autumn_token"].initial = ""
+        current_project = str(getattr(self.instance, "autumn_project", "") or "").strip()
+        project_choices = _choice_pairs(autumn_projects, include=current_project)
+        if project_choices:
+            self.fields["autumn_project"].widget = forms.Select(choices=project_choices)
+        else:
+            self.fields["autumn_project"].widget.attrs.update(
+                {"placeholder": "Connect Autumn to load projects"}
+            )
+        self.fields["autumn_subprojects"].choices = _choice_pairs(autumn_subproject_options)
         if self.instance and self.instance.pk:
+            selected_subprojects = self.instance.autumn_subprojects or []
+            self.fields["autumn_subprojects"].initial = selected_subprojects
             self.fields["autumn_subprojects_text"].initial = ", ".join(
-                self.instance.autumn_subprojects or []
+                selected_subprojects
             )
 
     def save(self, commit=True):
         instance = super().save(commit=False)
         if not instance.autumn_base_url:
             instance.autumn_base_url = settings.DEFAULT_AUTUMN_BASE_URL
+        selected_subprojects = self.cleaned_data.get("autumn_subprojects") or []
         subs_raw = self.cleaned_data.get("autumn_subprojects_text") or ""
-        instance.autumn_subprojects = [
-            item.strip() for item in subs_raw.split(",") if item.strip()
-        ]
+        if selected_subprojects:
+            instance.autumn_subprojects = [
+                str(item).strip() for item in selected_subprojects if str(item).strip()
+            ]
+        elif subs_raw:
+            instance.autumn_subprojects = [
+                item.strip() for item in subs_raw.split(",") if item.strip()
+            ]
+        else:
+            instance.autumn_subprojects = []
         for field in ("openai_api_key", "anthropic_api_key", "autumn_token"):
             if self.cleaned_data.get(f"clear_{field}"):
                 instance.set_secret(field, None)
@@ -268,3 +312,15 @@ class AccountSettingsForm(forms.ModelForm):
         if commit:
             instance.save()
         return instance
+
+
+def _choice_pairs(values: list[str], include: str = "") -> list[tuple[str, str]]:
+    seen = set()
+    choices = []
+    for value in [include, *values]:
+        clean = str(value or "").strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        choices.append((clean, clean))
+    return choices

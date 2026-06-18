@@ -3,10 +3,12 @@ from __future__ import annotations
 import re
 import json
 import mimetypes
+import random
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from django.contrib import messages
+from django.conf import settings as django_settings
 from django.core.files.uploadedfile import UploadedFile
 from django.db import models
 from django.db.utils import OperationalError, ProgrammingError
@@ -14,9 +16,10 @@ from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
-from autumn_client import AutumnClient, AutumnError
+from autumn_client import AutumnClient, AutumnError, normalize_base_url
 from error_analytics import (
     _position_bucket,
     _word_to_phoneme_symbols,
@@ -132,6 +135,7 @@ def practice_run(request):
             card = form.cleaned_data.get("card")
             audio = form.cleaned_data["audio"]
             provider = form.cleaned_data.get("provider") or None
+            provider_name = provider or "local_whisper"
             if audio is None:
                 form.add_error("audio", "Record or upload audio before scoring.")
             else:
@@ -139,23 +143,42 @@ def practice_run(request):
                 if mode == PracticeRunForm.MODE_FREE:
                     job = create_free_speak_job(
                         audio_path=str(audio_path),
-                        provider=provider or "local_whisper",
+                        provider=provider_name,
                     )
                 else:
                     job = create_scoring_job(
                         script=script,
                         audio_path=str(audio_path),
-                        provider=provider or "local_whisper",
+                        provider=provider_name,
                         card=card,
                     )
                 enqueue_scoring_job(job)
                 focus_label = f" for {card.display_title}" if card else ""
                 mode_label = "Free Speak transcription" if mode == PracticeRunForm.MODE_FREE else "Scoring"
+                message = f"{mode_label} queued{focus_label} with {provider_label(provider_name)}."
+                if _wants_json(request):
+                    return JsonResponse(
+                        {
+                            "ok": True,
+                            "message": message,
+                            **_scoring_job_payload(job),
+                        },
+                        status=202,
+                    )
                 messages.success(
                     request,
-                    f"{mode_label} queued{focus_label} with {provider_label(provider)}.",
+                    message,
                 )
                 return redirect("practice:scoring_job", pk=job.pk)
+        if _wants_json(request):
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": _form_error_summary(form),
+                    "errors": form.errors.get_json_data(escape_html=True),
+                },
+                status=400,
+            )
     else:
         script_id = request.GET.get("script")
         card_id = request.GET.get("card")
@@ -205,6 +228,8 @@ def practice_run(request):
             ).first()
         elif initial_card is not None:
             initial_script = _latest_script_for_card(initial_card)
+        elif mode == PracticeRunForm.MODE_SCRIPT:
+            initial_script = _random_script_for_kind(PracticeScript.KIND_READING)
         form = PracticeRunForm(
             initial_script=initial_script,
             initial_card=initial_card,
@@ -243,6 +268,10 @@ def practice_run(request):
         "ladder_steps": ladder_steps,
         "selected_ladder_step": selected_ladder_step,
         "generation_provider_choices": script_generation_provider_choices(),
+        "autumn_timer": _autumn_timer_context(
+            PracticeSettings.load(),
+            selected_script=selected_script,
+        ),
     }
     return render(request, "practice/practice_run.html", context)
 
@@ -321,6 +350,7 @@ def session_detail(request, pk: int):
             "highlighted": highlighted,
             "has_audio": audio_exists(session),
             "mistake_lines": mistake_lines,
+            "score_text": _session_score_text(session),
         },
     )
 
@@ -418,22 +448,109 @@ def scoring_job_detail(request, pk: int):
 
 def scoring_job_status(request, pk: int):
     job = get_object_or_404(ScoringJob, pk=pk)
-    session_url = ""
-    if job.legacy_session_id:
-        session_url = reverse("practice:session_detail", args=[job.legacy_session_id])
-    return JsonResponse(
-        {
-            "id": job.pk,
-            "status": job.status,
-            "status_label": job.get_status_display(),
-            "is_pending": job.status in {ScoringJob.STATUS_QUEUED, ScoringJob.STATUS_RUNNING},
-            "is_done": job.status == ScoringJob.STATUS_SUCCEEDED,
-            "is_failed": job.status == ScoringJob.STATUS_FAILED,
-            "partial_transcript": job.partial_transcript or "",
-            "error_message": job.error_message or "",
-            "session_url": session_url,
-        }
+    return JsonResponse(_scoring_job_payload(job))
+
+
+def _scoring_job_payload(job: ScoringJob) -> dict:
+    session = (
+        PracticeSession.objects.filter(pk=job.legacy_session_id).first()
+        if job.legacy_session_id
+        else None
     )
+    session_url = reverse("practice:session_detail", args=[session.pk]) if session else ""
+    payload = {
+        "id": job.pk,
+        "status": job.status,
+        "status_label": job.get_status_display(),
+        "is_pending": job.status in {ScoringJob.STATUS_QUEUED, ScoringJob.STATUS_RUNNING},
+        "is_done": job.status == ScoringJob.STATUS_SUCCEEDED,
+        "is_failed": job.status == ScoringJob.STATUS_FAILED,
+        "partial_transcript": job.partial_transcript or "",
+        "error_message": job.error_message or "",
+        "status_url": reverse("practice:scoring_job_status", args=[job.pk]),
+        "job_url": reverse("practice:scoring_job", args=[job.pk]),
+        "session_url": session_url,
+    }
+    if session is not None:
+        highlighted = highlighted_session_text(session)
+        payload.update(
+            {
+                "session_id": session.pk,
+                "transcript_html": str(highlighted.timed_transcript_html),
+                "has_timed_transcript": highlighted.has_timed_transcript,
+                "error_count": highlighted.error_count,
+                "metrics": _session_metrics_payload(session),
+                "score_text": _session_score_text(session),
+            }
+        )
+    return payload
+
+
+def _session_metrics_payload(session: PracticeSession) -> dict[str, str]:
+    return {
+        "score": _format_metric(session.score),
+        "wer": _format_metric(session.wer),
+        "cer": _format_metric(session.cer),
+        "clarity": _format_metric(session.clarity),
+        "artic_rate": _format_metric(session.artic_rate, suffix=" wpm"),
+        "pause_ratio": _format_metric(session.pause_ratio),
+        "avg_conf": _format_metric(session.avg_conf),
+    }
+
+
+def _session_score_text(session: PracticeSession) -> str:
+    no_scores = not bool(session.transcript)
+    score = _format_score_value(session.score, no_scores=no_scores)
+    wer = _format_percent_value(session.wer, no_scores=no_scores)
+    cer = _format_percent_value(session.cer, no_scores=no_scores)
+    clarity = _format_percent_value(session.clarity, no_scores=no_scores)
+    rate = _format_wpm_value(session.artic_rate, no_scores=no_scores)
+    pauses = _format_percent_value(session.pause_ratio, no_scores=no_scores, places=0)
+    conf = _format_percent_value(session.avg_conf, no_scores=no_scores, places=0)
+    return (
+        f"Score: {score}/5 | WER: {wer} | CER: {cer} | "
+        f"Clarity: {clarity} | Rate: {rate} | Pauses: {pauses} | Conf: {conf}"
+    )
+
+
+def _format_score_value(value: float | None, no_scores: bool = False) -> str:
+    if value is None or no_scores:
+        return "-"
+    return f"{float(value):.2f}"
+
+
+def _format_percent_value(
+    value: float | None,
+    no_scores: bool = False,
+    places: int = 2,
+) -> str:
+    if value is None or no_scores:
+        return "-"
+    return f"{float(value):.{places}%}"
+
+
+def _format_wpm_value(value: float | None, no_scores: bool = False) -> str:
+    if value is None or no_scores:
+        return "- wpm"
+    return f"{float(value):.0f} wpm"
+
+
+def _wants_json(request) -> bool:
+    return (
+        request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        or "application/json" in request.headers.get("Accept", "")
+    )
+
+
+def _form_error_summary(form) -> str:
+    messages_list: list[str] = []
+    for field_name, errors in form.errors.items():
+        label = ""
+        if field_name != "__all__" and field_name in form.fields:
+            label = form.fields[field_name].label or field_name.replace("_", " ").title()
+        for error in errors:
+            messages_list.append(f"{label}: {error}" if label else str(error))
+    return " ".join(messages_list) or "Please fix the highlighted fields."
 
 
 @require_POST
@@ -821,6 +938,17 @@ def delete_practice_ladder(request, pk: int):
 def account_settings(request):
     settings_obj = PracticeSettings.load()
     if request.method == "POST":
+        if "connect_autumn" in request.POST:
+            _connect_autumn(request, settings_obj)
+            return redirect("practice:account")
+
+        if "disconnect_autumn" in request.POST:
+            settings_obj.set_secret("autumn_token", None)
+            settings_obj.autumn_active_session_id = None
+            settings_obj.save()
+            messages.success(request, "Autumn disconnected.")
+            return redirect("practice:account")
+
         if "start_codex_login" in request.POST:
             try:
                 device_code = start_device_code_login()
@@ -862,43 +990,22 @@ def account_settings(request):
             return redirect("practice:account")
 
         if "start_autumn_timer" in request.POST:
-            try:
-                payload = _autumn_client(settings_obj).start_timer(
-                    settings_obj.autumn_project,
-                    settings_obj.autumn_subprojects or [],
-                    note=request.POST.get("autumn_note") or "SpeechPractice practice",
-                )
-                session = payload.get("session") or {}
-                session_id = session.get("id")
-                if not session_id:
-                    raise AutumnError("Autumn did not return a timer id")
-                settings_obj.autumn_active_session_id = int(session_id)
-                settings_obj.save(update_fields=["autumn_active_session_id", "updated_at"])
-                messages.success(request, f"Autumn timer started for {settings_obj.autumn_project}.")
-            except (AutumnError, ValueError, TypeError) as exc:
-                messages.error(request, f"Autumn start failed: {exc}")
+            _start_autumn_timer(request, settings_obj, request.POST.get("autumn_note"))
             return redirect("practice:account")
 
         if "stop_autumn_timer" in request.POST:
-            try:
-                payload = _autumn_client(settings_obj).stop_timer(
-                    session_id=settings_obj.autumn_active_session_id,
-                    project=settings_obj.autumn_project,
-                    note=request.POST.get("autumn_note") or _latest_autumn_note(),
-                )
-                settings_obj.autumn_active_session_id = None
-                settings_obj.save(update_fields=["autumn_active_session_id", "updated_at"])
-                duration = payload.get("duration")
-                if duration is not None:
-                    messages.success(request, f"Autumn timer stopped after {float(duration):.1f} minutes.")
-                else:
-                    messages.success(request, "Autumn timer stopped.")
-            except (AutumnError, ValueError, TypeError) as exc:
-                messages.error(request, f"Autumn stop failed: {exc}")
+            _stop_autumn_timer(request, settings_obj, request.POST.get("autumn_note"))
             return redirect("practice:account")
 
         old_whisper = _whisper_settings_snapshot(settings_obj)
-        form = AccountSettingsForm(request.POST, instance=settings_obj)
+        form = AccountSettingsForm(
+            request.POST,
+            instance=settings_obj,
+            **_autumn_form_options(
+                settings_obj,
+                project=request.POST.get("autumn_project"),
+            ),
+        )
         if form.is_valid():
             form.save()
             if old_whisper != _whisper_settings_snapshot(settings_obj):
@@ -906,7 +1013,7 @@ def account_settings(request):
             messages.success(request, "Account settings saved.")
             return redirect("practice:account")
     else:
-        form = AccountSettingsForm(instance=settings_obj)
+        form = AccountSettingsForm(instance=settings_obj, **_autumn_form_options(settings_obj))
 
     bundle = deserialize_token_bundle(settings_obj.get_secret("codex_token_bundle"))
     context = {
@@ -925,6 +1032,51 @@ def account_settings(request):
         "autumn_note": _latest_autumn_note(),
     }
     return render(request, "practice/account.html", context)
+
+
+def autumn_subprojects(request):
+    settings_obj = PracticeSettings.load()
+    project = (request.GET.get("project") or settings_obj.autumn_project or "").strip()
+    if not project:
+        return JsonResponse({"ok": False, "error": "Choose an Autumn project first."}, status=400)
+    try:
+        client = _autumn_token_client(settings_obj)
+        subprojects = client.list_subprojects(project)
+    except AutumnError as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+    return JsonResponse({"ok": True, "subprojects": subprojects})
+
+
+@require_POST
+def autumn_timer(request):
+    settings_obj = PracticeSettings.load()
+    next_url = _safe_next_url(request, request.POST.get("next")) or reverse("practice:practice")
+    if "stop_autumn_timer" in request.POST:
+        result = _stop_autumn_timer(
+            request,
+            settings_obj,
+            request.POST.get("autumn_note"),
+            notify=not _wants_json(request),
+        )
+    elif "start_autumn_timer" in request.POST:
+        result = _start_autumn_timer(
+            request,
+            settings_obj,
+            request.POST.get("autumn_note"),
+            notify=not _wants_json(request),
+        )
+    else:
+        result = {
+            "ok": False,
+            "active": bool(settings_obj.autumn_active_session_id),
+            "message": "Choose whether to start or stop Autumn.",
+        }
+        if not _wants_json(request):
+            messages.error(request, result["message"])
+    if _wants_json(request):
+        status = 200 if result["ok"] else 400
+        return JsonResponse(result, status=status)
+    return redirect(next_url)
 
 
 def _latest_script_for_card(card: ImprovementCard) -> PracticeScript | None:
@@ -1001,6 +1153,14 @@ def _first_builtin_drill() -> PracticeScript | None:
         .order_by("difficulty", "title")
         .first()
     )
+
+
+def _random_script_for_kind(script_kind: str) -> PracticeScript | None:
+    scripts = PracticeScript.objects.filter(active=True, practice_kind=script_kind).order_by("pk")
+    count = scripts.count()
+    if count <= 0:
+        return None
+    return scripts[random.randrange(count)]
 
 
 def _cards_for_ladder_generation(card_ids: list[str]) -> list[ImprovementCard]:
@@ -1170,6 +1330,208 @@ def _format_metric(value: float | None, suffix: str = "") -> str:
     if value is None:
         return "-"
     return f"{value:.3g}{suffix}"
+
+
+def _connect_autumn(request, settings_obj: PracticeSettings) -> None:
+    base_url = normalize_base_url(
+        request.POST.get("autumn_base_url")
+        or settings_obj.autumn_base_url
+        or django_settings.DEFAULT_AUTUMN_BASE_URL
+    )
+    username = (request.POST.get("autumn_username") or "").strip()
+    password = request.POST.get("autumn_password") or ""
+    if not username or not password:
+        messages.error(request, "Enter your Autumn username and password.")
+        return
+
+    try:
+        client = AutumnClient(base_url)
+        token = client.authenticate(username, password)
+    except AutumnError as exc:
+        messages.error(request, f"Autumn login failed: {exc}")
+        return
+
+    settings_obj.autumn_base_url = client.base_url
+    settings_obj.set_secret("autumn_token", token)
+    refresh_message = _refresh_autumn_project_choices(client, settings_obj)
+    settings_obj.save()
+    messages.success(request, f"Autumn connected.{refresh_message}")
+
+
+def _autumn_form_options(
+    settings_obj: PracticeSettings,
+    project: str | None = None,
+) -> dict[str, list[str]]:
+    token = settings_obj.get_secret("autumn_token") or ""
+    selected_project = (project or settings_obj.autumn_project or "").strip()
+    if not token:
+        return {
+            "autumn_projects": [selected_project] if selected_project else [],
+            "autumn_subproject_options": list(settings_obj.autumn_subprojects or []),
+        }
+
+    try:
+        client = _autumn_token_client(settings_obj)
+        projects = client.list_projects()
+    except AutumnError:
+        projects = []
+
+    if not selected_project and projects:
+        selected_project = projects[0]
+    if selected_project and selected_project not in projects:
+        projects = [selected_project, *projects]
+
+    subprojects = []
+    if selected_project:
+        try:
+            subprojects = _autumn_token_client(settings_obj).list_subprojects(selected_project)
+        except AutumnError:
+            subprojects = []
+    if not subprojects:
+        subprojects = list(settings_obj.autumn_subprojects or [])
+
+    return {
+        "autumn_projects": projects,
+        "autumn_subproject_options": subprojects,
+    }
+
+
+def _refresh_autumn_project_choices(client: AutumnClient, settings_obj: PracticeSettings) -> str:
+    try:
+        projects = client.list_projects()
+    except AutumnError as exc:
+        return f" Project refresh failed: {exc}"
+    if not projects:
+        return " No Autumn projects were returned."
+
+    if not settings_obj.autumn_project or settings_obj.autumn_project not in projects:
+        settings_obj.autumn_project = projects[0]
+
+    try:
+        available_subprojects = client.list_subprojects(settings_obj.autumn_project)
+    except AutumnError:
+        available_subprojects = []
+    if available_subprojects and settings_obj.autumn_subprojects:
+        available = set(available_subprojects)
+        settings_obj.autumn_subprojects = [
+            item for item in settings_obj.autumn_subprojects if item in available
+        ]
+    return f" Project: {settings_obj.autumn_project}."
+
+
+def _autumn_token_client(settings_obj: PracticeSettings) -> AutumnClient:
+    token = settings_obj.get_secret("autumn_token") or ""
+    if not token:
+        raise AutumnError("Store an Autumn token first.")
+    return AutumnClient(settings_obj.autumn_base_url, token)
+
+
+def _start_autumn_timer(
+    request,
+    settings_obj: PracticeSettings,
+    note: str | None = None,
+    notify: bool = True,
+) -> dict[str, object]:
+    try:
+        payload = _autumn_client(settings_obj).start_timer(
+            settings_obj.autumn_project,
+            settings_obj.autumn_subprojects or [],
+            note=note or "SpeechPractice practice",
+        )
+        session = payload.get("session") or {}
+        session_id = session.get("id")
+        if not session_id:
+            raise AutumnError("Autumn did not return a timer id")
+        settings_obj.autumn_active_session_id = int(session_id)
+        settings_obj.save(update_fields=["autumn_active_session_id", "updated_at"])
+        message = f"Autumn timer started for {settings_obj.autumn_project}."
+        if notify:
+            messages.success(request, message)
+        return {
+            "ok": True,
+            "active": True,
+            "message": message,
+            "button_label": "Stop Autumn",
+            "button_name": "stop_autumn_timer",
+        }
+    except (AutumnError, ValueError, TypeError) as exc:
+        message = f"Autumn start failed: {exc}"
+        if notify:
+            messages.error(request, message)
+        return {
+            "ok": False,
+            "active": bool(settings_obj.autumn_active_session_id),
+            "message": message,
+        }
+
+
+def _stop_autumn_timer(
+    request,
+    settings_obj: PracticeSettings,
+    note: str | None = None,
+    notify: bool = True,
+) -> dict[str, object]:
+    try:
+        payload = _autumn_client(settings_obj).stop_timer(
+            session_id=settings_obj.autumn_active_session_id,
+            project=settings_obj.autumn_project,
+            note=note or _latest_autumn_note(),
+        )
+        settings_obj.autumn_active_session_id = None
+        settings_obj.save(update_fields=["autumn_active_session_id", "updated_at"])
+        duration = payload.get("duration")
+        if duration is not None:
+            message = f"Autumn timer stopped after {float(duration):.1f} minutes."
+        else:
+            message = "Autumn timer stopped."
+        if notify:
+            messages.success(request, message)
+        return {
+            "ok": True,
+            "active": False,
+            "message": message,
+            "button_label": "Start Autumn",
+            "button_name": "start_autumn_timer",
+        }
+    except (AutumnError, ValueError, TypeError) as exc:
+        message = f"Autumn stop failed: {exc}"
+        if notify:
+            messages.error(request, message)
+        return {
+            "ok": False,
+            "active": bool(settings_obj.autumn_active_session_id),
+            "message": message,
+        }
+
+
+def _autumn_timer_context(
+    settings_obj: PracticeSettings,
+    selected_script: PracticeScript | None = None,
+) -> dict[str, object]:
+    has_token = settings_obj.has_secret("autumn_token")
+    configured = has_token and bool(settings_obj.autumn_project)
+    active = configured and bool(settings_obj.autumn_active_session_id)
+    note = "SpeechPractice practice"
+    if selected_script is not None:
+        note = f"SpeechPractice: {selected_script.title}"
+    return {
+        "configured": configured,
+        "connected": has_token,
+        "active": active,
+        "project": settings_obj.autumn_project,
+        "subprojects": settings_obj.autumn_subprojects or [],
+        "note": note,
+    }
+
+
+def _safe_next_url(request, raw_url: str | None) -> str:
+    if raw_url and url_has_allowed_host_and_scheme(
+        raw_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return raw_url
+    return ""
 
 
 def _autumn_client(settings_obj: PracticeSettings) -> AutumnClient:

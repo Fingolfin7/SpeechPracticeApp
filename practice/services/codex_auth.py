@@ -4,7 +4,7 @@ import base64
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone as dt_timezone
-from typing import Any
+from typing import Any, Protocol
 
 import requests
 from django.conf import settings
@@ -17,6 +17,17 @@ class CodexAuthError(RuntimeError):
 
 class CodexDevicePending(CodexAuthError):
     pass
+
+
+class CodexTokenStore(Protocol):
+    def get_secret(self, field: str) -> str | None:
+        ...
+
+    def set_secret(self, field: str, value: str | None) -> None:
+        ...
+
+    def save(self, *args, **kwargs) -> None:
+        ...
 
 
 @dataclass(frozen=True)
@@ -192,6 +203,24 @@ def access_token_expires_soon(bundle: dict[str, Any], leeway_seconds: int = 300)
         return False
     expires_at = datetime.fromtimestamp(exp, tz=dt_timezone.utc)
     return expires_at <= datetime.now(dt_timezone.utc) + timedelta(seconds=leeway_seconds)
+
+
+def codex_access_token(token_store: CodexTokenStore | None) -> str | None:
+    if token_store is None:
+        return None
+    bundle = deserialize_token_bundle(token_store.get_secret("codex_token_bundle"))
+    if not bundle:
+        return None
+    if not access_token_expires_soon(bundle):
+        return bundle.get("access_token")
+    try:
+        refreshed = refresh_token_bundle(bundle)
+    except CodexAuthError:
+        return bundle.get("access_token")
+    if refreshed != bundle:
+        token_store.set_secret("codex_token_bundle", serialize_token_bundle(refreshed))
+        token_store.save(update_fields=["codex_token_bundle_enc", "updated_at"])
+    return refreshed.get("access_token")
 
 
 def decode_jwt_payload(jwt: str) -> dict[str, Any] | None:

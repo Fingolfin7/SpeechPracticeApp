@@ -1,4 +1,5 @@
 {% extends "practice/base.html" %}
+{% load static %}
 {% block title %}Account | SpeechPractice{% endblock %}
 {% block content %}
 <section class="page-title">
@@ -38,13 +39,30 @@
         <label class="check-row">{{ form.whisper_condition_on_previous_text }} Use previous text context</label>
       </fieldset>
 
-      <fieldset class="settings-section">
+      <fieldset class="settings-section" data-autumn-settings data-subprojects-url="{% url 'practice:autumn_subprojects' %}">
         <legend>Autumn timer</legend>
         <div class="settings-subgrid">
           <p>{{ form.autumn_base_url.label_tag }}{{ form.autumn_base_url }}</p>
           <p>{{ form.autumn_project.label_tag }}{{ form.autumn_project }}</p>
         </div>
-        <p>{{ form.autumn_subprojects_text.label_tag }}{{ form.autumn_subprojects_text }}</p>
+        <div class="autumn-login-grid">
+          <p>{{ form.autumn_username.label_tag }}{{ form.autumn_username }}</p>
+          <p>{{ form.autumn_password.label_tag }}{{ form.autumn_password }}</p>
+          <button type="submit" name="connect_autumn" value="1">Connect Autumn</button>
+          <button class="secondary-button" type="submit" name="disconnect_autumn" value="1" formnovalidate>Disconnect</button>
+        </div>
+        {{ form.autumn_subprojects_text }}
+        <div class="autumn-subprojects-box" data-autumn-subprojects>
+          <div class="subproject-heading">
+            <span>{{ form.autumn_subprojects.label }}</span>
+            {% if have_keys.autumn %}
+              <small>Select one or more for Start Autumn.</small>
+            {% else %}
+              <small>Connect Autumn to load subprojects.</small>
+            {% endif %}
+          </div>
+          {{ form.autumn_subprojects }}
+        </div>
       </fieldset>
 
       <div class="api-keys-grid">
@@ -66,7 +84,7 @@
         </div>
         <div class="api-key-item">
           <div class="api-key-header">
-            <strong>Autumn</strong>
+            <strong>Autumn token</strong>
             <span>{% if have_keys.autumn %}Stored{% else %}Not stored{% endif %}</span>
           </div>
           {{ form.autumn_token }}
@@ -159,4 +177,5 @@
     </div>
   </aside>
 </section>
+<script src="{% static 'practice/account.js' %}?v={{ static_version.account_js }}"></script>
 {% endblock %}

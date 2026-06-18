@@ -1,8 +1,57 @@
 (function () {
+  const copyScoreButton = document.querySelector("[data-copy-score]");
+  const scoreCopyText = document.querySelector("[data-score-copy-text]");
   const copyMistakesButton = document.querySelector("[data-copy-mistakes]");
   const mistakeLines = document.querySelector("[data-mistake-lines]");
   const toggleHighlightsButton = document.querySelector("[data-toggle-highlights]");
   const compareGrid = document.querySelector(".compare-grid");
+
+  async function copyTextToClipboard(text) {
+    if (!text) {
+      return false;
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  }
+
+  function flashButtonText(button, text, restoreText) {
+    button.textContent = text;
+    window.setTimeout(function () {
+      button.textContent = restoreText;
+    }, 1300);
+  }
+
+  if (copyScoreButton && scoreCopyText) {
+    copyScoreButton.addEventListener("click", async function () {
+      const text = scoreCopyText.textContent.trim();
+      if (!text) {
+        return;
+      }
+      try {
+        const copied = await copyTextToClipboard(text);
+        if (copied) {
+          flashButtonText(copyScoreButton, "Copied", "Copy score");
+        }
+      } catch (error) {
+        const range = document.createRange();
+        range.selectNodeContents(scoreCopyText);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+      }
+    });
+  }
 
   if (copyMistakesButton && mistakeLines) {
     copyMistakesButton.addEventListener("click", async function () {
@@ -11,11 +60,10 @@
         return;
       }
       try {
-        await navigator.clipboard.writeText(text);
-        copyMistakesButton.textContent = "Copied";
-        window.setTimeout(function () {
-          copyMistakesButton.textContent = "Copy mistakes";
-        }, 1300);
+        const copied = await copyTextToClipboard(text);
+        if (copied) {
+          flashButtonText(copyMistakesButton, "Copied", "Copy mistakes");
+        }
       } catch (error) {
         const range = document.createRange();
         range.selectNodeContents(mistakeLines);

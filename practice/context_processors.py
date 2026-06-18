@@ -8,7 +8,13 @@ from django.core.cache import cache
 
 
 STATIC_VERSION_FILES = {
+    "account_js": "practice/account.js",
     "app": "practice/app.css",
+    "favicon": "practice/favicon.svg",
+    "history_js": "practice/history.js",
+    "job_status_js": "practice/job_status.js",
+    "progress_js": "practice/progress.js",
+    "recorder_js": "practice/recorder.js",
 }
 
 

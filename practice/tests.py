@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import tempfile
+import wave
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import db as legacy_db
 from error_analytics import get_phrase_trend_summary
 from django.db import connection
 from django.db.utils import OperationalError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -37,16 +38,37 @@ from .services.script_generation import (
     parse_generated_script,
     script_generation_provider_choices,
 )
+from .services.codex_auth import serialize_token_bundle
 from .services.analytics import build_card_candidates, today_queue
-from .services.transcription import TranscriptResult, UploadedTranscriptProvider
+from .services.transcription import OpenAITranscriptionProvider, TranscriptResult, UploadedTranscriptProvider
 
 
 class PracticeWebTests(TransactionTestCase):
+    def _write_test_wav(self, path: Path, duration_seconds: float = 0.25) -> None:
+        sample_rate = 8000
+        frame_count = int(sample_rate * duration_seconds)
+        silence = b"\x00\x00" * frame_count
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(sample_rate)
+            wav.writeframes(silence)
+
     def test_static_version_uses_app_css_mtime(self):
         version = static_version(None)["static_version"]
 
-        self.assertIn("app", version)
-        self.assertGreater(version["app"], 0)
+        expected_keys = {
+            "account_js",
+            "app",
+            "favicon",
+            "history_js",
+            "job_status_js",
+            "progress_js",
+            "recorder_js",
+        }
+        self.assertTrue(expected_keys.issubset(version))
+        for key in expected_keys:
+            self.assertGreater(version[key], 0, key)
 
     def test_script_library_page_renders(self):
         PracticeScript.objects.create(
@@ -394,6 +416,188 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(result.cer, 0.0)
         self.assertGreater(result.score, 4.9)
 
+    @override_settings(
+        OPENAI_API_KEY="",
+        CODEX_CHATGPT_BASE_URL="https://chatgpt.example.test/codex",
+    )
+    def test_openai_transcription_uses_codex_auth_without_api_key(self):
+        settings_obj = PracticeSettings.load()
+        settings_obj.openai_transcription_model = "whisper-1"
+        settings_obj.set_secret(
+            "codex_token_bundle",
+            serialize_token_bundle(
+                {
+                    "access_token": "codex-access-token",
+                    "refresh_token": "codex-refresh-token",
+                    "id_token": "codex-id-token",
+                }
+            ),
+        )
+        settings_obj.save()
+        calls = []
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+                self.audio = SimpleNamespace(
+                    transcriptions=SimpleNamespace(create=self.create),
+                )
+
+            def create(self, **kwargs):
+                return SimpleNamespace(text=f"{kwargs['model']}: clear codex speech")
+
+        fake_openai_module = SimpleNamespace(OpenAI=FakeOpenAI)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "recording.wav"
+            self._write_test_wav(audio_path)
+            with patch.dict("sys.modules", {"openai": fake_openai_module}):
+                result = OpenAITranscriptionProvider().transcribe(str(audio_path))
+
+        self.assertEqual(result.text, "whisper-1: clear codex speech")
+        self.assertEqual(result.raw["auth_source"], "codex")
+        self.assertEqual(
+            calls,
+            [
+                {"api_key": "codex-access-token"}
+            ],
+        )
+
+    @override_settings(OPENAI_API_KEY="sk-test")
+    def test_openai_whisper_transcription_chunks_partials_and_offsets_segments(self):
+        settings_obj = PracticeSettings.load()
+        settings_obj.openai_transcription_model = "whisper-1"
+        settings_obj.whisper_chunk_seconds = 10
+        settings_obj.save()
+        create_calls = []
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.audio = SimpleNamespace(
+                    transcriptions=SimpleNamespace(create=self.create),
+                )
+
+            def create(self, **kwargs):
+                create_calls.append(kwargs)
+                chunk_number = len(create_calls)
+                return SimpleNamespace(
+                    text=f"chunk {chunk_number}",
+                    segments=[
+                        {
+                            "text": f"chunk {chunk_number}",
+                            "start": 0.0,
+                            "end": 0.5,
+                            "avg_logprob": -0.1,
+                        }
+                    ],
+                )
+
+        partials = []
+        fake_openai_module = SimpleNamespace(OpenAI=FakeOpenAI)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "recording.wav"
+            self._write_test_wav(audio_path, duration_seconds=21.2)
+            with patch.dict("sys.modules", {"openai": fake_openai_module}):
+                result = OpenAITranscriptionProvider().transcribe(
+                    str(audio_path),
+                    partial_callback=partials.append,
+                )
+
+        self.assertEqual(result.text, "chunk 1 chunk 2 chunk 3")
+        self.assertEqual(partials, ["chunk 1", "chunk 1 chunk 2", "chunk 1 chunk 2 chunk 3"])
+        self.assertEqual([segment["start"] for segment in result.segments], [0.0, 10.0, 20.0])
+        self.assertEqual([segment["end"] for segment in result.segments], [0.5, 10.5, 20.5])
+        self.assertEqual(
+            [
+                (
+                    call["model"],
+                    call["response_format"],
+                    call["timestamp_granularities"],
+                    call.get("prompt", ""),
+                )
+                for call in create_calls
+            ],
+            [
+                ("whisper-1", "verbose_json", ["segment"], ""),
+                ("whisper-1", "verbose_json", ["segment"], "chunk 1"),
+                ("whisper-1", "verbose_json", ["segment"], "chunk 1 chunk 2"),
+            ],
+        )
+
+    @override_settings(
+        OPENAI_API_KEY="",
+        CODEX_CHATGPT_BASE_URL="https://chatgpt.example.test/codex",
+    )
+    def test_openai_transcription_reports_missing_codex_api_scope_cleanly(self):
+        settings_obj = PracticeSettings.load()
+        settings_obj.set_secret(
+            "codex_token_bundle",
+            serialize_token_bundle(
+                {
+                    "access_token": "codex-access-token",
+                    "refresh_token": "codex-refresh-token",
+                    "id_token": "codex-id-token",
+                }
+            ),
+        )
+        settings_obj.save()
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.audio = SimpleNamespace(
+                    transcriptions=SimpleNamespace(create=self.create),
+                )
+
+            def create(self, **kwargs):
+                raise RuntimeError(
+                    "You have insufficient permissions for this operation. "
+                    "Missing scopes: api.audio.write."
+                )
+
+        fake_openai_module = SimpleNamespace(OpenAI=FakeOpenAI)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "recording.wav"
+            self._write_test_wav(audio_path)
+            with patch.dict("sys.modules", {"openai": fake_openai_module}):
+                with self.assertRaisesRegex(RuntimeError, "does not include the API scopes"):
+                    OpenAITranscriptionProvider().transcribe(str(audio_path))
+
+    @override_settings(
+        OPENAI_API_KEY="",
+        CODEX_CHATGPT_BASE_URL="https://chatgpt.example.test/codex",
+    )
+    def test_openai_transcription_reports_codex_browser_challenge_cleanly(self):
+        settings_obj = PracticeSettings.load()
+        settings_obj.set_secret(
+            "codex_token_bundle",
+            serialize_token_bundle(
+                {
+                    "access_token": "codex-access-token",
+                    "refresh_token": "codex-refresh-token",
+                    "id_token": "codex-id-token",
+                }
+            ),
+        )
+        settings_obj.save()
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.audio = SimpleNamespace(
+                    transcriptions=SimpleNamespace(create=self.create),
+                )
+
+            def create(self, **kwargs):
+                raise RuntimeError(
+                    "<html><script src='/cdn-cgi/challenge-platform/test.js'></script>"
+                )
+
+        fake_openai_module = SimpleNamespace(OpenAI=FakeOpenAI)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "recording.wav"
+            self._write_test_wav(audio_path)
+            with patch.dict("sys.modules", {"openai": fake_openai_module}):
+                with self.assertRaisesRegex(RuntimeError, "browser challenge"):
+                    OpenAITranscriptionProvider().transcribe(str(audio_path))
+
     def test_practice_page_renders_with_script(self):
         script = PracticeScript.objects.create(
             title="Morning Lines",
@@ -406,6 +610,8 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Morning Lines")
         self.assertContains(response, "Score recording")
+        self.assertContains(response, "Copy score")
+        self.assertContains(response, "data-copy-practice-score")
         self.assertContains(response, 'data-script-preview-base="/scripts/0/preview/"')
         self.assertContains(response, "data-script-title")
         self.assertContains(response, "data-waveform-canvas")
@@ -689,6 +895,47 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_practice_script_mode_picks_random_reading_script_by_default(self):
+        first = PracticeScript.objects.create(
+            title="First Reading",
+            body="first reading text",
+            practice_kind=PracticeScript.KIND_READING,
+            source=PracticeScript.SOURCE_USER,
+        )
+        second = PracticeScript.objects.create(
+            title="Second Reading",
+            body="second reading text",
+            practice_kind=PracticeScript.KIND_READING,
+            source=PracticeScript.SOURCE_USER,
+        )
+
+        with patch("practice.views.random.randrange", return_value=1):
+            response = self.client.get(reverse("practice:practice"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_script"], second)
+        self.assertNotEqual(response.context["selected_script"], first)
+
+    def test_practice_script_query_overrides_random_default(self):
+        PracticeScript.objects.create(
+            title="Other Reading",
+            body="other reading text",
+            practice_kind=PracticeScript.KIND_READING,
+            source=PracticeScript.SOURCE_USER,
+        )
+        selected = PracticeScript.objects.create(
+            title="Chosen Reading",
+            body="chosen reading text",
+            practice_kind=PracticeScript.KIND_READING,
+            source=PracticeScript.SOURCE_USER,
+        )
+
+        with patch("practice.views.random.randrange", return_value=0):
+            response = self.client.get(f"{reverse('practice:practice')}?script={selected.pk}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_script"], selected)
+
     def test_uploaded_transcript_provider_reads_txt_upload(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "recording.txt"
@@ -742,6 +989,61 @@ class PracticeWebTests(TransactionTestCase):
         payload = response.json()
         self.assertTrue(payload["is_pending"])
         self.assertEqual(payload["partial_transcript"], "clear practice")
+
+    def test_scoring_job_status_returns_final_transcript_render(self):
+        self._create_legacy_tables()
+        session = PracticeSession.objects.create(
+            timestamp="2026-06-14T12:00:00",
+            script_name="Status Done Drill",
+            script_text="clear practice text",
+            audio_path="recording.webm",
+            transcript="clear text",
+            wer=0.3,
+            cer=0.25,
+            clarity=0.7,
+            score=3.0,
+            artic_rate=142,
+            pause_ratio=0.12,
+            avg_conf=0.91,
+            segments=(
+                '[{"text": "clear", "start": 0.1, "end": 0.8}, '
+                '{"text": " text", "start": 0.8, "end": 1.4}]'
+            ),
+        )
+        SessionError.objects.create(
+            session_id=session.pk,
+            timestamp=session.timestamp,
+            script_name=session.script_name,
+            hyp_token="text",
+            op="sub",
+            error_kind="char_insert",
+            hyp_start=6,
+            hyp_end=10,
+        )
+        job = ScoringJob.objects.create(
+            script_name=session.script_name,
+            script_text=session.script_text,
+            audio_path=session.audio_path,
+            provider="uploaded_transcript",
+            status=ScoringJob.STATUS_SUCCEEDED,
+            partial_transcript="clear text",
+            legacy_session_id=session.pk,
+        )
+
+        response = self.client.get(reverse("practice:scoring_job_status", args=[job.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["is_done"])
+        self.assertEqual(payload["session_id"], session.pk)
+        self.assertEqual(payload["metrics"]["score"], "3")
+        self.assertEqual(
+            payload["score_text"],
+            "Score: 3.00/5 | WER: 30.00% | CER: 25.00% | "
+            "Clarity: 70.00% | Rate: 142 wpm | Pauses: 12% | Conf: 91%",
+        )
+        self.assertIn('data-start="0.100"', payload["transcript_html"])
+        self.assertIn("err-char-insert", payload["transcript_html"])
 
     def test_session_detail_edits_transcript_and_refreshes_errors(self):
         self._create_legacy_tables()
@@ -901,6 +1203,34 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, 'data-end="1.250"')
         self.assertContains(response, 'class="timed-transcript-segment"', count=2)
 
+    def test_session_detail_renders_copy_score_text(self):
+        self._create_legacy_tables()
+        session = PracticeSession.objects.create(
+            timestamp="2026-06-14T12:00:00",
+            script_name="Copy Score Drill",
+            script_text="clear practice text",
+            audio_path="recording.txt",
+            transcript="clear text",
+            wer=0.3,
+            cer=0.25,
+            clarity=0.7,
+            score=3.0,
+            artic_rate=142,
+            pause_ratio=0.12,
+            avg_conf=0.91,
+        )
+
+        response = self.client.get(reverse("practice:session_detail", args=[session.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Copy score")
+        self.assertContains(response, "data-score-copy-text")
+        self.assertContains(
+            response,
+            "Score: 3.00/5 | WER: 30.00% | CER: 25.00% | "
+            "Clarity: 70.00% | Rate: 142 wpm | Pauses: 12% | Conf: 91%",
+        )
+
     def test_session_report_exports_markdown(self):
         self._create_legacy_tables()
         session = PracticeSession.objects.create(
@@ -991,6 +1321,36 @@ class PracticeWebTests(TransactionTestCase):
                     )
 
         self.assertEqual(response.status_code, 302)
+        self.assertEqual(ScoringJob.objects.count(), 1)
+        enqueue.assert_called_once()
+
+    def test_practice_post_ajax_returns_job_status_payload(self):
+        script = PracticeScript.objects.create(
+            title="Ajax Queue Drill",
+            body="queue this text",
+            source=PracticeScript.SOURCE_USER,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "upload.txt"
+            path.write_text("queue this text", encoding="utf-8")
+            with path.open("rb") as upload:
+                with patch("practice.views.enqueue_scoring_job") as enqueue:
+                    response = self.client.post(
+                        reverse("practice:practice"),
+                        {
+                            "script": script.pk,
+                            "provider": "uploaded_transcript",
+                            "audio": upload,
+                        },
+                        HTTP_ACCEPT="application/json",
+                        HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+                    )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("/jobs/", payload["status_url"])
         self.assertEqual(ScoringJob.objects.count(), 1)
         enqueue.assert_called_once()
 
@@ -1240,6 +1600,117 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "Claude Sonnet 4.6")
         self.assertContains(response, "Local Whisper tuning")
         self.assertContains(response, "Autumn timer")
+        self.assertContains(response, "Autumn username")
+
+    def test_account_page_connects_autumn_with_username_and_password(self):
+        fake_client = Mock()
+        fake_client.base_url = "https://autumn.example.test"
+        fake_client.authenticate.return_value = "autumn-login-token"
+        fake_client.list_projects.return_value = ["Speech", "Writing"]
+        fake_client.list_subprojects.return_value = ["drills", "reading"]
+
+        with patch("practice.views.AutumnClient", return_value=fake_client) as client_cls:
+            response = self.client.post(
+                reverse("practice:account"),
+                {
+                    "connect_autumn": "1",
+                    "autumn_base_url": "https://autumn.example.test/",
+                    "autumn_username": "reader",
+                    "autumn_password": "secret",
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        client_cls.assert_called_once_with("https://autumn.example.test")
+        fake_client.authenticate.assert_called_once_with("reader", "secret")
+        fake_client.list_projects.assert_called_once()
+        fake_client.list_subprojects.assert_called_once_with("Speech")
+        settings_obj = PracticeSettings.load()
+        self.assertEqual(settings_obj.autumn_base_url, "https://autumn.example.test")
+        self.assertEqual(settings_obj.autumn_project, "Speech")
+        self.assertEqual(settings_obj.get_secret("autumn_token"), "autumn-login-token")
+
+    def test_account_page_renders_autumn_project_and_subproject_selectors(self):
+        settings_obj = PracticeSettings.load()
+        settings_obj.autumn_base_url = "https://autumn.example.test"
+        settings_obj.autumn_project = "Speech"
+        settings_obj.autumn_subprojects = ["drills"]
+        settings_obj.set_secret("autumn_token", "autumn-test")
+        settings_obj.save()
+        fake_client = Mock()
+        fake_client.list_projects.return_value = ["Speech", "Writing"]
+        fake_client.list_subprojects.return_value = ["drills", "misc", "reading"]
+
+        with patch("practice.views._autumn_token_client", return_value=fake_client):
+            response = self.client.get(reverse("practice:account"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<select name="autumn_project"', html=False)
+        self.assertContains(response, '<option value="Speech" selected>Speech</option>', html=True)
+        self.assertContains(response, 'name="autumn_subprojects"', count=3)
+        self.assertContains(response, 'value="drills"', html=False)
+        self.assertContains(response, 'id="id_autumn_subprojects_0" checked', html=False)
+        fake_client.list_projects.assert_called_once()
+        fake_client.list_subprojects.assert_called_once_with("Speech")
+
+    def test_account_page_saves_selected_autumn_subprojects(self):
+        settings_obj = PracticeSettings.load()
+        settings_obj.autumn_base_url = "https://autumn.example.test"
+        settings_obj.autumn_project = "Speech"
+        settings_obj.set_secret("autumn_token", "autumn-test")
+        settings_obj.save()
+        fake_client = Mock()
+        fake_client.list_projects.return_value = ["Speech", "Writing"]
+        fake_client.list_subprojects.return_value = ["drills", "misc", "reading"]
+
+        with patch("practice.views._autumn_token_client", return_value=fake_client):
+            response = self.client.post(
+                reverse("practice:account"),
+                {
+                    "transcription_provider": settings_obj.transcription_provider,
+                    "script_generation_provider": settings_obj.script_generation_provider,
+                    "openai_script_model": settings_obj.openai_script_model,
+                    "anthropic_script_model": settings_obj.anthropic_script_model,
+                    "openai_transcription_model": settings_obj.openai_transcription_model,
+                    "whisper_model_name": settings_obj.whisper_model_name,
+                    "whisper_device": settings_obj.whisper_device,
+                    "whisper_preset": settings_obj.whisper_preset,
+                    "whisper_language": settings_obj.whisper_language,
+                    "whisper_timestamps": "on",
+                    "whisper_beam_size": settings_obj.whisper_beam_size,
+                    "whisper_temperature": settings_obj.whisper_temperature,
+                    "whisper_no_speech_threshold": settings_obj.whisper_no_speech_threshold,
+                    "whisper_condition_on_previous_text": "on",
+                    "whisper_chunk_seconds": settings_obj.whisper_chunk_seconds,
+                    "autumn_base_url": settings_obj.autumn_base_url,
+                    "autumn_project": "Writing",
+                    "autumn_subprojects": ["misc", "reading"],
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.autumn_project, "Writing")
+        self.assertEqual(settings_obj.autumn_subprojects, ["misc", "reading"])
+
+    def test_autumn_subprojects_endpoint_returns_project_choices(self):
+        settings_obj = PracticeSettings.load()
+        settings_obj.autumn_base_url = "https://autumn.example.test"
+        settings_obj.autumn_project = "Speech"
+        settings_obj.set_secret("autumn_token", "autumn-test")
+        settings_obj.save()
+        fake_client = Mock()
+        fake_client.list_subprojects.return_value = ["drills", "reading"]
+
+        with patch("practice.views._autumn_token_client", return_value=fake_client):
+            response = self.client.get(
+                reverse("practice:autumn_subprojects"),
+                {"project": "Speech"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "subprojects": ["drills", "reading"]})
+        fake_client.list_subprojects.assert_called_once_with("Speech")
 
     def test_account_page_clears_whisper_cache_on_request(self):
         with patch("practice.views.clear_local_whisper_cache") as clear_cache:
@@ -1290,6 +1761,79 @@ class PracticeWebTests(TransactionTestCase):
             project="Speech Practice",
             note="Finished practice",
         )
+
+    def test_practice_page_starts_autumn_timer_from_transport_controls(self):
+        PracticeScript.objects.create(
+            title="Autumn Reading",
+            body="Start the timer before the practice take.",
+            practice_kind=PracticeScript.KIND_READING,
+            source=PracticeScript.SOURCE_USER,
+        )
+        settings_obj = PracticeSettings.load()
+        settings_obj.autumn_base_url = "https://autumn.example.test"
+        settings_obj.autumn_project = "Speech Practice"
+        settings_obj.autumn_subprojects = ["Drills"]
+        settings_obj.set_secret("autumn_token", "autumn-test")
+        settings_obj.save()
+
+        response = self.client.get(reverse("practice:practice"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Start Autumn")
+        self.assertContains(response, "autumn-timer-form")
+        self.assertContains(response, "data-autumn-toggle")
+
+        with patch("practice.views._autumn_client") as fake_client:
+            fake_client.return_value.start_timer.return_value = {"session": {"id": 84}}
+            response = self.client.post(
+                reverse("practice:autumn_timer"),
+                {
+                    "start_autumn_timer": "1",
+                    "autumn_note": "SpeechPractice: Autumn Reading",
+                    "next": reverse("practice:practice"),
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("practice:practice"))
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.autumn_active_session_id, 84)
+        fake_client.return_value.start_timer.assert_called_once_with(
+            "Speech Practice",
+            ["Drills"],
+            note="SpeechPractice: Autumn Reading",
+        )
+
+    def test_practice_autumn_timer_endpoint_returns_json_without_redirect(self):
+        settings_obj = PracticeSettings.load()
+        settings_obj.autumn_base_url = "https://autumn.example.test"
+        settings_obj.autumn_project = "Speech Practice"
+        settings_obj.autumn_subprojects = ["Drills"]
+        settings_obj.set_secret("autumn_token", "autumn-test")
+        settings_obj.save()
+
+        with patch("practice.views._autumn_client") as fake_client:
+            fake_client.return_value.start_timer.return_value = {"session": {"id": 84}}
+            response = self.client.post(
+                reverse("practice:autumn_timer"),
+                {
+                    "start_autumn_timer": "1",
+                    "autumn_note": "SpeechPractice: Autumn Reading",
+                    "next": reverse("practice:practice"),
+                },
+                HTTP_ACCEPT="application/json",
+                HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["active"])
+        self.assertEqual(payload["button_label"], "Stop Autumn")
+        self.assertEqual(payload["button_name"], "stop_autumn_timer")
+        self.assertNotIn("Location", response.headers)
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.autumn_active_session_id, 84)
 
     def test_progress_page_renders_filters_and_chart_data(self):
         self._create_legacy_tables()

@@ -9,6 +9,7 @@
   <div class="action-row">
     <a class="button-link" href="#edit-transcript">Edit transcript</a>
     <a class="button-link" href="{% url 'practice:session_report' session.pk %}">Export report</a>
+    <button type="button" data-copy-score>Copy score</button>
     {% if mistake_lines %}
       <button type="button" data-copy-mistakes>Copy mistakes</button>
       <button class="secondary-button" type="button" data-toggle-highlights>Toggle highlights</button>
@@ -24,6 +25,8 @@
     </form>
   </div>
 </section>
+
+<pre data-score-copy-text hidden>{{ score_text }}</pre>
 
 <section class="metric-strip">
   <div><strong>{{ session.score|floatformat:2 }}</strong><span>score</span></div>
@@ -92,5 +95,5 @@
   </form>
 </section>
 
-<script src="{% static 'practice/history.js' %}?v=11"></script>
+<script src="{% static 'practice/history.js' %}?v={{ static_version.history_js }}"></script>
 {% endblock %}

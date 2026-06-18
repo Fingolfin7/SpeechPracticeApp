@@ -3,10 +3,7 @@
 {% block title %}Progress | SpeechPractice{% endblock %}
 {% block content %}
 <section class="page-title progress-title">
-  <div>
-    <p class="eyebrow">Progress tracker</p>
-    <h1>Measure the trend, not just the take.</h1>
-  </div>
+  <h1>Progress tracker</h1>
 </section>
 
 <section class="progress-filters">
@@ -144,5 +141,5 @@
 </section>
 
 {{ points|json_script:"progress-data" }}
-<script src="{% static 'practice/progress.js' %}?v=3"></script>
+<script src="{% static 'practice/progress.js' %}?v={{ static_version.progress_js }}"></script>
 {% endblock %}

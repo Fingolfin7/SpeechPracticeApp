@@ -22,9 +22,10 @@ services:
   - type: web
     name: speechpractice-web
     runtime: python
-    plan: starter
+    plan: free
+    region: frankfurt
     buildCommand: bash build.sh
-    startCommand: gunicorn speechpractice_web.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 60
+    startCommand: gunicorn speechpractice_web.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120
     healthCheckPath: /healthz/
     envVars:
       - fromGroup: speechpractice-shared
@@ -37,27 +38,6 @@ services:
       - key: OPENAI_TRANSCRIPTION_MODEL
         value: whisper-1
       - key: SCORING_JOBS_MODE
-        value: queue
-      - key: PYTHON_VERSION
-        value: 3.12.10
-
-  - type: worker
-    name: speechpractice-worker
-    runtime: python
-    plan: starter
-    buildCommand: python -m pip install -r requirements.txt
-    startCommand: python manage.py process_scoring_jobs --watch --poll-seconds 2
-    envVars:
-      - fromGroup: speechpractice-shared
-      - key: DJANGO_DEBUG
-        value: "0"
-      - key: DJANGO_REQUIRE_LOGIN
-        value: "1"
-      - key: TRANSCRIPTION_PROVIDER
-        value: openai
-      - key: OPENAI_TRANSCRIPTION_MODEL
-        value: whisper-1
-      - key: SCORING_JOBS_MODE
-        value: queue
+        value: thread
       - key: PYTHON_VERSION
         value: 3.12.10

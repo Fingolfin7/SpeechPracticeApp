@@ -109,9 +109,13 @@ I keep a browser-captured backlog of visual and functional rough edges in [docs/
 
 ## Production Deployment
 
-The supported production shape is a Render web service plus background worker,
-Neon Postgres, private AWS S3 media, and OpenAI `whisper-1` transcription. See
+The free Render shape is a single free web service, Neon Postgres, private AWS
+S3 media, and OpenAI `whisper-1` transcription. See
 `DEPLOYMENT_CHECKLIST.md` and `render.yaml` for the complete setup contract.
+Render does not offer free background workers, so the free Blueprint processes
+scoring in a background thread inside the web service. For more durable
+production scoring, add back the worker service and use `SCORING_JOBS_MODE=queue`
+on a paid Render instance.
 
 Before exporting existing SQLite data, copy legacy audio into the configured S3
 bucket and update its stored references:

@@ -2,6 +2,14 @@
 
 Target: Render free web service + threaded scoring + Neon Postgres + private AWS S3 media.
 
+Current live target:
+
+- Render service: `speechpractice-web` on the free instance type.
+- Public URL: `https://speechpractice-web.onrender.com`
+- Neon project: `SpeechPractice` in AWS Europe Central 1 (Frankfurt).
+- S3 bucket: `speechpractice-audio-978092319358` in `eu-north-1`.
+- IAM app user: `speechpractice-render` with bucket-scoped S3 access.
+
 Note: Render's free instance type is available for web services, but not for
 background workers. This free configuration runs scoring in a background thread
 inside the web process. Upgrade to a paid worker service when you want more
@@ -25,12 +33,14 @@ durable production job processing.
 
 ## Infrastructure
 
-- [ ] Create a Neon project and copy its pooled `DATABASE_URL`.
-- [ ] Create a private S3 bucket in the chosen region.
-- [ ] Create an IAM user/policy limited to that bucket.
-- [ ] Create the free Render Blueprint from `render.yaml`.
-- [ ] Populate every `sync: false` environment variable.
-- [ ] Confirm the web service uses the generated `SECRET_KEY` environment group.
+- [x] Create a Neon project and copy its pooled `DATABASE_URL`.
+- [x] Create a private S3 bucket in the chosen region.
+- [x] Create an IAM user/policy limited to that bucket.
+- [x] Create the free Render Blueprint from `render.yaml`.
+- [x] Populate deployment-required `sync: false` environment variables for database and S3.
+- [ ] Add `OPENAI_API_KEY` to Render or configure the production account with a per-user OpenAI key.
+- [x] Confirm the web service uses the generated `SECRET_KEY` environment group.
+- [x] Confirm the Render service deploys successfully and reaches the live state.
 - [ ] Run `python manage.py createsuperuser` from the Render shell.
 
 ## Verification
@@ -39,7 +49,10 @@ durable production job processing.
 - [x] `python manage.py migrate --noinput` against a fresh database.
 - [x] `python manage.py collectstatic --no-input`
 - [x] `python manage.py check --deploy` with production variables (only the intentionally deferred HSTS preload/subdomain warnings remain).
-- [x] Full automated test suite passes (78 tests).
+- [x] Full automated test suite passes (80 tests).
+- [x] Render build installs dependencies, collects static files, and runs migrations against Neon.
+- [x] Render health check returns `200` for `/healthz/`.
+- [x] Public root URL loads the SpeechPractice sign-in page.
 - [ ] Upload and score a browser-recorded WebM file.
 - [x] Retry a submission with the same idempotency key; only one job exists.
 - [x] Seek through storage-backed audio and receive `206 Partial Content`.

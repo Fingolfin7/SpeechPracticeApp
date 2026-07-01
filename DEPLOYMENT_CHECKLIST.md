@@ -41,7 +41,8 @@ durable production job processing.
 - [ ] Add `OPENAI_API_KEY` to Render or configure the production account with a per-user OpenAI key.
 - [x] Confirm the web service uses the generated `SECRET_KEY` environment group.
 - [x] Confirm the Render service deploys successfully and reaches the live state.
-- [ ] Run `python manage.py createsuperuser` from the Render shell.
+- [x] Create the production superuser against the Neon database (`kuda` / `mushunjek@gmail.com`).
+  - Render Shell is not available on free instances, so this was run from the local repo with the production `DATABASE_URL`.
 
 ## Verification
 

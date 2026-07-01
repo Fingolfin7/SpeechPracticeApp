@@ -12,7 +12,13 @@
   {% csrf_token %}
   {{ form.card }}
 
-  <section class="panel reading-panel practice-script-panel" data-script-preview-panel>
+  <div class="practice-task-tabs" aria-label="Practice steps">
+    <a href="#practice-script">Read</a>
+    <a href="#practice-recorder">Record</a>
+    <a href="#practice-review">Review</a>
+  </div>
+
+  <section class="panel reading-panel practice-script-panel" id="practice-script" data-script-preview-panel>
     <div class="panel-heading">
       <div>
         <p class="eyebrow">Read aloud</p>
@@ -139,7 +145,7 @@
     {% endif %}
   </section>
 
-  <aside class="recorder-panel practice-recorder-panel">
+  <aside class="recorder-panel practice-recorder-panel" id="practice-recorder">
     <div class="recorder-header">
       <div>
         <p class="eyebrow">Record and score</p>
@@ -194,7 +200,7 @@
         <button class="transport-button delete-button" type="button" data-record-delete disabled aria-label="Delete recording">
           <span aria-hidden="true"></span>
         </button>
-        <button class="button-link score-button" type="submit">Score recording</button>
+        <button class="button-link score-button" type="submit" data-score-button disabled>Score recording</button>
         <button class="button-link copy-score-button" type="button" data-copy-practice-score disabled>Copy score</button>
         {% if autumn_timer.configured %}
           <button
@@ -212,9 +218,10 @@
           <a class="button-link secondary-button autumn-button" href="{% url 'practice:account' %}">Connect Autumn</a>
         {% endif %}
       </div>
+      <small class="score-reason" data-score-reason>Record or upload a take before scoring.</small>
     </div>
 
-    <div class="practice-metrics" aria-live="polite" data-practice-metrics>
+    <div class="practice-metrics" id="practice-review" aria-live="polite" data-practice-metrics>
       <strong>Score: -</strong>
       <span>WER: -</span>
       <span>CER: -</span>

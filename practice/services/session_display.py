@@ -4,12 +4,12 @@ import html
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Iterable
 
 from django.utils.safestring import SafeString, mark_safe
 
 from practice.models import PracticeSession, SessionError
+from practice.services.audio_storage import audio_exists as stored_audio_exists
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class HighlightedSessionText:
 
 
 def audio_exists(session: PracticeSession) -> bool:
-    return bool(session.audio_path) and Path(session.audio_path).exists()
+    return stored_audio_exists(session.audio_path)
 
 
 def session_segments(session: PracticeSession) -> list[dict]:

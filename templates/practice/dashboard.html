@@ -5,11 +5,71 @@
   <h1>Today</h1>
 </section>
 
+<section class="today-recommendation panel" aria-label="Recommended next action">
+  <div>
+    <p class="eyebrow">Do next</p>
+    {% if active_jobs %}
+      {% for job in active_jobs %}
+        {% if forloop.first %}
+          <h2>Check the {{ job.get_status_display|lower }} scoring job</h2>
+          <p>Finish the feedback loop for {{ job.script_name }} before starting another rep.</p>
+        {% endif %}
+      {% endfor %}
+    {% elif today_queue %}
+      {% for item in today_queue %}
+        {% if forloop.first %}
+          <h2>{% if item.script %}Practice {{ item.card.display_title }}{% else %}Generate {{ item.card.display_title }} drill{% endif %}</h2>
+          <p>
+            {% if item.is_due %}This card is due now{% else %}This card is coming up{% endif %}
+            with mastery {{ item.card.mastery|floatformat:2 }}.
+            {% if summary.feedback %}{{ summary.feedback.0 }}{% endif %}
+          </p>
+        {% endif %}
+      {% endfor %}
+    {% elif summary.phrases.top_trouble_phrases %}
+      {% for row in summary.phrases.top_trouble_phrases %}
+        {% if forloop.first %}
+          <h2>Review {{ row.phrase }}</h2>
+          <p>This phrase is the clearest pattern in recent scoring.</p>
+        {% endif %}
+      {% endfor %}
+    {% else %}
+      <h2>Start with a clean rep</h2>
+      <p>Score a practice take to fill today&apos;s queue with specific follow-up.</p>
+    {% endif %}
+  </div>
+  <div class="today-recommendation-action">
+    {% if active_jobs %}
+      {% for job in active_jobs %}
+        {% if forloop.first %}
+          <a class="button-link" href="{% url 'practice:scoring_job' job.pk %}">Open job</a>
+        {% endif %}
+      {% endfor %}
+    {% elif today_queue %}
+      {% for item in today_queue %}
+        {% if forloop.first %}
+          {% if item.script %}
+            <a class="button-link" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ item.script.pk }}&amp;card={{ item.card.pk }}">Practice drill</a>
+          {% else %}
+            <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="provider" value="local_template">
+              <button type="submit">Generate drill</button>
+            </form>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+    {% else %}
+      <a class="button-link" href="{% url 'practice:practice' %}">Open Practice</a>
+    {% endif %}
+  </div>
+</section>
+
 <section class="today-layout">
   <article class="panel today-main">
     <div class="panel-heading">
       <p class="eyebrow">Next reps</p>
-      <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh cards</a>
+      <a class="button-link" href="{% url 'practice:cards' %}">Open cards</a>
     </div>
 
     {% if today_queue %}
@@ -21,6 +81,10 @@
               <span class="pill">{{ item.card.get_kind_display }}</span>
               <h2>{{ item.card.display_title }}</h2>
               <p>{{ item.card.prompt }}</p>
+              <p class="today-why">
+                {% if item.is_due %}Why this is next: due now{% else %}Why this is next: upcoming{% endif %}
+                at mastery {{ item.card.mastery|floatformat:2 }}{% if forloop.first and summary.feedback %}; {{ summary.feedback.0 }}{% endif %}.
+              </p>
               <small>
                 {% if item.is_due %}Due now{% else %}Upcoming{% endif %}
                 &middot; mastery {{ item.card.mastery|floatformat:2 }}

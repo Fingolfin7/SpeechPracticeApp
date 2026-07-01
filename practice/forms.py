@@ -118,14 +118,24 @@ class PracticeRunForm(forms.Form):
             ("uploaded_transcript", provider_label("uploaded_transcript")),
         ]
         self.fields["provider"].choices = provider_choices
-        self.fields["provider"].initial = "local_whisper"
+        self.fields["provider"].initial = settings.TRANSCRIPTION_PROVIDER
 
     def clean(self):
         cleaned = super().clean()
         mode = cleaned.get("mode") or self.MODE_SCRIPT
         script = cleaned.get("script")
+        audio = cleaned.get("audio")
         if mode != self.MODE_FREE and script is None:
             self.add_error("script", "Choose a script for scripted practice.")
+        max_audio_bytes = int(
+            getattr(settings, "OPENAI_DIRECT_UPLOAD_MAX_BYTES", 24 * 1024 * 1024)
+        )
+        if audio is not None and audio.size > max_audio_bytes:
+            max_megabytes = max_audio_bytes // (1024 * 1024)
+            self.add_error(
+                "audio",
+                f"Keep recordings under {max_megabytes} MB for reliable upload and transcription.",
+            )
         return cleaned
 
 
@@ -162,6 +172,26 @@ class TranscriptEditForm(forms.ModelForm):
         fields = ["transcript"]
         widgets = {
             "transcript": forms.Textarea(attrs={"rows": 8}),
+        }
+
+
+class SelfReviewNotesForm(forms.ModelForm):
+    class Meta:
+        model = PracticeSession
+        fields = ["self_review_notes"]
+        labels = {
+            "self_review_notes": "Self-review notes",
+        }
+        widgets = {
+            "self_review_notes": forms.Textarea(
+                attrs={
+                    "rows": 7,
+                    "placeholder": (
+                        "Example: I rushed the last sentence; swallowed final consonants "
+                        "on asked and just; mumbled the phrase \"turn the corner\"."
+                    ),
+                }
+            ),
         }
 
 

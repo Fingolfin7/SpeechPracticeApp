@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import threading
+import uuid
+from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
@@ -8,6 +10,7 @@ from django.db import close_old_connections, transaction
 from django.utils import timezone
 
 from practice.models import GeneratedPracticeScript, ImprovementCard, PracticeScript, ScoringJob
+from practice.services.audio_storage import materialized_audio
 from practice.services.analytics import refresh_improvement_cards
 from practice.services.scoring import transcribe_free_and_store, transcribe_score_and_store
 from practice.services.spaced_repetition import update_card_from_session
@@ -19,10 +22,12 @@ def create_scoring_job(
     audio_path: str,
     provider: str,
     card: ImprovementCard | None = None,
+    submission_id: uuid.UUID | None = None,
 ) -> ScoringJob:
     linked_card = card or _card_for_script(script)
     return ScoringJob.objects.create(
         script=script,
+        submission_id=submission_id,
         card=linked_card,
         script_name=script.title,
         script_text=script.body,
@@ -36,9 +41,11 @@ def create_free_speak_job(
     *,
     audio_path: str,
     provider: str,
+    submission_id: uuid.UUID | None = None,
 ) -> ScoringJob:
     return ScoringJob.objects.create(
         script=None,
+        submission_id=submission_id,
         card=None,
         script_name="Free Speak",
         script_text="",
@@ -49,9 +56,14 @@ def create_free_speak_job(
 
 
 def enqueue_scoring_job(job: ScoringJob) -> None:
-    if settings.SCORING_JOBS_INLINE:
+    mode = "inline" if settings.SCORING_JOBS_INLINE else settings.SCORING_JOBS_MODE
+    if mode == "inline":
         process_scoring_job(job.pk)
         return
+    if mode == "queue":
+        return
+    if mode != "thread":
+        raise ValueError(f"Unknown SCORING_JOBS_MODE: {mode}")
 
     thread = threading.Thread(
         target=_process_job_in_thread,
@@ -87,22 +99,25 @@ def process_scoring_job(job_id: int) -> ScoringJob:
         )
 
     try:
-        if job.mode == ScoringJob.MODE_FREE:
-            session = transcribe_free_and_store(
-                audio_path=job.audio_path,
-                provider_name=job.provider,
-                partial_callback=on_partial,
-            )
-        else:
-            session = transcribe_score_and_store(
-                script_name=job.script_name,
-                script_text=job.script_text,
-                audio_path=job.audio_path,
-                provider_name=job.provider,
-                partial_callback=on_partial,
-            )
-            update_card_from_session(job.card, session)
-            refresh_improvement_cards(days=settings.CARD_REFRESH_WINDOW_DAYS)
+        with materialized_audio(job.audio_path) as local_audio_path:
+            if job.mode == ScoringJob.MODE_FREE:
+                session = transcribe_free_and_store(
+                    audio_path=local_audio_path,
+                    stored_audio_ref=job.audio_path,
+                    provider_name=job.provider,
+                    partial_callback=on_partial,
+                )
+            else:
+                session = transcribe_score_and_store(
+                    script_name=job.script_name,
+                    script_text=job.script_text,
+                    audio_path=local_audio_path,
+                    stored_audio_ref=job.audio_path,
+                    provider_name=job.provider,
+                    partial_callback=on_partial,
+                )
+                update_card_from_session(job.card, session)
+                refresh_improvement_cards(days=settings.CARD_REFRESH_WINDOW_DAYS)
     except Exception as exc:
         job = ScoringJob.objects.get(pk=job_id)
         job.status = ScoringJob.STATUS_FAILED
@@ -125,6 +140,20 @@ def process_next_scoring_job() -> ScoringJob | None:
     if job is None:
         return None
     return process_scoring_job(job.pk)
+
+
+def recover_stale_scoring_jobs(*, stale_after_minutes: int = 30) -> int:
+    cutoff = timezone.now() - timedelta(minutes=max(1, stale_after_minutes))
+    return ScoringJob.objects.filter(
+        status=ScoringJob.STATUS_RUNNING,
+        started_at__lt=cutoff,
+    ).update(
+        status=ScoringJob.STATUS_QUEUED,
+        started_at=None,
+        finished_at=None,
+        error_message="Recovered after the scoring worker stopped unexpectedly.",
+        updated_at=timezone.now(),
+    )
 
 
 def _card_for_script(script: PracticeScript) -> ImprovementCard | None:

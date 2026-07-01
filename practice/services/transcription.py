@@ -115,6 +115,15 @@ class OpenAITranscriptionProvider:
         except ImportError as exc:
             raise RuntimeError("Install the optional 'openai' package to use OpenAI transcription.") from exc
 
+        if self.api_key:
+            return self._transcribe_with_client(
+                OpenAI,
+                audio_path,
+                api_key=self.api_key,
+                auth_source="api_key",
+                partial_callback=partial_callback,
+            )
+
         codex_token = codex_access_token(self.app_settings)
         if codex_token:
             try:
@@ -126,30 +135,19 @@ class OpenAITranscriptionProvider:
                     partial_callback=partial_callback,
                 )
             except Exception as exc:
-                if not self.api_key:
-                    if _looks_like_missing_api_scope(exc):
-                        raise RuntimeError(
-                            "Codex auth was accepted by the OpenAI API, but this "
-                            "token does not include the API scopes required for "
-                            "OpenAI transcription. Add an OpenAI API key for "
-                            "OpenAI transcription, or switch to Local Whisper."
-                        ) from exc
-                    if _looks_like_browser_challenge(exc):
-                        raise RuntimeError(
-                            "Codex auth reached ChatGPT, but the audio transcription "
-                            "endpoint returned a browser challenge. Add an OpenAI API "
-                            "key for OpenAI transcription, or switch to Local Whisper."
-                        ) from exc
-                    raise
-        if not self.api_key:
-            raise RuntimeError("OpenAI transcription requires a Codex login or an OpenAI API key.")
-        return self._transcribe_with_client(
-            OpenAI,
-            audio_path,
-            api_key=self.api_key,
-            auth_source="api_key" if not codex_token else "api_key_fallback",
-            partial_callback=partial_callback,
-        )
+                if _looks_like_missing_api_scope(exc):
+                    raise RuntimeError(
+                        "Codex auth was accepted by the OpenAI API, but this token "
+                        "does not include the API scopes required for transcription. "
+                        "Add an OpenAI API key."
+                    ) from exc
+                if _looks_like_browser_challenge(exc):
+                    raise RuntimeError(
+                        "Codex auth reached ChatGPT, but transcription returned a "
+                        "browser challenge. Add an OpenAI API key."
+                    ) from exc
+                raise
+        raise RuntimeError("OpenAI transcription requires an OpenAI API key.")
 
     def _transcribe_with_client(
         self,
@@ -189,6 +187,20 @@ class OpenAITranscriptionProvider:
         audio_path: str,
         partial_callback: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
+        path = Path(audio_path)
+        direct_upload_limit = max(
+            0,
+            int(getattr(settings, "OPENAI_DIRECT_UPLOAD_MAX_BYTES", 24 * 1024 * 1024)),
+        )
+        if direct_upload_limit and path.stat().st_size <= direct_upload_limit:
+            raw = self._transcribe_file(client, path, prompt="")
+            return {
+                "text": str(raw.get("text", "") or "").strip(),
+                "segments": _openai_segments(raw),
+                "raw": raw,
+                "partial_sent": False,
+            }
+
         try:
             from pydub import AudioSegment
         except ImportError as exc:
@@ -197,7 +209,7 @@ class OpenAITranscriptionProvider:
         audio = AudioSegment.from_file(audio_path)
         chunk_ms = max(1, int(self.chunk_seconds * 1000))
         if len(audio) <= chunk_ms:
-            raw = self._transcribe_file(client, Path(audio_path), prompt="")
+            raw = self._transcribe_file(client, path, prompt="")
             return {
                 "text": str(raw.get("text", "") or "").strip(),
                 "segments": _openai_segments(raw),

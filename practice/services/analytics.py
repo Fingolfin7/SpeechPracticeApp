@@ -331,8 +331,27 @@ def build_card_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return candidates
 
 
-def refresh_improvement_cards(days: int = 30) -> int:
-    summary = trend_summary(days=days)
+def refresh_improvement_cards(
+    days: int | None = None,
+    *,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+) -> int:
+    if start_dt is not None and end_dt is not None:
+        summary = trend_summary_for_range(start_dt=start_dt, end_dt=end_dt)
+        source_window = {
+            "source_window_start": start_dt.date().isoformat(),
+            "source_window_end": end_dt.date().isoformat(),
+            "source_window_label": f"{start_dt:%Y-%m-%d} to {end_dt:%Y-%m-%d}",
+        }
+    else:
+        window_days = int(days or settings.CARD_REFRESH_WINDOW_DAYS)
+        summary = trend_summary(days=window_days)
+        source_window = {
+            "source_window_days": window_days,
+            "source_window_label": _source_window_label(window_days),
+        }
+    refreshed_at = timezone.now()
     count = 0
     for candidate in build_card_candidates(summary):
         mastery = float(candidate["mastery"])
@@ -341,13 +360,16 @@ def refresh_improvement_cards(days: int = 30) -> int:
             if mastery >= 0.65
             else ImprovementCard.STATUS_LEARNING
         )
+        stats = dict(candidate["stats"])
+        stats.update(source_window)
+        stats["source_window_refreshed_at"] = refreshed_at.isoformat()
         _card, created = ImprovementCard.objects.update_or_create(
             kind=candidate["kind"],
             target_key=candidate["target_key"],
             defaults={
                 "title": candidate["title"],
                 "prompt": candidate["prompt"],
-                "stats": candidate["stats"],
+                "stats": stats,
                 "mastery": mastery,
                 "status": status,
                 "due_at": _due_date_for_mastery(mastery),
@@ -355,6 +377,15 @@ def refresh_improvement_cards(days: int = 30) -> int:
         )
         count += 1 if created else 0
     return count
+
+
+def _source_window_label(days: int) -> str:
+    if days >= 3650:
+        return "all history"
+    if days >= 365:
+        years = round(days / 365)
+        return f"last {years} year" if years == 1 else f"last {years} years"
+    return f"last {days} days"
 
 
 def due_cards(limit: int = 6):

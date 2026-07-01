@@ -29,7 +29,8 @@
   const scriptWordCount = document.querySelector("[data-script-word-count]");
   const scriptBody = document.querySelector("[data-script-body]");
   const ladderSelect = document.querySelector("[data-ladder-select]");
-  const scoreButton = form.querySelector(".score-button");
+  const scoreButton = form.querySelector("[data-score-button]");
+  const scoreReason = form.querySelector("[data-score-reason]");
   const copyScoreButton = form.querySelector("[data-copy-practice-score]");
   const autumnButton = form.querySelector("[data-autumn-toggle]");
   const autumnForm = document.querySelector("#autumn-timer-form");
@@ -54,6 +55,32 @@
   let activeJobStatusUrl = "";
   let jobPollTimeout = null;
   let latestScoreText = "";
+  let submissionId = "";
+  let jobPollDelay = 2500;
+  let lastJobSignature = "";
+
+  function newSubmissionId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (token) {
+      const random = Math.floor(Math.random() * 16);
+      const value = token === "x" ? random : (random & 0x3) | 0x8;
+      return value.toString(16);
+    });
+  }
+
+  function resetSubmissionId() {
+    submissionId = "";
+  }
+
+  function createSpeechRecorder(mediaStream) {
+    try {
+      return new MediaRecorder(mediaStream, { audioBitsPerSecond: 64000 });
+    } catch (error) {
+      return new MediaRecorder(mediaStream);
+    }
+  }
 
   const originalScriptOptions = scriptSelect
     ? Array.from(scriptSelect.options).map((option) => ({
@@ -341,6 +368,20 @@
     }
   }
 
+  function setScoreReady() {
+    if (!scoreButton) {
+      return;
+    }
+    const ready = hasTake();
+    scoreButton.disabled = !ready;
+    scoreButton.classList.toggle("is-disabled", !ready);
+    if (scoreReason) {
+      scoreReason.textContent = ready
+        ? "Ready to score this take."
+        : "Record or upload a take before scoring.";
+    }
+  }
+
   function setAutumnButtonBusy(busy) {
     if (!autumnButton) {
       return;
@@ -449,6 +490,18 @@
       audioContext = new AudioContextClass();
     }
     return audioContext;
+  }
+
+  function resumeAudioContextFromUserGesture() {
+    const context = getAudioContext();
+    if (!context || context.state !== "suspended") {
+      return Promise.resolve(context);
+    }
+    return context.resume().then(function () {
+      return context;
+    }).catch(function () {
+      return context;
+    });
   }
 
   function sizeCanvas() {
@@ -650,9 +703,11 @@
     stage.classList.toggle("is-recording", active);
     startButton.classList.toggle("is-recording", active);
     status.textContent = active ? "Recording..." : "Recording ready";
+    setScoreReady();
   }
 
   function loadBlobIntoPreview(blob, filename) {
+    resetSubmissionId();
     if (recordingUrl) {
       URL.revokeObjectURL(recordingUrl);
     }
@@ -666,9 +721,11 @@
     if (deleteButton) {
       deleteButton.disabled = false;
     }
+    setScoreReady();
   }
 
   function deleteCurrentTake() {
+    resetSubmissionId();
     if (preview) {
       preview.pause();
       preview.removeAttribute("src");
@@ -694,14 +751,22 @@
     if (deleteButton) {
       deleteButton.disabled = true;
     }
+    setScoreReady();
   }
 
   function setScoreButtonBusy(busy) {
     if (!scoreButton) {
       return;
     }
-    scoreButton.disabled = busy;
+    scoreButton.disabled = busy || !hasTake();
     scoreButton.textContent = busy ? "Scoring..." : "Score recording";
+    if (scoreReason) {
+      scoreReason.textContent = busy
+        ? "Scoring is running for this take."
+        : hasTake()
+          ? "Ready to score this take."
+          : "Record or upload a take before scoring.";
+    }
   }
 
   function renderPracticeJobStatus(payload) {
@@ -759,21 +824,30 @@
         throw new Error("Job status failed.");
       }
       const payload = await response.json();
+      const signature = `${payload.status}:${payload.partial_transcript || ""}`;
+      jobPollDelay = signature === lastJobSignature
+        ? Math.min(10000, jobPollDelay * 1.5)
+        : 2500;
+      lastJobSignature = signature;
       renderPracticeJobStatus(payload);
       if (payload.is_pending) {
-        jobPollTimeout = window.setTimeout(pollPracticeJobStatus, 1800);
+        const delay = document.hidden || !navigator.onLine ? 10000 : jobPollDelay;
+        jobPollTimeout = window.setTimeout(pollPracticeJobStatus, delay);
       } else {
         activeJobStatusUrl = "";
         jobPollTimeout = null;
       }
     } catch (error) {
       setTranscriptState("Status unavailable");
-      jobPollTimeout = window.setTimeout(pollPracticeJobStatus, 2400);
+      jobPollDelay = 10000;
+      jobPollTimeout = window.setTimeout(pollPracticeJobStatus, jobPollDelay);
     }
   }
 
   function startPracticeJobPolling(statusUrl) {
     activeJobStatusUrl = statusUrl || "";
+    jobPollDelay = 2500;
+    lastJobSignature = "";
     if (jobPollTimeout) {
       window.clearTimeout(jobPollTimeout);
       jobPollTimeout = null;
@@ -785,6 +859,15 @@
 
   async function submitPracticeForScoring(event) {
     event.preventDefault();
+    if (!hasTake()) {
+      setTranscriptState("Needs audio");
+      setLiveTranscriptText("Record or upload audio before scoring.");
+      if (status) {
+        status.textContent = "Record or upload audio before scoring.";
+      }
+      setScoreReady();
+      return;
+    }
     if (jobPollTimeout) {
       window.clearTimeout(jobPollTimeout);
       jobPollTimeout = null;
@@ -799,12 +882,14 @@
     }
 
     try {
+      submissionId = submissionId || newSubmissionId();
       const response = await fetch(form.action || window.location.href, {
         method: "POST",
         body: new FormData(form),
         headers: {
           Accept: "application/json",
           "X-Requested-With": "XMLHttpRequest",
+          "X-Idempotency-Key": submissionId,
         },
         credentials: "same-origin",
       });
@@ -929,12 +1014,14 @@
     fileInput.addEventListener("change", function () {
       const file = fileInput.files && fileInput.files[0];
       if (!file) {
+        setScoreReady();
         return;
       }
       decodedBuffer = null;
       renderedPeaks = [];
       playButton.disabled = true;
       loadBlobIntoPreview(file, file.name);
+      setScoreReady();
     });
   }
 
@@ -969,6 +1056,8 @@
         return;
       }
       if (preview.paused) {
+        preview.muted = false;
+        preview.volume = 1;
         preview.play();
       } else {
         preview.pause();
@@ -980,23 +1069,62 @@
     deleteButton.addEventListener("click", deleteCurrentTake);
   }
 
-  if (!navigator.mediaDevices || !window.MediaRecorder) {
-    if (startButton && status) {
-      startButton.disabled = true;
-      status.textContent = "Browser recording unavailable. Upload an audio file instead.";
+  function recorderUnavailableMessage() {
+    if (!window.isSecureContext) {
+      return {
+        status: "Recording needs HTTPS on LAN.",
+        helper: "Open the HTTPS address from run_https_server.bat, or upload audio instead.",
+      };
     }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return {
+        status: "Microphone API unavailable.",
+        helper: "Try Chrome or Edge over HTTPS, or upload audio instead.",
+      };
+    }
+    if (!window.MediaRecorder) {
+      return {
+        status: "Browser recording unavailable.",
+        helper: "This browser cannot encode recordings here. Upload audio instead.",
+      };
+    }
+    return null;
+  }
+
+  const unavailable = recorderUnavailableMessage();
+  if (unavailable) {
+    if (startButton) {
+      startButton.disabled = true;
+    }
+    if (stage) {
+      stage.classList.add("has-warning");
+    }
+    if (status) {
+      status.textContent = unavailable.status;
+    }
+    if (modeHelper) {
+      modeHelper.textContent = unavailable.helper;
+    }
+    setScoreReady();
     return;
   }
 
+  setScoreReady();
+
   startButton.addEventListener("click", async function () {
+    // Resume while this code still runs inside the click gesture. Chromium may
+    // otherwise leave the analyser suspended after getUserMedia resolves,
+    // producing a flat live waveform even though MediaRecorder is active.
+    const audioContextReady = resumeAudioContextFromUserGesture();
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      await audioContextReady;
       chunks = [];
       decodedBuffer = null;
       renderedPeaks = [];
       playButton.disabled = true;
       recordingStartedAt = Date.now();
-      recorder = new MediaRecorder(stream);
+      recorder = createSpeechRecorder(stream);
       recorder.addEventListener("dataavailable", function (event) {
         if (event.data.size > 0) {
           chunks.push(event.data);
@@ -1017,9 +1145,9 @@
       setRecording(true);
       startLiveWaveform(stream);
     } catch (error) {
-      status.textContent = "Microphone access failed. Use file upload instead.";
       setRecording(false);
       stopLiveWaveform();
+      status.textContent = "Microphone access failed. Check browser and Windows input permissions.";
     }
   });
 

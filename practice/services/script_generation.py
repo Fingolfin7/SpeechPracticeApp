@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Protocol
 
 from django.conf import settings
 from django.db.utils import OperationalError, ProgrammingError
 
-from practice.models import ImprovementCard, PracticeSettings
+from practice.models import ImprovementCard, PracticeSession, PracticeSettings
 from practice.services.codex_auth import (
     codex_access_token,
     deserialize_token_bundle,
@@ -36,6 +37,23 @@ class GeneratedLadderDraft:
     title: str
     theme: str
     levels: tuple[LadderLevelDraft, ...]
+    prompt_snapshot: str
+    provider: str
+    auth_source: str = ""
+
+
+@dataclass(frozen=True)
+class GeneratedCardDraft:
+    title: str
+    kind: str
+    target_key: str
+    prompt: str
+    stats: dict
+
+
+@dataclass(frozen=True)
+class GeneratedCardSetDraft:
+    cards: tuple[GeneratedCardDraft, ...]
     prompt_snapshot: str
     provider: str
     auth_source: str = ""
@@ -117,6 +135,32 @@ def build_ladder_generation_prompt(cards: list[ImprovementCard], theme: str = ""
         "  ]\n"
         "}\n"
         "Each level must contain 4 to 8 lines. Keep each line suitable for reading aloud."
+    )
+
+
+def build_self_review_card_prompt(session: PracticeSession, notes: str) -> str:
+    transcript = (session.transcript or "").strip()
+    return (
+        "Turn a learner's self-review notes into SpeechPractice improvement cards.\n"
+        "The learner knows what they meant to say and has written where they noticed mistakes. "
+        "Prefer concrete, reusable focus areas over one-off commentary.\n\n"
+        "Available card kinds:\n"
+        "- word: a specific word to practice\n"
+        "- sound: an articulation or sound pattern, including final consonants or swallowed endings\n"
+        "- phrase: a phrase the learner clipped, blurred, or rushed\n"
+        "- position: a word-position issue such as final sounds or phrase endings\n"
+        "- fluency: pace, pausing, rushing, breath, filler, or rhythm issues\n\n"
+        f"Session: {session.script_name} at {session.timestamp}\n"
+        f"Transcript:\n{transcript[:3000] or '[no transcript]'}\n\n"
+        f"Self-review notes:\n{notes.strip()[:3000]}\n\n"
+        "Return strict JSON only. Schema:\n"
+        "{\n"
+        '  "cards": [\n'
+        '    {"kind": "word|sound|phrase|position|fluency", "target": "short target key", '
+        '"title": "short display title", "prompt": "why and how to practice it"}\n'
+        "  ]\n"
+        "}\n"
+        "Return 1 to 6 cards. Do not include cards for issues the notes do not mention."
     )
 
 
@@ -464,6 +508,80 @@ def generate_ladder_draft(
     return provider.generate_ladder(cards, theme=theme)
 
 
+def generate_cards_from_self_review(
+    session: PracticeSession,
+    notes: str,
+    provider_name: str | None = None,
+) -> GeneratedCardSetDraft:
+    clean_notes = (notes or "").strip()
+    prompt = build_self_review_card_prompt(session, clean_notes)
+    app_settings = _practice_settings()
+    provider = (
+        provider_name
+        or (app_settings.script_generation_provider if app_settings else None)
+        or settings.SCRIPT_GENERATION_PROVIDER
+    )
+    if provider == "local_template":
+        return GeneratedCardSetDraft(
+            cards=tuple(_local_cards_from_self_review(session, clean_notes)),
+            prompt_snapshot=prompt,
+            provider="local_template",
+            auth_source="local",
+        )
+    if provider == "openai":
+        model = (app_settings.openai_script_model if app_settings else None) or settings.OPENAI_SCRIPT_MODEL
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError("Install the optional 'openai' package to use OpenAI card generation.") from exc
+        text, auth_source = OpenAIScriptProvider()._generate_text(
+            OpenAI,
+            model,
+            system=(
+                "You are a precise speech coach. Extract only actionable, reusable "
+                "practice cards from the learner's own self-review notes. Return JSON only."
+            ),
+            user_prompt=prompt,
+            max_output_tokens=900,
+        )
+        cards = parse_self_review_cards(text, session=session)
+        return GeneratedCardSetDraft(
+            cards=tuple(cards),
+            prompt_snapshot=prompt,
+            provider=f"openai:{model}",
+            auth_source=auth_source,
+        )
+    if provider == "anthropic":
+        model = (app_settings.anthropic_script_model if app_settings else None) or settings.ANTHROPIC_SCRIPT_MODEL
+        api_key = (app_settings.get_secret("anthropic_api_key") if app_settings else None) or settings.ANTHROPIC_API_KEY
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is required for Anthropic card generation.")
+        try:
+            import anthropic
+        except ImportError as exc:
+            raise RuntimeError("Install the optional 'anthropic' package to use Anthropic card generation.") from exc
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model=model,
+            max_tokens=900,
+            system="You are a precise speech coach. Return strict JSON only.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        parts = []
+        for block in getattr(message, "content", []) or []:
+            text = getattr(block, "text", None)
+            if text:
+                parts.append(text)
+        cards = parse_self_review_cards("\n".join(parts), session=session)
+        return GeneratedCardSetDraft(
+            cards=tuple(cards),
+            prompt_snapshot=prompt,
+            provider=f"anthropic:{model}",
+            auth_source="api_key",
+        )
+    raise ValueError(f"Unknown script generation provider: {provider}")
+
+
 def get_script_generation_provider(provider_name: str | None = None) -> ScriptGenerationProvider:
     app_settings = _practice_settings()
     provider = provider_name or (app_settings.script_generation_provider if app_settings else None) or settings.SCRIPT_GENERATION_PROVIDER
@@ -572,6 +690,50 @@ def parse_generated_ladder(text: str, fallback_title: str) -> tuple[str, str, li
     ]
 
 
+def parse_self_review_cards(
+    text: str,
+    *,
+    session: PracticeSession,
+) -> list[GeneratedCardDraft]:
+    cleaned = _strip_json_fence(text)
+    try:
+        raw = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return _local_cards_from_self_review(session, cleaned)
+    rows = raw.get("cards") if isinstance(raw, dict) else raw
+    if not isinstance(rows, list):
+        return []
+    cards = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        kind = _normalize_card_kind(row.get("kind"))
+        target = _clean_target(row.get("target") or row.get("target_key") or row.get("focus"))
+        if not kind or not target:
+            continue
+        key = (kind, target.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        title = _card_title(kind, str(row.get("title") or "").strip() or target)
+        prompt = str(row.get("prompt") or row.get("reason") or "").strip()
+        if not prompt:
+            prompt = f"Self-review from {session.script_name}: practice {target}."
+        cards.append(
+            GeneratedCardDraft(
+                title=title,
+                kind=kind,
+                target_key=target,
+                prompt=prompt[:1200],
+                stats=_self_review_stats(session),
+            )
+        )
+        if len(cards) >= 6:
+            break
+    return cards
+
+
 def _response_text(response) -> str:
     text = getattr(response, "output_text", "") or ""
     if text:
@@ -602,3 +764,130 @@ def _stream_response_text(event_stream) -> str:
             if completed_text and not chunks:
                 chunks.append(completed_text)
     return "".join(chunks).strip()
+
+
+def _local_cards_from_self_review(
+    session: PracticeSession,
+    notes: str,
+) -> list[GeneratedCardDraft]:
+    chunks = [
+        re.sub(r"^\s*[-*\u2022\d.)]+\s*", "", part).strip()
+        for part in re.split(r"[\n;]+", notes or "")
+    ]
+    cards: list[GeneratedCardDraft] = []
+    seen: set[tuple[str, str]] = set()
+    for chunk in chunks:
+        if not chunk:
+            continue
+        kind = _kind_from_note(chunk)
+        target = _target_from_note(chunk, kind)
+        key = (kind, target.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        cards.append(
+            GeneratedCardDraft(
+                title=_card_title(kind, target),
+                kind=kind,
+                target_key=target,
+                prompt=f"Self-review note from {session.script_name}: {chunk}",
+                stats=_self_review_stats(session),
+            )
+        )
+        if len(cards) >= 6:
+            break
+    return cards
+
+
+def _strip_json_fence(text: str) -> str:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    return cleaned
+
+
+def _kind_from_note(note: str) -> str:
+    lowered = note.lower()
+    if any(token in lowered for token in ("rush", "too fast", "pace", "pause", "breath", "filler")):
+        return ImprovementCard.KIND_FLUENCY
+    if any(token in lowered for token in ("final consonant", "ending", "endings", "swallow", "mumble", "slur", "pronounc")):
+        return ImprovementCard.KIND_SOUND
+    quoted = re.search(r'"([^"]+)"|\'([^\']+)\'|`([^`]+)`', note)
+    if quoted and len((quoted.group(1) or quoted.group(2) or quoted.group(3) or "").split()) > 1:
+        return ImprovementCard.KIND_PHRASE
+    words = re.findall(r"[A-Za-z][A-Za-z'-]*", note)
+    if len(words) <= 4:
+        return ImprovementCard.KIND_WORD
+    return ImprovementCard.KIND_PHRASE
+
+
+def _target_from_note(note: str, kind: str) -> str:
+    quoted = re.search(r'"([^"]+)"|\'([^\']+)\'|`([^`]+)`', note)
+    if quoted:
+        return _clean_target(quoted.group(1) or quoted.group(2) or quoted.group(3))
+    lowered = note.lower()
+    if kind == ImprovementCard.KIND_FLUENCY:
+        if "pause" in lowered:
+            return "pausing"
+        if "breath" in lowered:
+            return "breath control"
+        return "rushing"
+    if kind == ImprovementCard.KIND_SOUND:
+        if "final consonant" in lowered or "ending" in lowered or "endings" in lowered:
+            return "final consonants"
+        if "mumble" in lowered:
+            return "mumbling"
+        if "swallow" in lowered:
+            return "swallowed words"
+    match = re.search(r"\b(?:on|word|phrase|saying|said)\s+([A-Za-z][A-Za-z' -]{1,80})", note, re.IGNORECASE)
+    if match:
+        return _clean_target(match.group(1))
+    words = re.findall(r"[A-Za-z][A-Za-z'-]*", note)
+    if words:
+        return _clean_target(" ".join(words[: min(5, len(words))]))
+    return _clean_target(note)
+
+
+def _normalize_card_kind(value) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "words": ImprovementCard.KIND_WORD,
+        "pronunciation": ImprovementCard.KIND_SOUND,
+        "sound_pattern": ImprovementCard.KIND_SOUND,
+        "sounds": ImprovementCard.KIND_SOUND,
+        "phrases": ImprovementCard.KIND_PHRASE,
+        "pacing": ImprovementCard.KIND_FLUENCY,
+        "pace": ImprovementCard.KIND_FLUENCY,
+        "rhythm": ImprovementCard.KIND_FLUENCY,
+    }
+    raw = aliases.get(raw, raw)
+    valid = {value for value, _label in ImprovementCard.KIND_CHOICES}
+    return raw if raw in valid else ""
+
+
+def _clean_target(value) -> str:
+    target = re.sub(r"\s+", " ", str(value or "")).strip(" .,:;\"'`")
+    return target[:255] or "self-review focus"
+
+
+def _card_title(kind: str, target: str) -> str:
+    labels = {
+        ImprovementCard.KIND_WORD: "Word focus",
+        ImprovementCard.KIND_SOUND: "Sound pattern",
+        ImprovementCard.KIND_CHARACTER: "Character focus",
+        ImprovementCard.KIND_POSITION: "Word position",
+        ImprovementCard.KIND_PHRASE: "Phrase focus",
+        ImprovementCard.KIND_FLUENCY: "Fluency focus",
+    }
+    return f"{labels.get(kind, 'Focus')}: {target}"[:255]
+
+
+def _self_review_stats(session: PracticeSession) -> dict:
+    return {
+        "source": "self_review",
+        "source_session_id": session.pk,
+        "source_session_name": session.script_name,
+        "source_session_timestamp": session.timestamp,
+    }

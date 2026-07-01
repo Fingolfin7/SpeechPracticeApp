@@ -10,6 +10,8 @@
   const transcriptBox = document.querySelector("[data-job-partial-transcript]");
   const nextAction = document.querySelector("[data-job-next-action]");
   let stopped = false;
+  let pollDelay = 2500;
+  let lastSignature = "";
 
   function render(payload) {
     if (statusLabel) {
@@ -59,14 +61,20 @@
       if (!response.ok) {
         throw new Error("Job status failed.");
       }
-      render(await response.json());
+      const payload = await response.json();
+      const signature = `${payload.status}:${payload.partial_transcript || ""}`;
+      pollDelay = signature === lastSignature ? Math.min(10000, pollDelay * 1.5) : 2500;
+      lastSignature = signature;
+      render(payload);
     } catch (error) {
       if (liveState) {
         liveState.textContent = "Status unavailable";
       }
+      pollDelay = 10000;
     }
     if (!stopped) {
-      window.setTimeout(poll, 1800);
+      const delay = document.hidden || !navigator.onLine ? 10000 : pollDelay;
+      window.setTimeout(poll, delay);
     }
   }
 

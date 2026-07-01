@@ -12,6 +12,10 @@ __pycache__/
 /settings.json
 /build/
 /dist/
+/staticfiles/
+/deployment-data.json
+/db_backups/
+/.certs/
 /.claude
 Agents..md
 CLAUDE.md

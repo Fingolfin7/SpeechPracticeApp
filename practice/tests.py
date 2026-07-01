@@ -39,7 +39,7 @@ from .services.script_generation import (
     script_generation_provider_choices,
 )
 from .services.codex_auth import serialize_token_bundle
-from .services.analytics import build_card_candidates, today_queue
+from .services.analytics import build_card_candidates, refresh_improvement_cards, today_queue
 from .services.transcription import OpenAITranscriptionProvider, TranscriptResult, UploadedTranscriptProvider
 
 
@@ -198,6 +198,8 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "Sound")
         self.assertContains(response, "S")
         self.assertContains(response, "Practice drill")
+        self.assertContains(response, "Do next")
+        self.assertContains(response, "Why this is next")
 
     def test_poetry_foundation_csv_import_shape(self):
         csv_text = (
@@ -350,6 +352,34 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(candidates[0]["target_key"], "steady breath today")
         self.assertEqual(candidates[0]["mastery"], 0.5)
 
+    def test_refresh_improvement_cards_records_exact_source_range(self):
+        summary = {
+            "words": {
+                "top_trouble_words": [
+                    {
+                        "word": "steady",
+                        "error_rate": 0.5,
+                        "errors": 2,
+                        "attempts": 4,
+                    }
+                ]
+            },
+            "sounds": {},
+            "phrases": {},
+            "positions": {},
+        }
+        start_dt = timezone.datetime(2026, 6, 1)
+        end_dt = timezone.datetime(2026, 6, 19, 23, 59, 59)
+
+        with patch("practice.services.analytics.trend_summary_for_range", return_value=summary):
+            created = refresh_improvement_cards(start_dt=start_dt, end_dt=end_dt)
+
+        self.assertEqual(created, 1)
+        card = ImprovementCard.objects.get(target_key="steady")
+        self.assertEqual(card.stats["source_window_start"], "2026-06-01")
+        self.assertEqual(card.stats["source_window_end"], "2026-06-19")
+        self.assertEqual(card.stats["source_window_label"], "2026-06-01 to 2026-06-19")
+
     def test_generated_script_parser_handles_structured_output(self):
         title, body = parse_generated_script(
             "TITLE: Crisp TH Drill\nSCRIPT:\nThin things thrive.\nBreathe through the phrase.",
@@ -462,7 +492,7 @@ class PracticeWebTests(TransactionTestCase):
             ],
         )
 
-    @override_settings(OPENAI_API_KEY="sk-test")
+    @override_settings(OPENAI_API_KEY="sk-test", OPENAI_DIRECT_UPLOAD_MAX_BYTES=0)
     def test_openai_whisper_transcription_chunks_partials_and_offsets_segments(self):
         settings_obj = PracticeSettings.load()
         settings_obj.openai_transcription_model = "whisper-1"
@@ -610,6 +640,9 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Morning Lines")
         self.assertContains(response, "Score recording")
+        self.assertContains(response, "data-score-button disabled")
+        self.assertContains(response, "Record or upload a take before scoring.")
+        self.assertContains(response, "practice-task-tabs")
         self.assertContains(response, "Copy score")
         self.assertContains(response, "data-copy-practice-score")
         self.assertContains(response, 'data-script-preview-base="/scripts/0/preview/"')
@@ -1069,6 +1102,59 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(session.wer, 0.0)
         self.assertEqual(SessionError.objects.filter(session_id=session.pk).count(), 0)
 
+    def test_session_detail_saves_self_review_notes(self):
+        self._create_legacy_tables()
+        session = PracticeSession.objects.create(
+            timestamp="2026-06-14T12:00:00",
+            script_name="Free Speak",
+            script_text="",
+            audio_path="recording.txt",
+            transcript="today I talked freely",
+        )
+
+        response = self.client.post(
+            reverse("practice:session_detail", args=[session.pk]),
+            {
+                "action": "save_self_review",
+                "self_review_notes": "I rushed the last sentence.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        session.refresh_from_db()
+        self.assertEqual(session.self_review_notes, "I rushed the last sentence.")
+
+    def test_session_detail_creates_cards_from_self_review_notes(self):
+        self._create_legacy_tables()
+        session = PracticeSession.objects.create(
+            timestamp="2026-06-14T12:00:00",
+            script_name="Free Speak",
+            script_text="",
+            audio_path="recording.txt",
+            transcript="I asked just one question and then rushed the ending",
+        )
+
+        response = self.client.post(
+            reverse("practice:session_detail", args=[session.pk]),
+            {
+                "action": "create_cards_from_self_review",
+                "provider": "local_template",
+                "self_review_notes": (
+                    "I rushed the last sentence.\n"
+                    "I swallowed final consonants on asked and just."
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(ImprovementCard.objects.count(), 2)
+        targets = set(ImprovementCard.objects.values_list("target_key", flat=True))
+        self.assertIn("rushing", targets)
+        self.assertIn("final consonants", targets)
+        card = ImprovementCard.objects.get(target_key="rushing")
+        self.assertEqual(card.stats["source"], "self_review")
+        self.assertEqual(card.stats["source_session_id"], session.pk)
+
     def test_session_detail_clears_transcript(self):
         self._create_legacy_tables()
         session = PracticeSession.objects.create(
@@ -1525,6 +1611,49 @@ class PracticeWebTests(TransactionTestCase):
         self.assertFalse(ImprovementCard.objects.filter(pk=card.pk).exists())
         self.assertTrue(PracticeScript.objects.filter(pk=script.pk).exists())
 
+    def test_card_list_surfaces_refresh_date_range_controls(self):
+        ImprovementCard.objects.create(
+            title="Word focus: clear",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="clear",
+            prompt="Practice clear.",
+            mastery=0.3,
+            stats={"source_window_label": "2026-06-01 to 2026-06-19"},
+        )
+
+        response = self.client.get(reverse("practice:cards"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Start date")
+        self.assertContains(response, "End date")
+        self.assertContains(response, 'type="date"', count=2)
+        self.assertContains(response, "From 2026-06-01 to 2026-06-19")
+
+    def test_card_refresh_uses_submitted_date_range(self):
+        with patch("practice.views.refresh_improvement_cards", return_value=3) as refresh:
+            response = self.client.get(
+                reverse("practice:cards"),
+                {
+                    "refresh": "1",
+                    "start": "2026-06-01",
+                    "end": "2026-06-19",
+                },
+            )
+
+        self.assertRedirects(response, reverse("practice:cards"))
+        refresh.assert_called_once()
+        kwargs = refresh.call_args.kwargs
+        self.assertEqual(kwargs["start_dt"].date().isoformat(), "2026-06-01")
+        self.assertEqual(kwargs["end_dt"].date().isoformat(), "2026-06-19")
+        self.assertEqual(kwargs["end_dt"].hour, 23)
+
+    def test_card_refresh_requires_date_range(self):
+        with patch("practice.views.refresh_improvement_cards") as refresh:
+            response = self.client.get(reverse("practice:cards"), {"refresh": "1"})
+
+        self.assertRedirects(response, reverse("practice:cards"))
+        refresh.assert_not_called()
+
     def test_generate_script_view_records_provider_metadata(self):
         card = ImprovementCard.objects.create(
             title="Word focus: steady",
@@ -1599,6 +1728,9 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "GPT-5.5")
         self.assertContains(response, "Claude Sonnet 4.6")
         self.assertContains(response, "Local Whisper tuning")
+        self.assertContains(response, "Settings sections")
+        self.assertContains(response, "Advanced Whisper parameters")
+        self.assertContains(response, "Connection status summary")
         self.assertContains(response, "Autumn timer")
         self.assertContains(response, "Autumn username")
 

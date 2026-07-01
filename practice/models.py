@@ -24,9 +24,9 @@ class PracticeSession(models.Model):
     pause_ratio = models.FloatField(blank=True, null=True)
     filled_pauses = models.FloatField(blank=True, null=True)
     avg_conf = models.FloatField(blank=True, null=True)
+    self_review_notes = models.TextField(blank=True)
 
     class Meta:
-        managed = False
         db_table = "sessions"
         ordering = ["-timestamp", "-id"]
 
@@ -57,7 +57,6 @@ class SessionError(models.Model):
     segment_end = models.FloatField(blank=True, null=True)
 
     class Meta:
-        managed = False
         db_table = "session_errors"
 
 
@@ -217,6 +216,7 @@ class ScoringJob(models.Model):
         blank=True,
         null=True,
     )
+    submission_id = models.UUIDField(blank=True, null=True, unique=True)
     card = models.ForeignKey(
         ImprovementCard,
         on_delete=models.SET_NULL,
@@ -367,7 +367,7 @@ class PracticeSettings(models.Model):
     )
     transcription_provider = models.CharField(
         max_length=64,
-        default=TRANSCRIPTION_LOCAL,
+        default=TRANSCRIPTION_OPENAI,
         choices=TRANSCRIPTION_CHOICES,
     )
     openai_script_model = models.CharField(max_length=96, default="gpt-5.5")

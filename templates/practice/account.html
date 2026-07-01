@@ -9,38 +9,69 @@
   </div>
 </section>
 
+<div class="settings-tabs" aria-label="Settings sections">
+  <a href="#settings-speech">Speech engine</a>
+  <a href="#settings-whisper">Local Whisper</a>
+  <a href="#settings-connections">Connections</a>
+  <a href="#settings-secrets">Secrets</a>
+  <a href="#settings-timer">Timer</a>
+</div>
+
 <section class="settings-grid">
   <article class="panel">
     <div class="panel-heading">
       <p class="eyebrow">Speech engine</p>
-      <span>Encrypted secrets</span>
+      <span>Sectioned settings</span>
     </div>
+
+    <div class="connection-strip" aria-label="Connection status summary">
+      <div><strong>Codex</strong><span>{% if have_keys.codex %}Connected{% else %}Not connected{% endif %}</span></div>
+      <div><strong>OpenAI</strong><span>{% if have_keys.openai %}Stored{% else %}Missing{% endif %}</span></div>
+      <div><strong>Anthropic</strong><span>{% if have_keys.anthropic %}Stored{% else %}Missing{% endif %}</span></div>
+      <div><strong>Autumn</strong><span>{% if have_keys.autumn %}Stored{% else %}Missing{% endif %}</span></div>
+    </div>
+
     <form class="settings-form" method="post">
       {% csrf_token %}
-      <p>{{ form.transcription_provider.label_tag }}{{ form.transcription_provider }}</p>
-      <p>{{ form.script_generation_provider.label_tag }}{{ form.script_generation_provider }}</p>
-      <p>{{ form.openai_script_model.label_tag }}{{ form.openai_script_model }}</p>
-      <p>{{ form.anthropic_script_model.label_tag }}{{ form.anthropic_script_model }}</p>
-      <p>{{ form.openai_transcription_model.label_tag }}{{ form.openai_transcription_model }}</p>
 
-      <fieldset class="settings-section">
+      <fieldset class="settings-section" id="settings-speech">
+        <legend>Speech engine</legend>
+        <div class="settings-subgrid">
+          <p>{{ form.transcription_provider.label_tag }}{{ form.transcription_provider }}</p>
+          <p>{{ form.script_generation_provider.label_tag }}{{ form.script_generation_provider }}</p>
+          <p>{{ form.openai_script_model.label_tag }}{{ form.openai_script_model }}</p>
+          <p>{{ form.anthropic_script_model.label_tag }}{{ form.anthropic_script_model }}</p>
+          <p>{{ form.openai_transcription_model.label_tag }}{{ form.openai_transcription_model }}</p>
+        </div>
+      </fieldset>
+
+      <fieldset class="settings-section" id="settings-whisper">
         <legend>Local Whisper tuning</legend>
         <div class="settings-subgrid">
           <p>{{ form.whisper_model_name.label_tag }}{{ form.whisper_model_name }}</p>
           <p>{{ form.whisper_device.label_tag }}{{ form.whisper_device }}</p>
           <p>{{ form.whisper_preset.label_tag }}{{ form.whisper_preset }}</p>
           <p>{{ form.whisper_language.label_tag }}{{ form.whisper_language }}</p>
-          <p>{{ form.whisper_beam_size.label_tag }}{{ form.whisper_beam_size }}</p>
-          <p>{{ form.whisper_temperature.label_tag }}{{ form.whisper_temperature }}</p>
-          <p>{{ form.whisper_no_speech_threshold.label_tag }}{{ form.whisper_no_speech_threshold }}</p>
-          <p>{{ form.whisper_chunk_seconds.label_tag }}{{ form.whisper_chunk_seconds }}</p>
         </div>
         <label class="check-row">{{ form.whisper_timestamps }} Generate timestamps</label>
-        <label class="check-row">{{ form.whisper_condition_on_previous_text }} Use previous text context</label>
+        <details class="advanced-settings">
+          <summary>Advanced Whisper parameters</summary>
+          <div class="settings-subgrid">
+            <p>{{ form.whisper_beam_size.label_tag }}{{ form.whisper_beam_size }}</p>
+            <p>{{ form.whisper_temperature.label_tag }}{{ form.whisper_temperature }}</p>
+            <p>{{ form.whisper_no_speech_threshold.label_tag }}{{ form.whisper_no_speech_threshold }}</p>
+            <p>{{ form.whisper_chunk_seconds.label_tag }}{{ form.whisper_chunk_seconds }}</p>
+          </div>
+          <label class="check-row">{{ form.whisper_condition_on_previous_text }} Use previous text context</label>
+        </details>
       </fieldset>
 
-      <fieldset class="settings-section" data-autumn-settings data-subprojects-url="{% url 'practice:autumn_subprojects' %}">
-        <legend>Autumn timer</legend>
+      <fieldset class="settings-section" id="settings-connections" data-autumn-settings data-subprojects-url="{% url 'practice:autumn_subprojects' %}">
+        <legend>Connections</legend>
+        <div class="settings-status-line">
+          <span>Autumn is {% if have_keys.autumn %}connected{% else %}not connected{% endif %}</span>
+          <span>Codex is {% if have_keys.codex %}connected{% else %}not connected{% endif %}</span>
+        </div>
         <div class="settings-subgrid">
           <p>{{ form.autumn_base_url.label_tag }}{{ form.autumn_base_url }}</p>
           <p>{{ form.autumn_project.label_tag }}{{ form.autumn_project }}</p>
@@ -65,6 +96,8 @@
         </div>
       </fieldset>
 
+      <fieldset class="settings-section" id="settings-secrets">
+        <legend>Secrets</legend>
       <div class="api-keys-grid">
         <div class="api-key-item">
           <div class="api-key-header">
@@ -91,12 +124,13 @@
           <label>{{ form.clear_autumn_token }} Clear token</label>
         </div>
       </div>
+      </fieldset>
 
       <button type="submit">Save settings</button>
     </form>
   </article>
 
-  <aside class="panel">
+  <aside class="panel" id="settings-timer">
     <p class="eyebrow">Connections</p>
     <div class="connection-list">
       <div class="connection-row">

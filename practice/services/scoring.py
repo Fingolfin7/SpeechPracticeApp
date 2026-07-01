@@ -132,6 +132,7 @@ def transcribe_score_and_store(
     script_name: str,
     script_text: str,
     audio_path: str,
+    stored_audio_ref: str | None = None,
     provider_name: str | None = None,
     partial_callback: Callable[[str], None] | None = None,
 ) -> PracticeSession:
@@ -142,7 +143,7 @@ def transcribe_score_and_store(
         timestamp=timezone.localtime().strftime("%Y-%m-%dT%H:%M:%S"),
         script_name=script_name,
         script_text=script_text,
-        audio_path=str(Path(audio_path).resolve()),
+        audio_path=stored_audio_ref or str(Path(audio_path).resolve()),
         transcript=result.transcript,
         wer=result.wer,
         clarity=result.clarity,
@@ -161,6 +162,7 @@ def transcribe_score_and_store(
 def transcribe_free_and_store(
     *,
     audio_path: str,
+    stored_audio_ref: str | None = None,
     provider_name: str | None = None,
     partial_callback: Callable[[str], None] | None = None,
 ) -> PracticeSession:
@@ -174,7 +176,7 @@ def transcribe_free_and_store(
         timestamp=timezone.localtime().strftime("%Y-%m-%dT%H:%M:%S"),
         script_name="Free Speak",
         script_text="",
-        audio_path=str(Path(audio_path).resolve()),
+        audio_path=stored_audio_ref or str(Path(audio_path).resolve()),
         transcript=transcript.text.strip(),
         wer=None,
         clarity=None,
@@ -218,9 +220,3 @@ def _replace_session_errors(session: PracticeSession) -> None:
     ]
     if rows:
         SessionError.objects.bulk_create(rows)
-
-
-def recording_upload_dir() -> Path:
-    path = settings.BASE_DIR / "recordings" / "web"
-    path.mkdir(parents=True, exist_ok=True)
-    return path

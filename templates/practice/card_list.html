@@ -9,7 +9,14 @@
   </div>
   <div class="card-page-actions">
     <span class="card-count">{{ total_count }}</span>
-    <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh from history</a>
+    <form class="card-refresh-form" method="get" action="{% url 'practice:cards' %}">
+      <input type="hidden" name="refresh" value="1">
+      <label for="card-refresh-start">Start date</label>
+      <input id="card-refresh-start" type="date" name="start" required>
+      <label for="card-refresh-end">End date</label>
+      <input id="card-refresh-end" type="date" name="end" required>
+      <button type="submit">Refresh cards</button>
+    </form>
   </div>
 </section>
 
@@ -59,6 +66,9 @@
                 <span>{{ card.get_status_display }}</span>
                 <span>Mastery {{ card.mastery|floatformat:2 }}</span>
                 <span>Due {{ card.due_at|date:"M j, H:i" }}</span>
+                {% if card.stats.source_window_label %}
+                  <span>From {{ card.stats.source_window_label }}</span>
+                {% endif %}
                 {% if card.stats.errors is not None and card.stats.attempts is not None %}
                   <span>{{ card.stats.errors|floatformat:0 }}/{{ card.stats.attempts|floatformat:0 }} misses</span>
                 {% endif %}
@@ -73,7 +83,14 @@
   <section class="empty-card-state">
     <p class="eyebrow">No cards yet</p>
     <h2>Refresh from scored sessions to build your first focus set.</h2>
-    <a class="button-link" href="{% url 'practice:cards' %}?refresh=1">Refresh from history</a>
+    <form class="card-refresh-form" method="get" action="{% url 'practice:cards' %}">
+      <input type="hidden" name="refresh" value="1">
+      <label for="empty-card-refresh-start">Start date</label>
+      <input id="empty-card-refresh-start" type="date" name="start" required>
+      <label for="empty-card-refresh-end">End date</label>
+      <input id="empty-card-refresh-end" type="date" name="end" required>
+      <button type="submit">Refresh cards</button>
+    </form>
   </section>
 {% endif %}
 {% endblock %}

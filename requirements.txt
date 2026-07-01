@@ -1,6 +1,10 @@
 Django>=5.0,<6.0
+dj-database-url>=2.2
+django-storages[s3]>=1.14
+gunicorn>=23.0
+psycopg[binary]>=3.2
+whitenoise>=6.8
 numpy>=1.24
-openai-whisper>=20231117
 # Cloud generation providers:
 openai>=1.66
 # Optional cloud providers:
@@ -9,9 +13,5 @@ jiwer>=3.0
 SQLAlchemy>=1.4
 cryptography>=42.0
 requests>=2.31
-soundfile>=0.12
-pydub>=0.25.1
-# if running python 3.12 or lower, and have an Nvidia GPU you can install CUDA enabled torch to run whisper on:
-# (GPU): pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu12
-
-# Ensure ffmpeg is on PATH for Whisper
+# Local Whisper is optional and lives in requirements-local.txt. Production
+# sends normal browser-recorded WebM files directly to OpenAI.

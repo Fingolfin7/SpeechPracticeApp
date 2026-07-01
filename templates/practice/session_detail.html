@@ -3,7 +3,7 @@
 {% block title %}Session | SpeechPractice{% endblock %}
 {% block content %}
 <section class="detail-header">
-  <p class="eyebrow">Scored session</p>
+  <p class="eyebrow">{% if session.score is None %}Practice session{% else %}Scored session{% endif %}</p>
   <h1>{{ session.script_name }}</h1>
   <p>{{ session.timestamp }}</p>
   <div class="action-row">
@@ -70,6 +70,32 @@
   </article>
 </section>
 
+<section class="panel self-review-panel">
+  <div class="panel-heading">
+    <div>
+      <p class="eyebrow">Self-review</p>
+      <h2>Turn your notes into focus cards</h2>
+    </div>
+    <span>Manual judgment</span>
+  </div>
+  <form class="transcript-editor" method="post">
+    {% csrf_token %}
+    {{ review_form.self_review_notes.label_tag }}
+    {{ review_form.self_review_notes }}
+    {{ review_form.self_review_notes.errors }}
+    <div class="review-action-row">
+      <label for="self-review-provider">Card generator</label>
+      <select id="self-review-provider" name="provider">
+        {% for value,label in generation_provider_choices %}
+          <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" name="action" value="save_self_review">Save notes</button>
+      <button type="submit" name="action" value="create_cards_from_self_review">Create cards from notes</button>
+    </div>
+  </form>
+</section>
+
 {% if mistake_lines %}
 <section class="panel mistakes-panel">
   <div class="panel-heading">
@@ -88,6 +114,7 @@
   </div>
   <form class="transcript-editor" method="post">
     {% csrf_token %}
+    <input type="hidden" name="action" value="edit_transcript">
     {{ form.transcript.label_tag }}
     {{ form.transcript }}
     {{ form.transcript.errors }}

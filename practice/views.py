@@ -4,13 +4,13 @@ import re
 import json
 import mimetypes
 import random
+import uuid
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from django.contrib import messages
+from django.contrib.auth.decorators import login_not_required
 from django.conf import settings as django_settings
-from django.core.files.uploadedfile import UploadedFile
-from django.db import models
+from django.db import IntegrityError, connection, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -26,7 +26,14 @@ from error_analytics import (
     clean_text_for_alignment,
 )
 
-from .forms import AccountSettingsForm, BulkScriptImportForm, PracticeRunForm, PracticeScriptForm, TranscriptEditForm
+from .forms import (
+    AccountSettingsForm,
+    BulkScriptImportForm,
+    PracticeRunForm,
+    PracticeScriptForm,
+    SelfReviewNotesForm,
+    TranscriptEditForm,
+)
 from .models import (
     GeneratedPracticeScript,
     ImprovementCard,
@@ -53,7 +60,14 @@ from .services.analytics import (
     trend_summary,
 )
 from .services.jobs import create_free_speak_job, create_scoring_job, enqueue_scoring_job, job_status_context
-from .services.scoring import _replace_session_errors, recording_upload_dir, score_transcript
+from .services.scoring import _replace_session_errors, score_transcript
+from .services.audio_storage import (
+    audio_exists as stored_audio_exists,
+    audio_size,
+    delete_audio,
+    open_audio,
+    save_uploaded_audio,
+)
 from .services.codex_auth import (
     CodexAuthError,
     CodexDevicePending,
@@ -66,12 +80,22 @@ from .services.codex_auth import (
 from .services.session_display import audio_exists, highlighted_session_text, session_segments
 from .services.script_import import import_script_items, parse_script_upload
 from .services.script_generation import (
+    generate_cards_from_self_review,
     generate_ladder_draft,
     generate_script_draft,
     script_generation_provider_choices,
 )
 from .services.transcription import TranscriptResult
 from .services.transcription import clear_local_whisper_cache, provider_label
+
+
+@login_not_required
+def health(request):
+    try:
+        connection.ensure_connection()
+    except Exception:
+        return JsonResponse({"ok": False}, status=503)
+    return JsonResponse({"ok": True})
 
 
 def dashboard(request):
@@ -128,6 +152,16 @@ def practice_run(request):
     ladder_steps: list[PracticeLadderStep] = []
     selected_ladder_step = None
     if request.method == "POST":
+        submission_id = _submission_id(request)
+        if submission_id is not None:
+            existing_job = ScoringJob.objects.filter(submission_id=submission_id).first()
+            if existing_job is not None:
+                if _wants_json(request):
+                    return JsonResponse(
+                        {"ok": True, "message": "Scoring request already received.", **_scoring_job_payload(existing_job)},
+                        status=200,
+                    )
+                return redirect("practice:scoring_job", pk=existing_job.pk)
         form = PracticeRunForm(request.POST, request.FILES, script_kind=script_kind)
         if form.is_valid():
             mode = form.cleaned_data.get("mode") or PracticeRunForm.MODE_SCRIPT
@@ -135,23 +169,36 @@ def practice_run(request):
             card = form.cleaned_data.get("card")
             audio = form.cleaned_data["audio"]
             provider = form.cleaned_data.get("provider") or None
-            provider_name = provider or "local_whisper"
+            provider_name = provider or django_settings.TRANSCRIPTION_PROVIDER
             if audio is None:
                 form.add_error("audio", "Record or upload audio before scoring.")
             else:
-                audio_path = _save_uploaded_audio(audio, script.title if script else "free-speak")
-                if mode == PracticeRunForm.MODE_FREE:
-                    job = create_free_speak_job(
-                        audio_path=str(audio_path),
-                        provider=provider_name,
+                audio_path = save_uploaded_audio(audio, script.title if script else "free-speak")
+                try:
+                    with transaction.atomic():
+                        if mode == PracticeRunForm.MODE_FREE:
+                            job = create_free_speak_job(
+                                audio_path=str(audio_path),
+                                provider=provider_name,
+                                submission_id=submission_id,
+                            )
+                        else:
+                            job = create_scoring_job(
+                                script=script,
+                                audio_path=str(audio_path),
+                                provider=provider_name,
+                                card=card,
+                                submission_id=submission_id,
+                            )
+                except IntegrityError:
+                    delete_audio(str(audio_path))
+                    job = (
+                        ScoringJob.objects.filter(submission_id=submission_id).first()
+                        if submission_id is not None
+                        else None
                     )
-                else:
-                    job = create_scoring_job(
-                        script=script,
-                        audio_path=str(audio_path),
-                        provider=provider_name,
-                        card=card,
-                    )
+                    if job is None:
+                        raise
                 enqueue_scoring_job(job)
                 focus_label = f" for {card.display_title}" if card else ""
                 mode_label = "Free Speak transcription" if mode == PracticeRunForm.MODE_FREE else "Scoring"
@@ -284,7 +331,8 @@ def session_list(request):
 def session_detail(request, pk: int):
     session = get_object_or_404(PracticeSession, pk=pk)
     if request.method == "POST":
-        if request.POST.get("action") == "clear_transcript":
+        action = request.POST.get("action") or "edit_transcript"
+        if action == "clear_transcript":
             session.transcript = ""
             session.wer = None
             session.clarity = None
@@ -310,6 +358,33 @@ def session_detail(request, pk: int):
             SessionError.objects.filter(session_id=session.pk).delete()
             messages.success(request, "Transcript cleared.")
             return redirect("practice:session_detail", pk=session.pk)
+
+        if action in {"save_self_review", "create_cards_from_self_review"}:
+            review_form = SelfReviewNotesForm(request.POST, instance=session)
+            if review_form.is_valid():
+                review_form.save()
+                session.refresh_from_db()
+                if action == "save_self_review":
+                    messages.success(request, "Self-review notes saved.")
+                    return redirect("practice:session_detail", pk=session.pk)
+                try:
+                    created_cards = _create_cards_from_self_review(
+                        session,
+                        provider=request.POST.get("provider") or None,
+                    )
+                except Exception as exc:
+                    messages.error(request, f"Card generation failed: {exc}")
+                    return redirect("practice:session_detail", pk=session.pk)
+                if created_cards:
+                    messages.success(
+                        request,
+                        f"Created or updated {len(created_cards)} focus cards from your self-review notes.",
+                    )
+                    return redirect("practice:cards")
+                messages.error(request, "Add a few specific self-review notes before creating cards.")
+                return redirect("practice:session_detail", pk=session.pk)
+        else:
+            review_form = SelfReviewNotesForm(instance=session)
 
         form = TranscriptEditForm(request.POST, instance=session)
         if form.is_valid():
@@ -338,6 +413,7 @@ def session_detail(request, pk: int):
             return redirect("practice:session_detail", pk=session.pk)
     else:
         form = TranscriptEditForm(instance=session)
+        review_form = SelfReviewNotesForm(instance=session)
 
     highlighted = highlighted_session_text(session)
     mistake_lines = _mistake_lines(session)
@@ -347,10 +423,12 @@ def session_detail(request, pk: int):
         {
             "session": session,
             "form": form,
+            "review_form": review_form,
             "highlighted": highlighted,
             "has_audio": audio_exists(session),
             "mistake_lines": mistake_lines,
             "score_text": _session_score_text(session),
+            "generation_provider_choices": script_generation_provider_choices(),
         },
     )
 
@@ -379,6 +457,10 @@ def session_report(request, pk: int):
         "",
         session.transcript or "",
         "",
+        "## Self-review Notes",
+        "",
+        session.self_review_notes or "",
+        "",
         "## Mistakes",
         "",
     ]
@@ -399,7 +481,7 @@ def session_report(request, pk: int):
 def session_delete(request, pk: int):
     session = get_object_or_404(PracticeSession, pk=pk)
     script_name = session.script_name
-    audio_deleted = _delete_audio_file(session.audio_path)
+    audio_deleted = delete_audio(session.audio_path)
     SessionError.objects.filter(session_id=session.pk).delete()
     PracticeReview.objects.filter(legacy_session_id=session.pk).delete()
     ScoringJob.objects.filter(legacy_session_id=session.pk).update(legacy_session_id=None)
@@ -411,25 +493,29 @@ def session_delete(request, pk: int):
 
 def session_audio(request, pk: int):
     session = get_object_or_404(PracticeSession, pk=pk)
-    path = Path(session.audio_path or "")
-    if not path.exists() or not path.is_file():
+    if not stored_audio_exists(session.audio_path):
         raise Http404("Audio file not found.")
-    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    file_size = path.stat().st_size
+    content_type = mimetypes.guess_type(session.audio_path)[0] or "application/octet-stream"
+    file_size = audio_size(session.audio_path)
     range_header = request.headers.get("Range", "")
     if range_header.startswith("bytes="):
         start, end = _parse_byte_range(range_header, file_size)
         length = end - start + 1
-        with path.open("rb") as audio_file:
+        with open_audio(session.audio_path, "rb") as audio_file:
             audio_file.seek(start)
             payload = audio_file.read(length)
         response = HttpResponse(payload, status=206, content_type=content_type)
         response["Content-Range"] = f"bytes {start}-{end}/{file_size}"
         response["Content-Length"] = str(length)
     else:
-        response = FileResponse(path.open("rb"), as_attachment=False, content_type=content_type)
+        response = FileResponse(
+            open_audio(session.audio_path, "rb"),
+            as_attachment=False,
+            content_type=content_type,
+        )
         response["Content-Length"] = str(file_size)
     response["Accept-Ranges"] = "bytes"
+    response["Cache-Control"] = "private, max-age=3600"
     return response
 
 
@@ -448,7 +534,9 @@ def scoring_job_detail(request, pk: int):
 
 def scoring_job_status(request, pk: int):
     job = get_object_or_404(ScoringJob, pk=pk)
-    return JsonResponse(_scoring_job_payload(job))
+    response = JsonResponse(_scoring_job_payload(job))
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 def _scoring_job_payload(job: ScoringJob) -> dict:
@@ -731,8 +819,15 @@ def script_import(request):
 
 def card_list(request):
     if request.GET.get("refresh") == "1":
-        created = refresh_improvement_cards()
-        messages.success(request, f"Cards refreshed. {created} new focus areas created.")
+        start_dt, end_dt, error = _card_refresh_range(request.GET.get("start"), request.GET.get("end"))
+        if error:
+            messages.error(request, error)
+            return redirect("practice:cards")
+        created = refresh_improvement_cards(start_dt=start_dt, end_dt=end_dt)
+        messages.success(
+            request,
+            f"Cards refreshed from {start_dt:%Y-%m-%d} to {end_dt:%Y-%m-%d}. {created} new focus areas created.",
+        )
         return redirect("practice:cards")
     cards = list(ImprovementCard.objects.all())
     grouped_cards = []
@@ -758,6 +853,60 @@ def card_list(request):
             "total_count": len(cards),
         },
     )
+
+
+def _create_cards_from_self_review(
+    session: PracticeSession,
+    *,
+    provider: str | None = None,
+) -> list[ImprovementCard]:
+    notes = (session.self_review_notes or "").strip()
+    if not notes:
+        return []
+    draft = generate_cards_from_self_review(session, notes, provider_name=provider)
+    cards = []
+    for card_draft in draft.cards:
+        if not card_draft.target_key:
+            continue
+        stats = {
+            **card_draft.stats,
+            "source_provider": draft.provider,
+            "source_auth": draft.auth_source,
+        }
+        card, _created = ImprovementCard.objects.update_or_create(
+            kind=card_draft.kind,
+            target_key=card_draft.target_key,
+            defaults={
+                "title": card_draft.title,
+                "prompt": card_draft.prompt,
+                "stats": stats,
+                "status": ImprovementCard.STATUS_LEARNING,
+                "due_at": timezone.now(),
+            },
+        )
+        cards.append(card)
+    return cards
+
+
+def _card_refresh_range(
+    start_raw: str | None,
+    end_raw: str | None,
+) -> tuple[datetime | None, datetime | None, str]:
+    if not start_raw or not end_raw:
+        return None, None, "Choose a start and end date for card refresh."
+    try:
+        start_dt = datetime.strptime(start_raw, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_raw, "%Y-%m-%d").replace(
+            hour=23,
+            minute=59,
+            second=59,
+            microsecond=999999,
+        )
+    except ValueError:
+        return None, None, "Use valid start and end dates for card refresh."
+    if start_dt > end_dt:
+        return None, None, "Start date must be before end date."
+    return start_dt, end_dt, ""
 
 
 def card_detail(request, pk: int):
@@ -1272,36 +1421,6 @@ def _script_source_groups(scripts):
     return groups
 
 
-def _save_uploaded_audio(audio: UploadedFile, script_title: str):
-    ext = _safe_extension(audio.name)
-    stamp = timezone.localtime().strftime("%Y%m%d_%H%M%S")
-    title_slug = re.sub(r"[^a-zA-Z0-9]+", "-", script_title).strip("-").lower()[:40]
-    filename = f"{stamp}_{title_slug or 'practice'}{ext}"
-    destination = recording_upload_dir() / filename
-    with destination.open("wb") as out:
-        for chunk in audio.chunks():
-            out.write(chunk)
-    return destination
-
-
-def _safe_extension(filename: str) -> str:
-    suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ".webm"
-    return suffix if suffix in {".webm", ".wav", ".mp3", ".m4a", ".ogg", ".flac", ".txt"} else ".webm"
-
-
-def _delete_audio_file(audio_path: str | None) -> bool:
-    if not audio_path:
-        return False
-    path = Path(audio_path)
-    if not path.is_file():
-        return False
-    try:
-        path.unlink()
-    except OSError:
-        return False
-    return True
-
-
 def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
     raw = range_header.split("=", 1)[1].split(",", 1)[0].strip()
     start_raw, _, end_raw = raw.partition("-")
@@ -1315,6 +1434,16 @@ def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
     start = max(0, min(start, file_size - 1))
     end = max(start, min(end, file_size - 1))
     return start, end
+
+
+def _submission_id(request) -> uuid.UUID | None:
+    raw = str(request.headers.get("X-Idempotency-Key", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(raw)
+    except (ValueError, AttributeError):
+        return None
 
 
 def _parse_date_param(value: str | None, fallback: datetime) -> datetime:

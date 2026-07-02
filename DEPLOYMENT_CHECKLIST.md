@@ -27,9 +27,12 @@ durable production job processing.
 - [x] Production requests require Django authentication.
 - [x] Free deploy uses threaded web-process scoring.
 - [x] App still includes a long-running worker command for a future paid worker.
-- [ ] Existing local audio has been copied to S3 and its database references updated.
-- [ ] Resolve or accept the seven missing legacy audio references found by the current dry run (73 files are copyable).
-- [ ] Existing SQLite application data has been imported into Neon.
+- [x] Existing local audio has been copied to S3 and its database references updated.
+  - `migrate_audio_storage` copied 73 unique local audio refs to `recordings/legacy/` in S3.
+- [ ] Resolve or accept the seven missing legacy audio references found by the migration.
+  - These were already missing locally before upload, so their old scoring-job references remain unresolved.
+- [x] Existing SQLite application data has been imported into Neon.
+  - Loaded 1,805 practice objects from the local SQLite fixture. Local encrypted `PracticeSettings` secrets were intentionally excluded.
 
 ## Infrastructure
 
@@ -38,7 +41,8 @@ durable production job processing.
 - [x] Create an IAM user/policy limited to that bucket.
 - [x] Create the free Render Blueprint from `render.yaml`.
 - [x] Populate deployment-required `sync: false` environment variables for database and S3.
-- [ ] Add `OPENAI_API_KEY` to Render or configure the production account with a per-user OpenAI key.
+- [x] Add `OPENAI_API_KEY` to Render or configure the production account with a per-user OpenAI key.
+  - Manually added in Render, then verified by a live OpenAI scoring job.
 - [x] Confirm the web service uses the generated `SECRET_KEY` environment group.
 - [x] Confirm the Render service deploys successfully and reaches the live state.
 - [x] Create the production superuser against the Neon database (`kuda` / `mushunjek@gmail.com`).
@@ -54,9 +58,15 @@ durable production job processing.
 - [x] Render build installs dependencies, collects static files, and runs migrations against Neon.
 - [x] Render health check returns `200` for `/healthz/`.
 - [x] Public root URL loads the SpeechPractice sign-in page.
-- [ ] Upload and score a browser-recorded WebM file.
+- [x] Run a post-migration live DB/S3 verification pass.
+  - Live sessions page returned 70 sessions; imported legacy session audio returned `206 Partial Content`.
+  - Repeat with `deployment/live_migration_verify.py`.
+- [x] Upload and score a browser-recorded WebM file.
+  - Live job `/jobs/22/status/` succeeded with OpenAI transcription and scoring.
+  - Repeat with `deployment/live_smoke_test.py`.
 - [x] Retry a submission with the same idempotency key; only one job exists.
 - [x] Seek through storage-backed audio and receive `206 Partial Content`.
 - [x] Verify queued-worker behavior remains covered for a future paid worker.
 - [x] Verify the 390x844 mobile layout has no horizontal overflow or browser errors.
-- [ ] Complete a live throttled-network upload and OpenAI scoring run after external services exist.
+- [ ] Complete a live throttled-network upload and OpenAI scoring run.
+  - Normal live upload/scoring is verified; explicit browser/network throttling is still pending.

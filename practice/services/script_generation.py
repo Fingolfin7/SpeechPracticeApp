@@ -266,8 +266,11 @@ class LocalTemplateScriptProvider:
 class OpenAIScriptProvider:
     name = "openai"
 
+    def __init__(self, user=None) -> None:
+        self.user = user
+
     def generate(self, card: ImprovementCard) -> GeneratedScriptDraft:
-        app_settings = _practice_settings()
+        app_settings = _practice_settings(self.user or card.user)
         model = (app_settings.openai_script_model if app_settings else None) or settings.OPENAI_SCRIPT_MODEL
         try:
             from openai import OpenAI
@@ -299,7 +302,7 @@ class OpenAIScriptProvider:
         cards: list[ImprovementCard],
         theme: str = "",
     ) -> GeneratedLadderDraft:
-        app_settings = _practice_settings()
+        app_settings = _practice_settings(self.user or (cards[0].user if cards else None))
         model = (app_settings.openai_script_model if app_settings else None) or settings.OPENAI_SCRIPT_MODEL
         try:
             from openai import OpenAI
@@ -335,7 +338,7 @@ class OpenAIScriptProvider:
         user_prompt: str,
         max_output_tokens: int,
     ) -> tuple[str, str]:
-        app_settings = _practice_settings()
+        app_settings = _practice_settings(self.user)
         api_key = (app_settings.get_secret("openai_api_key") if app_settings else None) or settings.OPENAI_API_KEY
         codex_token = codex_access_token(app_settings)
         if codex_token:
@@ -411,8 +414,11 @@ class OpenAIScriptProvider:
 class AnthropicScriptProvider:
     name = "anthropic"
 
+    def __init__(self, user=None) -> None:
+        self.user = user
+
     def generate(self, card: ImprovementCard) -> GeneratedScriptDraft:
-        app_settings = _practice_settings()
+        app_settings = _practice_settings(self.user or card.user)
         api_key = (app_settings.get_secret("anthropic_api_key") if app_settings else None) or settings.ANTHROPIC_API_KEY
         model = (app_settings.anthropic_script_model if app_settings else None) or settings.ANTHROPIC_SCRIPT_MODEL
         if not api_key:
@@ -452,7 +458,7 @@ class AnthropicScriptProvider:
         cards: list[ImprovementCard],
         theme: str = "",
     ) -> GeneratedLadderDraft:
-        app_settings = _practice_settings()
+        app_settings = _practice_settings(self.user or (cards[0].user if cards else None))
         api_key = (app_settings.get_secret("anthropic_api_key") if app_settings else None) or settings.ANTHROPIC_API_KEY
         model = (app_settings.anthropic_script_model if app_settings else None) or settings.ANTHROPIC_SCRIPT_MODEL
         if not api_key:
@@ -496,7 +502,7 @@ def generate_script_draft(
     card: ImprovementCard,
     provider_name: str | None = None,
 ) -> GeneratedScriptDraft:
-    return get_script_generation_provider(provider_name).generate(card)
+    return get_script_generation_provider(provider_name, user=card.user).generate(card)
 
 
 def generate_ladder_draft(
@@ -504,7 +510,8 @@ def generate_ladder_draft(
     theme: str = "",
     provider_name: str | None = None,
 ) -> GeneratedLadderDraft:
-    provider = get_script_generation_provider(provider_name)
+    user = cards[0].user if cards else None
+    provider = get_script_generation_provider(provider_name, user=user)
     return provider.generate_ladder(cards, theme=theme)
 
 
@@ -515,7 +522,7 @@ def generate_cards_from_self_review(
 ) -> GeneratedCardSetDraft:
     clean_notes = (notes or "").strip()
     prompt = build_self_review_card_prompt(session, clean_notes)
-    app_settings = _practice_settings()
+    app_settings = _practice_settings(session.user)
     provider = (
         provider_name
         or (app_settings.script_generation_provider if app_settings else None)
@@ -534,7 +541,7 @@ def generate_cards_from_self_review(
             from openai import OpenAI
         except ImportError as exc:
             raise RuntimeError("Install the optional 'openai' package to use OpenAI card generation.") from exc
-        text, auth_source = OpenAIScriptProvider()._generate_text(
+        text, auth_source = OpenAIScriptProvider(user=session.user)._generate_text(
             OpenAI,
             model,
             system=(
@@ -582,20 +589,20 @@ def generate_cards_from_self_review(
     raise ValueError(f"Unknown script generation provider: {provider}")
 
 
-def get_script_generation_provider(provider_name: str | None = None) -> ScriptGenerationProvider:
-    app_settings = _practice_settings()
+def get_script_generation_provider(provider_name: str | None = None, user=None) -> ScriptGenerationProvider:
+    app_settings = _practice_settings(user)
     provider = provider_name or (app_settings.script_generation_provider if app_settings else None) or settings.SCRIPT_GENERATION_PROVIDER
     if provider == "local_template":
         return LocalTemplateScriptProvider()
     if provider == "openai":
-        return OpenAIScriptProvider()
+        return OpenAIScriptProvider(user=user)
     if provider == "anthropic":
-        return AnthropicScriptProvider()
+        return AnthropicScriptProvider(user=user)
     raise ValueError(f"Unknown script generation provider: {provider}")
 
 
-def script_generation_provider_choices() -> list[tuple[str, str]]:
-    app_settings = _practice_settings()
+def script_generation_provider_choices(user=None) -> list[tuple[str, str]]:
+    app_settings = _practice_settings(user)
     openai_model = (app_settings.openai_script_model if app_settings else None) or settings.OPENAI_SCRIPT_MODEL
     anthropic_model = (app_settings.anthropic_script_model if app_settings else None) or settings.ANTHROPIC_SCRIPT_MODEL
     return [
@@ -605,10 +612,10 @@ def script_generation_provider_choices() -> list[tuple[str, str]]:
     ]
 
 
-def _practice_settings() -> PracticeSettings | None:
+def _practice_settings(user=None) -> PracticeSettings | None:
     try:
-        return PracticeSettings.load()
-    except (OperationalError, ProgrammingError):
+        return PracticeSettings.load(user)
+    except (OperationalError, ProgrammingError, ValueError):
         return None
 
 

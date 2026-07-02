@@ -51,6 +51,7 @@ def update_card_from_session(
         ]
     )
     return PracticeReview.objects.create(
+        user=session.user,
         card=card,
         legacy_session_id=session.pk,
         score=session.score,

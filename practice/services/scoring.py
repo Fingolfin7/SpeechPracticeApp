@@ -129,6 +129,7 @@ def score_transcript(script_text: str, transcript_result: TranscriptResult) -> S
 
 def transcribe_score_and_store(
     *,
+    user,
     script_name: str,
     script_text: str,
     audio_path: str,
@@ -136,10 +137,11 @@ def transcribe_score_and_store(
     provider_name: str | None = None,
     partial_callback: Callable[[str], None] | None = None,
 ) -> PracticeSession:
-    provider = get_transcription_provider(provider_name)
+    provider = get_transcription_provider(provider_name, user=user)
     transcript = provider.transcribe(audio_path, partial_callback=partial_callback)
     result = score_transcript(script_text, transcript)
     session = PracticeSession.objects.create(
+        user=user,
         timestamp=timezone.localtime().strftime("%Y-%m-%dT%H:%M:%S"),
         script_name=script_name,
         script_text=script_text,
@@ -161,18 +163,20 @@ def transcribe_score_and_store(
 
 def transcribe_free_and_store(
     *,
+    user,
     audio_path: str,
     stored_audio_ref: str | None = None,
     provider_name: str | None = None,
     partial_callback: Callable[[str], None] | None = None,
 ) -> PracticeSession:
-    provider = get_transcription_provider(provider_name)
+    provider = get_transcription_provider(provider_name, user=user)
     transcript = provider.transcribe(audio_path, partial_callback=partial_callback)
     segments, artic_rate, pause_ratio, filled_pauses, avg_conf = augment_segments_and_fluency(
         transcript.segments,
         transcript.text,
     )
     return PracticeSession.objects.create(
+        user=user,
         timestamp=timezone.localtime().strftime("%Y-%m-%dT%H:%M:%S"),
         script_name="Free Speak",
         script_text="",
@@ -191,11 +195,12 @@ def transcribe_free_and_store(
 
 
 def _replace_session_errors(session: PracticeSession) -> None:
-    SessionError.objects.filter(session_id=session.id).delete()
+    SessionError.objects.filter(user=session.user, session_id=session.id).delete()
     events = extract_error_events(session.script_text, session.transcript or "")
     rows = [
-        SessionError(
-            session_id=session.id,
+            SessionError(
+                user=session.user,
+                session_id=session.id,
             timestamp=session.timestamp,
             script_name=session.script_name,
             ref_token=event.get("ref_token"),

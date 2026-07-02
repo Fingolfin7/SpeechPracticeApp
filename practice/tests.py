@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import db as legacy_db
 from error_analytics import get_phrase_trend_summary
+from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.utils import OperationalError
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -44,6 +45,17 @@ from .services.transcription import OpenAITranscriptionProvider, TranscriptResul
 
 
 class PracticeWebTests(TransactionTestCase):
+    def setUp(self):
+        self.user, _created = get_user_model().objects.get_or_create(
+            username="owner",
+            defaults={"is_staff": True, "is_superuser": True},
+        )
+        self.user.set_password("test-pass-owner")
+        self.user.is_staff = True
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+
     def _write_test_wav(self, path: Path, duration_seconds: float = 0.25) -> None:
         sample_rate = 8000
         frame_count = int(sample_rate * duration_seconds)

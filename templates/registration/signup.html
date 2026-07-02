@@ -1,0 +1,18 @@
+{% extends "practice/base.html" %}
+
+{% block title %}Sign up - SpeechPractice{% endblock %}
+
+{% block content %}
+<section class="content-card account-card">
+  <p class="eyebrow">Private workspace</p>
+  <h1>Create your SpeechPractice account</h1>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Create account</button>
+  </form>
+  <p class="form-note">
+    Already have an account? <a href="{% url 'login' %}">Sign in</a>.
+  </p>
+</section>
+{% endblock %}

@@ -44,8 +44,9 @@ class LocalWhisperProvider:
         model_name: str | None = None,
         device: str | None = None,
         language: str | None = None,
+        user=None,
     ) -> None:
-        app_settings = _practice_settings()
+        app_settings = _practice_settings(user)
         self.app_settings = app_settings
         self.model_name = (
             model_name
@@ -87,8 +88,8 @@ class LocalWhisperProvider:
 class OpenAITranscriptionProvider:
     name = "openai"
 
-    def __init__(self, model: str | None = None) -> None:
-        app_settings = _practice_settings()
+    def __init__(self, model: str | None = None, user=None) -> None:
+        app_settings = _practice_settings(user)
         self.app_settings = app_settings
         configured_model = (
             model
@@ -330,20 +331,20 @@ def _has_cuda() -> bool:
         return False
 
 
-def get_transcription_provider(provider_name: str | None = None) -> TranscriptionProvider:
-    app_settings = _practice_settings()
+def get_transcription_provider(provider_name: str | None = None, user=None) -> TranscriptionProvider:
+    app_settings = _practice_settings(user)
     provider = provider_name or (app_settings.transcription_provider if app_settings else None) or settings.TRANSCRIPTION_PROVIDER
     if provider == "local_whisper":
-        return LocalWhisperProvider()
+        return LocalWhisperProvider(user=user)
     if provider == "openai":
-        return OpenAITranscriptionProvider()
+        return OpenAITranscriptionProvider(user=user)
     if provider == "uploaded_transcript":
         return UploadedTranscriptProvider()
     raise ValueError(f"Unknown transcription provider: {provider}")
 
 
-def provider_label(provider_name: str | None = None) -> str:
-    app_settings = _practice_settings()
+def provider_label(provider_name: str | None = None, user=None) -> str:
+    app_settings = _practice_settings(user)
     provider = provider_name or (app_settings.transcription_provider if app_settings else None) or settings.TRANSCRIPTION_PROVIDER
     return {
         "local_whisper": "Local Whisper",
@@ -450,10 +451,10 @@ def _chunk_seconds(app_settings: PracticeSettings | None) -> int:
         return 60
 
 
-def _practice_settings() -> PracticeSettings | None:
+def _practice_settings(user=None) -> PracticeSettings | None:
     try:
-        return PracticeSettings.load()
-    except (OperationalError, ProgrammingError):
+        return PracticeSettings.load(user)
+    except (OperationalError, ProgrammingError, ValueError):
         return None
 
 

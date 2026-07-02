@@ -31,6 +31,7 @@ class ScriptImportResult:
 def import_script_items(
     items: Iterable[ScriptImportItem],
     *,
+    user=None,
     source: str = PracticeScript.SOURCE_IMPORTED,
     extra_tags: Iterable[str] = (),
     replace: bool = True,
@@ -50,6 +51,7 @@ def import_script_items(
 
         tags = sorted({*item.tags, *common_tags})
         defaults = {
+            "user": user,
             "author": normalize_space(item.author),
             "body": body,
             "source": source,
@@ -58,6 +60,7 @@ def import_script_items(
             "active": True,
         }
         lookup = {
+            "user": user,
             "title": title,
             "author": defaults["author"],
             "source_ref": defaults["source_ref"],

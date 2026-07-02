@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db.models import Avg, Count
 from django.utils import timezone
 
@@ -18,7 +19,15 @@ from error_analytics import (
     get_word_trend_summary,
 )
 
-from practice.models import GeneratedPracticeScript, ImprovementCard, PracticeReview, PracticeScript, PracticeSession, ScoringJob
+from practice.models import (
+    GeneratedPracticeScript,
+    ImprovementCard,
+    PracticeReview,
+    PracticeScript,
+    PracticeSession,
+    ScoringJob,
+    default_practice_user_pk,
+)
 
 
 @dataclass(frozen=True)
@@ -38,8 +47,15 @@ class TodayQueueItem:
     is_due: bool
 
 
-def dashboard_stats() -> DashboardStats:
-    base = PracticeSession.objects.all()
+def _resolve_user(user=None):
+    if user is not None and getattr(user, "is_authenticated", True):
+        return user
+    return get_user_model().objects.get(pk=default_practice_user_pk())
+
+
+def dashboard_stats(user=None) -> DashboardStats:
+    user = _resolve_user(user)
+    base = PracticeSession.objects.filter(user=user)
     scored = base.exclude(score__isnull=True)
     aggregate = scored.aggregate(
         average_score=Avg("score"),
@@ -55,14 +71,17 @@ def dashboard_stats() -> DashboardStats:
     )
 
 
-def recent_sessions(limit: int = 8):
-    return PracticeSession.objects.exclude(score__isnull=True).order_by("-timestamp", "-id")[:limit]
+def recent_sessions(user=None, limit: int = 8):
+    user = _resolve_user(user)
+    return PracticeSession.objects.filter(user=user).exclude(score__isnull=True).order_by("-timestamp", "-id")[:limit]
 
 
-def today_queue(limit: int = 5) -> list[TodayQueueItem]:
+def today_queue(user=None, limit: int = 5) -> list[TodayQueueItem]:
+    user = _resolve_user(user)
     now = timezone.now()
     cards = list(
-        ImprovementCard.objects.exclude(status=ImprovementCard.STATUS_PAUSED)
+        ImprovementCard.objects.filter(user=user)
+        .exclude(status=ImprovementCard.STATUS_PAUSED)
         .order_by("due_at", "-updated_at")[: max(limit * 3, limit)]
     )
     cards.sort(key=lambda card: (card.due_at > now, card.due_at, -card.mastery))
@@ -80,14 +99,18 @@ def today_queue(limit: int = 5) -> list[TodayQueueItem]:
     ]
 
 
-def active_scoring_jobs(limit: int = 4):
+def active_scoring_jobs(user=None, limit: int = 4):
+    user = _resolve_user(user)
     return ScoringJob.objects.filter(
+        user=user,
         status__in=[ScoringJob.STATUS_QUEUED, ScoringJob.STATUS_RUNNING]
     ).order_by("-created_at")[:limit]
 
 
-def recent_scoring_jobs(limit: int = 4):
+def recent_scoring_jobs(user=None, limit: int = 4):
+    user = _resolve_user(user)
     return ScoringJob.objects.filter(
+        user=user,
         status__in=[ScoringJob.STATUS_SUCCEEDED, ScoringJob.STATUS_FAILED]
     ).order_by("-finished_at", "-created_at")[:limit]
 
@@ -124,18 +147,21 @@ def _review_counts(cards: list[ImprovementCard]) -> dict[int, int]:
     }
 
 
-def trend_summary(days: int = 30) -> dict[str, Any]:
+def trend_summary(user=None, days: int = 30) -> dict[str, Any]:
+    user = _resolve_user(user)
     end_dt = datetime.now()
     start_dt = end_dt - timedelta(days=days)
-    return trend_summary_for_range(start_dt=start_dt, end_dt=end_dt)
+    return trend_summary_for_range(user=user, start_dt=start_dt, end_dt=end_dt)
 
 
 def trend_summary_for_range(
     *,
+    user=None,
     start_dt: datetime,
     end_dt: datetime,
     script_name: str | None = None,
 ) -> dict[str, Any]:
+    user = _resolve_user(user)
     session = legacy_db.get_session(str(settings.LEGACY_DB_PATH))
     try:
         words = get_word_trend_summary(
@@ -143,6 +169,7 @@ def trend_summary_for_range(
             start_dt=start_dt,
             end_dt=end_dt,
             script_name=script_name,
+            user_id=user.pk,
             top_n=6,
             min_attempts=2,
         )
@@ -151,6 +178,7 @@ def trend_summary_for_range(
             start_dt=start_dt,
             end_dt=end_dt,
             script_name=script_name,
+            user_id=user.pk,
             top_n=5,
         )
         positions = get_position_trend_summary(
@@ -158,6 +186,7 @@ def trend_summary_for_range(
             start_dt=start_dt,
             end_dt=end_dt,
             script_name=script_name,
+            user_id=user.pk,
             top_n=4,
         )
         sounds = get_phoneme_trend_summary(
@@ -165,6 +194,7 @@ def trend_summary_for_range(
             start_dt=start_dt,
             end_dt=end_dt,
             script_name=script_name,
+            user_id=user.pk,
             top_n=5,
             min_attempts=3,
         )
@@ -173,6 +203,7 @@ def trend_summary_for_range(
             start_dt=start_dt,
             end_dt=end_dt,
             script_name=script_name,
+            user_id=user.pk,
             top_n=5,
             min_attempts=1,
         )
@@ -188,9 +219,11 @@ def trend_summary_for_range(
         session.close()
 
 
-def script_name_options() -> list[str]:
+def script_name_options(user=None) -> list[str]:
+    user = _resolve_user(user)
     rows = (
-        PracticeSession.objects.exclude(script_name="")
+        PracticeSession.objects.filter(user=user)
+        .exclude(script_name="")
         .values_list("script_name", flat=True)
         .distinct()
     )
@@ -199,11 +232,13 @@ def script_name_options() -> list[str]:
 
 def progress_series(
     *,
+    user=None,
     start_dt: datetime,
     end_dt: datetime,
     script_name: str | None = None,
 ) -> list[dict[str, Any]]:
-    rows = PracticeSession.objects.exclude(score__isnull=True)
+    user = _resolve_user(user)
+    rows = PracticeSession.objects.filter(user=user).exclude(score__isnull=True)
     if script_name:
         rows = rows.filter(script_name=script_name)
     points = []
@@ -332,13 +367,15 @@ def build_card_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def refresh_improvement_cards(
+    user=None,
     days: int | None = None,
     *,
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
 ) -> int:
+    user = _resolve_user(user)
     if start_dt is not None and end_dt is not None:
-        summary = trend_summary_for_range(start_dt=start_dt, end_dt=end_dt)
+        summary = trend_summary_for_range(user=user, start_dt=start_dt, end_dt=end_dt)
         source_window = {
             "source_window_start": start_dt.date().isoformat(),
             "source_window_end": end_dt.date().isoformat(),
@@ -346,7 +383,7 @@ def refresh_improvement_cards(
         }
     else:
         window_days = int(days or settings.CARD_REFRESH_WINDOW_DAYS)
-        summary = trend_summary(days=window_days)
+        summary = trend_summary(user=user, days=window_days)
         source_window = {
             "source_window_days": window_days,
             "source_window_label": _source_window_label(window_days),
@@ -364,6 +401,7 @@ def refresh_improvement_cards(
         stats.update(source_window)
         stats["source_window_refreshed_at"] = refreshed_at.isoformat()
         _card, created = ImprovementCard.objects.update_or_create(
+            user=user,
             kind=candidate["kind"],
             target_key=candidate["target_key"],
             defaults={
@@ -388,14 +426,16 @@ def _source_window_label(days: int) -> str:
     return f"last {days} days"
 
 
-def due_cards(limit: int = 6):
-    return ImprovementCard.objects.exclude(status=ImprovementCard.STATUS_PAUSED).filter(
+def due_cards(user=None, limit: int = 6):
+    user = _resolve_user(user)
+    return ImprovementCard.objects.filter(user=user).exclude(status=ImprovementCard.STATUS_PAUSED).filter(
         due_at__lte=timezone.now()
     )[:limit]
 
 
-def score_distribution() -> dict[str, int]:
-    scored = PracticeSession.objects.exclude(score__isnull=True)
+def score_distribution(user=None) -> dict[str, int]:
+    user = _resolve_user(user)
+    scored = PracticeSession.objects.filter(user=user).exclude(score__isnull=True)
     return {
         "needs_work": scored.filter(score__lt=3).aggregate(count=Count("id"))["count"] or 0,
         "solid": scored.filter(score__gte=3, score__lt=4.25).aggregate(count=Count("id"))["count"] or 0,

@@ -36,7 +36,7 @@ def session_segments(session: PracticeSession) -> list[dict]:
 
 
 def highlighted_session_text(session: PracticeSession) -> HighlightedSessionText:
-    errors = list(SessionError.objects.filter(session_id=session.pk))
+    errors = list(SessionError.objects.filter(user=session.user, session_id=session.pk))
     script_ranges = []
     transcript_ranges = []
     for error in errors:

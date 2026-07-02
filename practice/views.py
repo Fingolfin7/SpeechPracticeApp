@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from django.contrib import messages
+from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_not_required
 from django.conf import settings as django_settings
 from django.db import IntegrityError, connection, models, transaction
@@ -32,6 +33,7 @@ from .forms import (
     PracticeRunForm,
     PracticeScriptForm,
     SelfReviewNotesForm,
+    SignUpForm,
     TranscriptEditForm,
 )
 from .models import (
@@ -98,16 +100,57 @@ def health(request):
     return JsonResponse({"ok": True})
 
 
+@login_not_required
+def signup(request):
+    if request.method == "POST":
+        form = SignUpForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            _adopt_placeholder_owner_data(user)
+            PracticeSettings.load(user)
+            login(request, user)
+            messages.success(request, "Welcome to SpeechPractice.")
+            return redirect("practice:dashboard")
+    else:
+        form = SignUpForm()
+    return render(request, "registration/signup.html", {"form": form})
+
+
+def _adopt_placeholder_owner_data(user) -> None:
+    User = get_user_model()
+    placeholder = User.objects.filter(username="owner", is_superuser=True).exclude(pk=user.pk).first()
+    if placeholder is None or placeholder.has_usable_password() or User.objects.count() != 2:
+        return
+
+    for model in (
+        PracticeSession,
+        SessionError,
+        PracticeScript,
+        ImprovementCard,
+        PracticeReview,
+        ScoringJob,
+        GeneratedPracticeScript,
+        PracticeLadder,
+    ):
+        model.objects.filter(user=placeholder).update(user=user)
+
+    existing_settings = PracticeSettings.objects.filter(user=user).first()
+    if existing_settings is not None:
+        existing_settings.delete()
+    PracticeSettings.objects.filter(user=placeholder).update(user=user)
+    placeholder.delete()
+
+
 def dashboard(request):
-    summary = trend_summary()
+    summary = trend_summary(request.user)
     context = {
-        "stats": dashboard_stats(),
-        "recent_sessions": recent_sessions(),
+        "stats": dashboard_stats(request.user),
+        "recent_sessions": recent_sessions(request.user),
         "summary": summary,
-        "today_queue": today_queue(),
-        "active_jobs": active_scoring_jobs(),
-        "recent_jobs": recent_scoring_jobs(),
-        "score_distribution": score_distribution(),
+        "today_queue": today_queue(request.user),
+        "active_jobs": active_scoring_jobs(request.user),
+        "recent_jobs": recent_scoring_jobs(request.user),
+        "score_distribution": score_distribution(request.user),
     }
     return render(request, "practice/dashboard.html", context)
 
@@ -119,8 +162,14 @@ def progress(request):
         start_dt, end_dt = end_dt, start_dt
     end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
     script_name = (request.GET.get("script") or "").strip() or None
-    points = progress_series(start_dt=start_dt, end_dt=end_dt, script_name=script_name)
+    points = progress_series(
+        user=request.user,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        script_name=script_name,
+    )
     summary = trend_summary_for_range(
+        user=request.user,
         start_dt=start_dt,
         end_dt=end_dt,
         script_name=script_name,
@@ -132,7 +181,7 @@ def progress(request):
             "start_date": start_dt.date().isoformat(),
             "end_date": end_dt.date().isoformat(),
             "selected_script": script_name or "",
-            "script_options": script_name_options(),
+            "script_options": script_name_options(request.user),
             "points": points,
             "points_json": json.dumps(points),
             "summary": summary,
@@ -141,8 +190,8 @@ def progress(request):
 
 
 def practice_run(request):
-    quick_queue = today_queue(limit=4)
-    practice_ladders = _practice_ladders()
+    quick_queue = today_queue(request.user, limit=4)
+    practice_ladders = _practice_ladders(request.user)
     requested_mode = request.POST.get("mode") if request.method == "POST" else request.GET.get("mode")
     if not requested_mode and request.method == "GET" and request.GET.get("card"):
         requested_mode = PracticeRunForm.MODE_QUICK
@@ -154,7 +203,10 @@ def practice_run(request):
     if request.method == "POST":
         submission_id = _submission_id(request)
         if submission_id is not None:
-            existing_job = ScoringJob.objects.filter(submission_id=submission_id).first()
+            existing_job = ScoringJob.objects.filter(
+                user=request.user,
+                submission_id=submission_id,
+            ).first()
             if existing_job is not None:
                 if _wants_json(request):
                     return JsonResponse(
@@ -162,7 +214,12 @@ def practice_run(request):
                         status=200,
                     )
                 return redirect("practice:scoring_job", pk=existing_job.pk)
-        form = PracticeRunForm(request.POST, request.FILES, script_kind=script_kind)
+        form = PracticeRunForm(
+            request.POST,
+            request.FILES,
+            user=request.user,
+            script_kind=script_kind,
+        )
         if form.is_valid():
             mode = form.cleaned_data.get("mode") or PracticeRunForm.MODE_SCRIPT
             script = form.cleaned_data.get("script")
@@ -173,17 +230,23 @@ def practice_run(request):
             if audio is None:
                 form.add_error("audio", "Record or upload audio before scoring.")
             else:
-                audio_path = save_uploaded_audio(audio, script.title if script else "free-speak")
+                audio_path = save_uploaded_audio(
+                    audio,
+                    script.title if script else "free-speak",
+                    user=request.user,
+                )
                 try:
                     with transaction.atomic():
                         if mode == PracticeRunForm.MODE_FREE:
                             job = create_free_speak_job(
+                                user=request.user,
                                 audio_path=str(audio_path),
                                 provider=provider_name,
                                 submission_id=submission_id,
                             )
                         else:
                             job = create_scoring_job(
+                                user=request.user,
                                 script=script,
                                 audio_path=str(audio_path),
                                 provider=provider_name,
@@ -193,7 +256,7 @@ def practice_run(request):
                 except IntegrityError:
                     delete_audio(str(audio_path))
                     job = (
-                        ScoringJob.objects.filter(submission_id=submission_id).first()
+                        ScoringJob.objects.filter(user=request.user, submission_id=submission_id).first()
                         if submission_id is not None
                         else None
                     )
@@ -235,13 +298,15 @@ def practice_run(request):
         initial_script = None
         if card_id:
             initial_card = (
-                ImprovementCard.objects.exclude(status=ImprovementCard.STATUS_PAUSED)
+                ImprovementCard.objects.filter(user=request.user)
+                .exclude(status=ImprovementCard.STATUS_PAUSED)
                 .filter(pk=card_id)
                 .first()
             )
         if mode == PracticeRunForm.MODE_QUICK:
             if script_id:
                 initial_script = PracticeScript.objects.filter(
+                    models.Q(user=request.user) | models.Q(user__isnull=True),
                     pk=script_id,
                     active=True,
                     practice_kind=PracticeScript.KIND_DRILL,
@@ -269,6 +334,7 @@ def practice_run(request):
                 initial_script = _first_builtin_drill()
         elif script_id:
             initial_script = PracticeScript.objects.filter(
+                models.Q(user=request.user) | models.Q(user__isnull=True),
                 pk=script_id,
                 active=True,
                 practice_kind=PracticeScript.KIND_READING,
@@ -276,8 +342,9 @@ def practice_run(request):
         elif initial_card is not None:
             initial_script = _latest_script_for_card(initial_card)
         elif mode == PracticeRunForm.MODE_SCRIPT:
-            initial_script = _random_script_for_kind(PracticeScript.KIND_READING)
+            initial_script = _random_script_for_kind(request.user, PracticeScript.KIND_READING)
         form = PracticeRunForm(
+            user=request.user,
             initial_script=initial_script,
             initial_card=initial_card,
             script_kind=script_kind,
@@ -287,19 +354,25 @@ def practice_run(request):
     selected_script = None
     script_value = form["script"].value()
     if script_value:
-        selected_query = PracticeScript.objects.filter(pk=script_value)
+        selected_query = PracticeScript.objects.filter(
+            models.Q(user=request.user) | models.Q(user__isnull=True),
+            pk=script_value,
+        )
         if script_kind:
             selected_query = selected_query.filter(practice_kind=script_kind)
         selected_script = selected_query.first()
     if selected_script is None:
-        fallback_scripts = PracticeScript.objects.filter(active=True)
+        fallback_scripts = PracticeScript.objects.filter(
+            models.Q(user=request.user) | models.Q(user__isnull=True),
+            active=True,
+        )
         if script_kind:
             fallback_scripts = fallback_scripts.filter(practice_kind=script_kind)
         selected_script = fallback_scripts.first()
     focus_card = None
     card_value = form["card"].value()
     if card_value:
-        focus_card = ImprovementCard.objects.filter(pk=card_value).first()
+        focus_card = ImprovementCard.objects.filter(user=request.user, pk=card_value).first()
     if mode == PracticeRunForm.MODE_QUICK and selected_ladder is None and selected_script is not None:
         selected_ladder = _select_ladder_for_request(practice_ladders, script=selected_script)
         if selected_ladder is not None:
@@ -314,9 +387,9 @@ def practice_run(request):
         "selected_ladder": selected_ladder,
         "ladder_steps": ladder_steps,
         "selected_ladder_step": selected_ladder_step,
-        "generation_provider_choices": script_generation_provider_choices(),
+        "generation_provider_choices": script_generation_provider_choices(request.user),
         "autumn_timer": _autumn_timer_context(
-            PracticeSettings.load(),
+            PracticeSettings.load(request.user),
             selected_script=selected_script,
         ),
     }
@@ -324,12 +397,12 @@ def practice_run(request):
 
 
 def session_list(request):
-    sessions = PracticeSession.objects.all()[:80]
+    sessions = PracticeSession.objects.filter(user=request.user)[:80]
     return render(request, "practice/session_list.html", {"sessions": sessions})
 
 
 def session_detail(request, pk: int):
-    session = get_object_or_404(PracticeSession, pk=pk)
+    session = get_object_or_404(PracticeSession, user=request.user, pk=pk)
     if request.method == "POST":
         action = request.POST.get("action") or "edit_transcript"
         if action == "clear_transcript":
@@ -355,7 +428,7 @@ def session_detail(request, pk: int):
                     "avg_conf",
                 ]
             )
-            SessionError.objects.filter(session_id=session.pk).delete()
+            SessionError.objects.filter(user=request.user, session_id=session.pk).delete()
             messages.success(request, "Transcript cleared.")
             return redirect("practice:session_detail", pk=session.pk)
 
@@ -428,14 +501,14 @@ def session_detail(request, pk: int):
             "has_audio": audio_exists(session),
             "mistake_lines": mistake_lines,
             "score_text": _session_score_text(session),
-            "generation_provider_choices": script_generation_provider_choices(),
+            "generation_provider_choices": script_generation_provider_choices(request.user),
         },
     )
 
 
 def session_report(request, pk: int):
-    session = get_object_or_404(PracticeSession, pk=pk)
-    errors = SessionError.objects.filter(session_id=session.pk).order_by("id")[:200]
+    session = get_object_or_404(PracticeSession, user=request.user, pk=pk)
+    errors = SessionError.objects.filter(user=request.user, session_id=session.pk).order_by("id")[:200]
     lines = [
         f"# SpeechPractice Report: {session.script_name}",
         "",
@@ -479,12 +552,12 @@ def session_report(request, pk: int):
 
 @require_POST
 def session_delete(request, pk: int):
-    session = get_object_or_404(PracticeSession, pk=pk)
+    session = get_object_or_404(PracticeSession, user=request.user, pk=pk)
     script_name = session.script_name
     audio_deleted = delete_audio(session.audio_path)
-    SessionError.objects.filter(session_id=session.pk).delete()
-    PracticeReview.objects.filter(legacy_session_id=session.pk).delete()
-    ScoringJob.objects.filter(legacy_session_id=session.pk).update(legacy_session_id=None)
+    SessionError.objects.filter(user=request.user, session_id=session.pk).delete()
+    PracticeReview.objects.filter(user=request.user, legacy_session_id=session.pk).delete()
+    ScoringJob.objects.filter(user=request.user, legacy_session_id=session.pk).update(legacy_session_id=None)
     session.delete()
     suffix = " and deleted the audio file" if audio_deleted else ""
     messages.success(request, f"Deleted recording entry for {script_name}{suffix}.")
@@ -492,7 +565,7 @@ def session_delete(request, pk: int):
 
 
 def session_audio(request, pk: int):
-    session = get_object_or_404(PracticeSession, pk=pk)
+    session = get_object_or_404(PracticeSession, user=request.user, pk=pk)
     if not stored_audio_exists(session.audio_path):
         raise Http404("Audio file not found.")
     content_type = mimetypes.guess_type(session.audio_path)[0] or "application/octet-stream"
@@ -520,10 +593,10 @@ def session_audio(request, pk: int):
 
 
 def scoring_job_detail(request, pk: int):
-    job = get_object_or_404(ScoringJob, pk=pk)
+    job = get_object_or_404(ScoringJob, user=request.user, pk=pk)
     session = None
     if job.legacy_session_id:
-        session = PracticeSession.objects.filter(pk=job.legacy_session_id).first()
+        session = PracticeSession.objects.filter(user=request.user, pk=job.legacy_session_id).first()
     context = {
         "job": job,
         "session": session,
@@ -533,7 +606,7 @@ def scoring_job_detail(request, pk: int):
 
 
 def scoring_job_status(request, pk: int):
-    job = get_object_or_404(ScoringJob, pk=pk)
+    job = get_object_or_404(ScoringJob, user=request.user, pk=pk)
     response = JsonResponse(_scoring_job_payload(job))
     response["Cache-Control"] = "no-store"
     return response
@@ -541,7 +614,7 @@ def scoring_job_status(request, pk: int):
 
 def _scoring_job_payload(job: ScoringJob) -> dict:
     session = (
-        PracticeSession.objects.filter(pk=job.legacy_session_id).first()
+        PracticeSession.objects.filter(user=job.user, pk=job.legacy_session_id).first()
         if job.legacy_session_id
         else None
     )
@@ -643,7 +716,7 @@ def _form_error_summary(form) -> str:
 
 @require_POST
 def retry_scoring_job(request, pk: int):
-    job = get_object_or_404(ScoringJob, pk=pk)
+    job = get_object_or_404(ScoringJob, user=request.user, pk=pk)
     if job.status != ScoringJob.STATUS_FAILED:
         messages.error(request, "Only failed scoring jobs can be retried.")
         return redirect("practice:scoring_job", pk=job.pk)
@@ -662,7 +735,10 @@ def script_list(request):
     valid_kinds = {value for value, _label in PracticeScript.KIND_CHOICES}
     if kind_filter not in valid_kinds:
         kind_filter = PracticeScript.KIND_READING
-    scripts = PracticeScript.objects.filter(practice_kind=kind_filter)
+    visible_scripts = PracticeScript.objects.filter(
+        models.Q(user=request.user) | models.Q(user__isnull=True)
+    )
+    scripts = visible_scripts.filter(practice_kind=kind_filter)
     source_filter = (request.GET.get("source") or "").strip()
     total_count = scripts.count()
     if source_filter:
@@ -670,11 +746,11 @@ def script_list(request):
     groups = _script_source_groups(scripts)
     kind_counts = {
         row["practice_kind"]: row["count"]
-        for row in PracticeScript.objects.values("practice_kind").annotate(count=models.Count("id"))
+        for row in visible_scripts.values("practice_kind").annotate(count=models.Count("id"))
     }
     source_counts = {
         row["source"]: row["count"]
-        for row in PracticeScript.objects.filter(practice_kind=kind_filter)
+        for row in visible_scripts.filter(practice_kind=kind_filter)
         .values("source")
         .annotate(count=models.Count("id"))
     }
@@ -707,10 +783,10 @@ def script_list(request):
             "total_count": total_count,
             "source_groups": groups,
             "source_tabs": source_tabs,
-            "practice_ladders": _practice_ladders() if kind_filter == PracticeScript.KIND_DRILL else [],
-            "ladder_candidate_cards": _ladder_candidate_cards() if kind_filter == PracticeScript.KIND_DRILL else [],
-            "default_ladder_card_ids": _default_ladder_card_ids() if kind_filter == PracticeScript.KIND_DRILL else set(),
-            "generation_provider_choices": script_generation_provider_choices(),
+            "practice_ladders": _practice_ladders(request.user) if kind_filter == PracticeScript.KIND_DRILL else [],
+            "ladder_candidate_cards": _ladder_candidate_cards(request.user) if kind_filter == PracticeScript.KIND_DRILL else [],
+            "default_ladder_card_ids": _default_ladder_card_ids(request.user) if kind_filter == PracticeScript.KIND_DRILL else set(),
+            "generation_provider_choices": script_generation_provider_choices(request.user),
         },
     )
 
@@ -719,7 +795,10 @@ def script_create(request):
     if request.method == "POST":
         form = PracticeScriptForm(request.POST)
         if form.is_valid():
-            form.save()
+            script = form.save(commit=False)
+            script.user = request.user
+            script.save()
+            form.save_m2m()
             messages.success(request, "Practice script saved.")
             return redirect("practice:scripts")
     else:
@@ -734,7 +813,16 @@ def script_create(request):
 
 
 def script_edit(request, pk: int):
-    script = get_object_or_404(PracticeScript, pk=pk)
+    script = get_object_or_404(
+        PracticeScript.objects.filter(
+            models.Q(user=request.user)
+            | (models.Q(user__isnull=True) & ~models.Q(source=PracticeScript.SOURCE_BUILTIN))
+        ),
+        pk=pk,
+    )
+    if script.user_id is None:
+        script.user = request.user
+        script.save(update_fields=["user", "updated_at"])
     if request.method == "POST":
         form = PracticeScriptForm(request.POST, instance=script)
         if form.is_valid():
@@ -755,7 +843,13 @@ def script_edit(request, pk: int):
 
 
 def script_delete(request, pk: int):
-    script = get_object_or_404(PracticeScript, pk=pk)
+    script = get_object_or_404(
+        PracticeScript.objects.filter(
+            models.Q(user=request.user)
+            | (models.Q(user__isnull=True) & ~models.Q(source=PracticeScript.SOURCE_BUILTIN))
+        ),
+        pk=pk,
+    )
     if request.method == "POST":
         title = script.title
         script.delete()
@@ -765,7 +859,11 @@ def script_delete(request, pk: int):
 
 
 def script_preview(request, pk: int):
-    script = get_object_or_404(PracticeScript, pk=pk, active=True)
+    script = get_object_or_404(
+        PracticeScript.objects.filter(models.Q(user=request.user) | models.Q(user__isnull=True)),
+        pk=pk,
+        active=True,
+    )
     return JsonResponse(
         {
             "id": script.pk,
@@ -797,6 +895,7 @@ def script_import(request):
                 )
             results = import_script_items(
                 items,
+                user=request.user,
                 source=PracticeScript.SOURCE_UPLOADED,
                 extra_tags=form.tags(),
                 replace=form.cleaned_data.get("replace", True),
@@ -823,13 +922,17 @@ def card_list(request):
         if error:
             messages.error(request, error)
             return redirect("practice:cards")
-        created = refresh_improvement_cards(start_dt=start_dt, end_dt=end_dt)
+        created = refresh_improvement_cards(
+            user=request.user,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
         messages.success(
             request,
             f"Cards refreshed from {start_dt:%Y-%m-%d} to {end_dt:%Y-%m-%d}. {created} new focus areas created.",
         )
         return redirect("practice:cards")
-    cards = list(ImprovementCard.objects.all())
+    cards = list(ImprovementCard.objects.filter(user=request.user))
     grouped_cards = []
     for kind, label in ImprovementCard.KIND_CHOICES:
         group_cards = [card for card in cards if card.kind == kind]
@@ -874,6 +977,7 @@ def _create_cards_from_self_review(
             "source_auth": draft.auth_source,
         }
         card, _created = ImprovementCard.objects.update_or_create(
+            user=session.user,
             kind=card_draft.kind,
             target_key=card_draft.target_key,
             defaults={
@@ -910,9 +1014,10 @@ def _card_refresh_range(
 
 
 def card_detail(request, pk: int):
-    card = get_object_or_404(ImprovementCard, pk=pk)
+    card = get_object_or_404(ImprovementCard, user=request.user, pk=pk)
     reviews = card.reviews.all()[:8]
     generated_scripts = PracticeScript.objects.filter(
+        models.Q(user=request.user) | models.Q(user__isnull=True),
         generation_records__card=card,
         practice_kind=PracticeScript.KIND_DRILL,
     ).distinct()[:8]
@@ -925,14 +1030,14 @@ def card_detail(request, pk: int):
             "reviews": reviews,
             "generated_scripts": generated_scripts,
             "evidence_rows": evidence_rows,
-            "generation_provider_choices": script_generation_provider_choices(),
+            "generation_provider_choices": script_generation_provider_choices(request.user),
         },
     )
 
 
 @require_POST
 def card_delete(request, pk: int):
-    card = get_object_or_404(ImprovementCard, pk=pk)
+    card = get_object_or_404(ImprovementCard, user=request.user, pk=pk)
     title = card.display_title
     card.delete()
     messages.success(request, f"Deleted card: {title}. Existing drills and history were kept.")
@@ -941,7 +1046,7 @@ def card_delete(request, pk: int):
 
 @require_POST
 def generate_script_for_card(request, pk: int):
-    card = get_object_or_404(ImprovementCard, pk=pk)
+    card = get_object_or_404(ImprovementCard, user=request.user, pk=pk)
     provider = request.POST.get("provider") or None
     try:
         draft = generate_script_draft(card, provider_name=provider)
@@ -949,6 +1054,7 @@ def generate_script_for_card(request, pk: int):
         messages.error(request, f"Script generation failed: {exc}")
         return redirect("practice:card_detail", pk=card.pk)
     script = PracticeScript.objects.create(
+        user=request.user,
         title=draft.title,
         body=draft.body,
         practice_kind=PracticeScript.KIND_DRILL,
@@ -959,6 +1065,7 @@ def generate_script_for_card(request, pk: int):
         difficulty=2,
     )
     GeneratedPracticeScript.objects.create(
+        user=request.user,
         card=card,
         script=script,
         model_provider=draft.provider,
@@ -978,7 +1085,7 @@ def generate_script_for_card(request, pk: int):
 def generate_practice_ladder(request):
     provider = request.POST.get("provider") or None
     theme = (request.POST.get("theme") or "").strip()[:512]
-    cards = _cards_for_ladder_generation(request.POST.getlist("cards"))
+    cards = _cards_for_ladder_generation(request.user, request.POST.getlist("cards"))
     if not cards:
         messages.error(request, "Add or refresh improvement cards before generating a practice ladder.")
         return redirect(f"{reverse('practice:practice')}?mode=quick")
@@ -990,6 +1097,7 @@ def generate_practice_ladder(request):
         return redirect(f"{reverse('practice:practice')}?mode=quick")
 
     ladder = PracticeLadder.objects.create(
+        user=request.user,
         title=draft.title,
         theme=draft.theme or theme,
         source=PracticeLadder.SOURCE_GENERATED,
@@ -1017,6 +1125,7 @@ def generate_practice_ladder(request):
             + [card.target_key for card in cards if card.target_key]
         )
         script = PracticeScript.objects.create(
+            user=request.user,
             title=f"{ladder.title}: {level_draft.title}",
             body=level_draft.body,
             practice_kind=PracticeScript.KIND_DRILL,
@@ -1036,6 +1145,7 @@ def generate_practice_ladder(request):
         created_steps.append(step)
         for card in cards:
             GeneratedPracticeScript.objects.create(
+                user=request.user,
                 card=card,
                 script=script,
                 model_provider=draft.provider,
@@ -1062,10 +1172,16 @@ def generate_practice_ladder(request):
 
 @require_POST
 def delete_practice_ladder(request, pk: int):
-    ladder = get_object_or_404(PracticeLadder, pk=pk)
+    ladder = get_object_or_404(
+        PracticeLadder.objects.filter(models.Q(user=request.user) | models.Q(user__isnull=True)),
+        pk=pk,
+    )
     if ladder.source == PracticeLadder.SOURCE_BUILTIN:
         messages.error(request, "Built-in ladders cannot be deleted.")
         return redirect(f"{reverse('practice:scripts')}?kind=drill")
+    if ladder.user_id is None:
+        ladder.user = request.user
+        ladder.save(update_fields=["user", "updated_at"])
 
     title = ladder.title
     script_ids = list(
@@ -1075,7 +1191,10 @@ def delete_practice_ladder(request, pk: int):
         ).values_list("script_id", flat=True)
     )
     ladder.delete()
-    scripts_to_delete = PracticeScript.objects.filter(pk__in=script_ids)
+    scripts_to_delete = PracticeScript.objects.filter(
+        models.Q(user=request.user) | models.Q(user__isnull=True),
+        pk__in=script_ids,
+    )
     deleted_scripts = scripts_to_delete.count()
     if deleted_scripts:
         scripts_to_delete.delete()
@@ -1085,7 +1204,7 @@ def delete_practice_ladder(request, pk: int):
 
 
 def account_settings(request):
-    settings_obj = PracticeSettings.load()
+    settings_obj = PracticeSettings.load(request.user)
     if request.method == "POST":
         if "connect_autumn" in request.POST:
             _connect_autumn(request, settings_obj)
@@ -1178,13 +1297,13 @@ def account_settings(request):
         "codex_summary": token_bundle_summary(bundle),
         "autumn_configured": settings_obj.has_secret("autumn_token") and bool(settings_obj.autumn_project),
         "autumn_active": bool(settings_obj.autumn_active_session_id),
-        "autumn_note": _latest_autumn_note(),
+        "autumn_note": _latest_autumn_note(request.user),
     }
     return render(request, "practice/account.html", context)
 
 
 def autumn_subprojects(request):
-    settings_obj = PracticeSettings.load()
+    settings_obj = PracticeSettings.load(request.user)
     project = (request.GET.get("project") or settings_obj.autumn_project or "").strip()
     if not project:
         return JsonResponse({"ok": False, "error": "Choose an Autumn project first."}, status=400)
@@ -1198,7 +1317,7 @@ def autumn_subprojects(request):
 
 @require_POST
 def autumn_timer(request):
-    settings_obj = PracticeSettings.load()
+    settings_obj = PracticeSettings.load(request.user)
     next_url = _safe_next_url(request, request.POST.get("next")) or reverse("practice:practice")
     if "stop_autumn_timer" in request.POST:
         result = _stop_autumn_timer(
@@ -1231,16 +1350,21 @@ def autumn_timer(request):
 def _latest_script_for_card(card: ImprovementCard) -> PracticeScript | None:
     generated = (
         GeneratedPracticeScript.objects.select_related("script")
-        .filter(card=card, script__active=True, script__practice_kind=PracticeScript.KIND_DRILL)
+        .filter(
+            user=card.user,
+            card=card,
+            script__active=True,
+            script__practice_kind=PracticeScript.KIND_DRILL,
+        )
         .order_by("-created_at")
         .first()
     )
     return generated.script if generated and generated.script else None
 
 
-def _practice_ladders() -> list[PracticeLadder]:
+def _practice_ladders(user) -> list[PracticeLadder]:
     return list(
-        PracticeLadder.objects.filter(active=True)
+        PracticeLadder.objects.filter(models.Q(user=user) | models.Q(user__isnull=True), active=True)
         .prefetch_related("cards", "steps__script")
         .order_by("source", "-created_at", "title")
     )
@@ -1256,9 +1380,10 @@ def _select_ladder_for_request(
             if str(ladder.pk) == str(requested_ladder_id):
                 return ladder
     if script is not None:
+        ladder_ids = [ladder.pk for ladder in ladders]
         step = (
             PracticeLadderStep.objects.select_related("ladder")
-            .filter(script=script, ladder__active=True)
+            .filter(script=script, ladder__active=True, ladder_id__in=ladder_ids)
             .order_by("ladder__source", "-ladder__created_at", "level")
             .first()
         )
@@ -1304,20 +1429,26 @@ def _first_builtin_drill() -> PracticeScript | None:
     )
 
 
-def _random_script_for_kind(script_kind: str) -> PracticeScript | None:
-    scripts = PracticeScript.objects.filter(active=True, practice_kind=script_kind).order_by("pk")
+def _random_script_for_kind(user, script_kind: str) -> PracticeScript | None:
+    scripts = PracticeScript.objects.filter(
+        models.Q(user=user) | models.Q(user__isnull=True),
+        active=True,
+        practice_kind=script_kind,
+    ).order_by("pk")
     count = scripts.count()
     if count <= 0:
         return None
     return scripts[random.randrange(count)]
 
 
-def _cards_for_ladder_generation(card_ids: list[str]) -> list[ImprovementCard]:
+def _cards_for_ladder_generation(user, card_ids: list[str]) -> list[ImprovementCard]:
     if card_ids:
         ids = [_positive_int(raw) for raw in card_ids]
         id_order = [card_id for card_id in ids if card_id]
         cards = list(
-            ImprovementCard.objects.exclude(status=ImprovementCard.STATUS_PAUSED).filter(
+            ImprovementCard.objects.filter(user=user)
+            .exclude(status=ImprovementCard.STATUS_PAUSED)
+            .filter(
                 pk__in=id_order,
             )
         )
@@ -1325,18 +1456,19 @@ def _cards_for_ladder_generation(card_ids: list[str]) -> list[ImprovementCard]:
         ordered = [cards_by_id[card_id] for card_id in id_order if card_id in cards_by_id]
         if ordered:
             return ordered
-    return [item.card for item in today_queue(limit=4)]
+    return [item.card for item in today_queue(user, limit=4)]
 
 
-def _ladder_candidate_cards() -> list[ImprovementCard]:
+def _ladder_candidate_cards(user) -> list[ImprovementCard]:
     return list(
-        ImprovementCard.objects.exclude(status=ImprovementCard.STATUS_PAUSED)
+        ImprovementCard.objects.filter(user=user)
+        .exclude(status=ImprovementCard.STATUS_PAUSED)
         .order_by("due_at", "mastery", "title")[:120]
     )
 
 
-def _default_ladder_card_ids() -> set[int]:
-    return {item.card.pk for item in today_queue(limit=4)}
+def _default_ladder_card_ids(user) -> set[int]:
+    return {item.card.pk for item in today_queue(user, limit=4)}
 
 
 def _positive_int(raw: str | None) -> int | None:
@@ -1672,9 +1804,14 @@ def _autumn_client(settings_obj: PracticeSettings) -> AutumnClient:
     return AutumnClient(settings_obj.autumn_base_url, token)
 
 
-def _latest_autumn_note() -> str:
+def _latest_autumn_note(user) -> str:
     try:
-        session = PracticeSession.objects.exclude(timestamp="").order_by("-timestamp", "-id").first()
+        session = (
+            PracticeSession.objects.filter(user=user)
+            .exclude(timestamp="")
+            .order_by("-timestamp", "-id")
+            .first()
+        )
     except (OperationalError, ProgrammingError):
         session = None
     if session is None:
@@ -1716,7 +1853,8 @@ def _whisper_settings_snapshot(settings_obj: PracticeSettings) -> tuple:
 def _card_evidence_rows(card: ImprovementCard, limit: int = 8) -> list[dict]:
     try:
         rows = list(
-            SessionError.objects.exclude(ref_token__isnull=True)
+            SessionError.objects.filter(user=card.user)
+            .exclude(ref_token__isnull=True)
             .exclude(ref_token="")
             .filter(op__in=["sub", "del"])
             .order_by("-timestamp", "-id")[:800]
@@ -1728,7 +1866,7 @@ def _card_evidence_rows(card: ImprovementCard, limit: int = 8) -> list[dict]:
     for error in rows:
         session_id = int(error.session_id)
         if session_id not in sessions:
-            sessions[session_id] = PracticeSession.objects.filter(pk=session_id).first()
+            sessions[session_id] = PracticeSession.objects.filter(user=card.user, pk=session_id).first()
         session = sessions[session_id]
         if session is None or not _error_matches_card(card, error, session):
             continue
@@ -1805,7 +1943,8 @@ def _fallback_card_evidence_rows(card: ImprovementCard, limit: int = 8) -> list[
         return []
     try:
         sessions = list(
-            PracticeSession.objects.exclude(score__isnull=True)
+            PracticeSession.objects.filter(user=card.user)
+            .exclude(score__isnull=True)
             .exclude(script_text="")
             .order_by("-timestamp", "-id")[:300]
         )
@@ -1876,7 +2015,7 @@ def _snippet_parts(
 
 def _mistake_lines(session: PracticeSession) -> list[str]:
     lines = []
-    errors = SessionError.objects.filter(session_id=session.pk).order_by("id")[:200]
+    errors = SessionError.objects.filter(user=session.user, session_id=session.pk).order_by("id")[:200]
     for error in errors:
         label = error.error_kind or error.op or "error"
         expected = error.ref_token or "[nothing]"

@@ -49,7 +49,7 @@ MIDDLEWARE = [
 if not DEBUG:
     MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
 
-REQUIRE_LOGIN = os.getenv("DJANGO_REQUIRE_LOGIN", "0" if DEBUG else "1") == "1"
+REQUIRE_LOGIN = os.getenv("DJANGO_REQUIRE_LOGIN", "1") == "1"
 if REQUIRE_LOGIN:
     authentication_index = MIDDLEWARE.index(
         "django.contrib.auth.middleware.AuthenticationMiddleware"

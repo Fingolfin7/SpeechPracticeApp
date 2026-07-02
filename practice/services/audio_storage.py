@@ -11,14 +11,21 @@ from django.core.files.uploadedfile import UploadedFile
 from django.utils import timezone
 
 
-def save_uploaded_audio(audio: UploadedFile, script_title: str) -> str:
+def save_uploaded_audio(audio: UploadedFile, script_title: str, user=None) -> str:
     """Stream an upload to the configured storage and return its stable key."""
     extension = safe_audio_extension(audio.name)
     stamp = timezone.localtime().strftime("%Y%m%d_%H%M%S_%f")
     title_slug = re.sub(r"[^a-zA-Z0-9]+", "-", script_title).strip("-").lower()[:40]
+    user_slug = "anonymous"
+    if user is not None and getattr(user, "is_authenticated", False):
+        username = getattr(user, "get_username", lambda: str(user))()
+        user_slug = re.sub(r"[^a-zA-Z0-9]+", "-", username).strip("-").lower()[:40]
+        if not user_slug:
+            user_slug = f"user-{user.pk}"
     name = PurePosixPath(
         "recordings",
         "web",
+        user_slug,
         f"{stamp}_{title_slug or 'practice'}{extension}",
     ).as_posix()
     return str(default_storage.save(name, audio))

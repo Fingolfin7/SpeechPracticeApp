@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -25,6 +26,15 @@ from practice.services.jobs import enqueue_scoring_job, recover_stale_scoring_jo
 
 class DeploymentBehaviorTests(TestCase):
     def setUp(self):
+        self.user, _created = get_user_model().objects.get_or_create(
+            username="owner",
+            defaults={"is_staff": True, "is_superuser": True},
+        )
+        self.user.set_password("test-pass-owner")
+        self.user.is_staff = True
+        self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         self.storage_override = override_settings(
@@ -162,6 +172,7 @@ class DeploymentBehaviorTests(TestCase):
         }
     )
     def test_production_login_gate_exempts_health_check(self):
+        self.client.logout()
         protected = self.client.get(reverse("practice:dashboard"))
         health = self.client.get(reverse("practice:health"))
 

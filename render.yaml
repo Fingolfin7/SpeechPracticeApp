@@ -39,5 +39,11 @@ services:
         value: whisper-1
       - key: SCORING_JOBS_MODE
         value: thread
+      - key: SPEECHPRACTICE_OWNER_USERNAME
+        sync: false
+      - key: SPEECHPRACTICE_CLAIM_ALL_USERS
+        value: "0"
+      - key: SPEECHPRACTICE_REPLACE_SETTINGS
+        value: "0"
       - key: PYTHON_VERSION
         value: 3.12.10

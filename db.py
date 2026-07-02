@@ -14,6 +14,7 @@ class PracticeSession(Base):
     __tablename__ = "sessions"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=True, index=True)
     timestamp = Column(String, nullable=False)
     script_name = Column(String, nullable=False)
     script_text = Column(String, nullable=False)
@@ -37,6 +38,7 @@ class SessionError(Base):
     __tablename__ = "session_errors"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=True, index=True)
     session_id = Column(Integer, nullable=False, index=True)
     timestamp = Column(String, nullable=False, index=True)
     script_name = Column(String, nullable=True)
@@ -83,6 +85,7 @@ def init_db(engine=None):
                     )
 
             add_col("segments", "TEXT")
+            add_col("user_id", "INTEGER")
             add_col("cer", "FLOAT")
             add_col("artic_rate", "FLOAT")
             add_col("pause_ratio", "FLOAT")
@@ -102,6 +105,7 @@ def init_db(engine=None):
                     )
 
             add_err_col("ref_local_start", "INTEGER")
+            add_err_col("user_id", "INTEGER")
             add_err_col("ref_local_end", "INTEGER")
             add_err_col("hyp_local_start", "INTEGER")
             add_err_col("hyp_local_end", "INTEGER")
@@ -118,12 +122,11 @@ def get_session(db_path: str = "sessions.db"):
     return sessionmaker(bind=engine)()
 
 
-def get_all_sessions(db):
-    return (
-        db.query(PracticeSession)
-        .order_by(PracticeSession.timestamp.desc(), PracticeSession.id.desc())
-        .all()
-    )
+def get_all_sessions(db, user_id: int | None = None):
+    query = db.query(PracticeSession)
+    if user_id is not None:
+        query = query.filter(PracticeSession.user_id == int(user_id))
+    return query.order_by(PracticeSession.timestamp.desc(), PracticeSession.id.desc()).all()
 
 
 def add_session(

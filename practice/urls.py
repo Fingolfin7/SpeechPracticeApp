@@ -8,6 +8,7 @@ app_name = "practice"
 
 urlpatterns = [
     path("healthz/", views.health, name="health"),
+    path("accounts/signup/", views.signup, name="signup"),
     path("", views.dashboard, name="dashboard"),
     path("progress/", views.progress, name="progress"),
     path("practice/", views.practice_run, name="practice"),

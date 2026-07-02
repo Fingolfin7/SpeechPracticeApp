@@ -5,11 +5,34 @@ import hashlib
 
 from cryptography.fernet import Fernet
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
 from django.db import models
 from django.utils import timezone
 
 
+def default_practice_user_pk() -> int:
+    User = get_user_model()
+    user = User.objects.filter(is_superuser=True).order_by("id").first()
+    if user is None:
+        user = User.objects.order_by("id").first()
+    if user is None:
+        user = User.objects.create(
+            username="owner",
+            is_staff=True,
+            is_superuser=True,
+            password=make_password(None),
+        )
+    return int(user.pk)
+
+
 class PracticeSession(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="practice_sessions",
+        default=default_practice_user_pk,
+    )
     timestamp = models.CharField(max_length=64)
     script_name = models.CharField(max_length=255)
     script_text = models.TextField()
@@ -35,6 +58,12 @@ class PracticeSession(models.Model):
 
 
 class SessionError(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="practice_session_errors",
+        default=default_practice_user_pk,
+    )
     session_id = models.IntegerField(db_index=True)
     timestamp = models.CharField(max_length=64, db_index=True)
     script_name = models.CharField(max_length=255, blank=True, null=True)
@@ -81,6 +110,13 @@ class PracticeScript(models.Model):
         (SOURCE_GENERATED, "Generated"),
     ]
 
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="practice_scripts",
+        blank=True,
+        null=True,
+    )
     title = models.CharField(max_length=255)
     author = models.CharField(max_length=255, blank=True)
     body = models.TextField()
@@ -97,6 +133,8 @@ class PracticeScript(models.Model):
     class Meta:
         ordering = ["title"]
         indexes = [
+            models.Index(fields=["user", "source", "active"]),
+            models.Index(fields=["user", "practice_kind", "active"]),
             models.Index(fields=["source", "active"]),
             models.Index(fields=["practice_kind", "active"]),
             models.Index(fields=["difficulty"]),
@@ -137,6 +175,12 @@ class ImprovementCard(models.Model):
         (STATUS_PAUSED, "Paused"),
     ]
 
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="improvement_cards",
+        default=default_practice_user_pk,
+    )
     title = models.CharField(max_length=255)
     kind = models.CharField(max_length=32, choices=KIND_CHOICES)
     target_key = models.CharField(max_length=255)
@@ -152,9 +196,11 @@ class ImprovementCard(models.Model):
     class Meta:
         ordering = ["due_at", "-updated_at"]
         constraints = [
-            models.UniqueConstraint(fields=["kind", "target_key"], name="unique_card_target")
+            models.UniqueConstraint(fields=["user", "kind", "target_key"], name="unique_user_card_target")
         ]
         indexes = [
+            models.Index(fields=["user", "kind", "status"]),
+            models.Index(fields=["user", "due_at"]),
             models.Index(fields=["kind", "status"]),
             models.Index(fields=["due_at"]),
         ]
@@ -179,6 +225,12 @@ class ImprovementCard(models.Model):
 
 
 class PracticeReview(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="practice_reviews",
+        default=default_practice_user_pk,
+    )
     card = models.ForeignKey(ImprovementCard, on_delete=models.CASCADE, related_name="reviews")
     legacy_session_id = models.IntegerField(blank=True, null=True)
     score = models.FloatField(blank=True, null=True)
@@ -209,6 +261,12 @@ class ScoringJob(models.Model):
         (STATUS_FAILED, "Failed"),
     ]
 
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="scoring_jobs",
+        default=default_practice_user_pk,
+    )
     script = models.ForeignKey(
         PracticeScript,
         on_delete=models.SET_NULL,
@@ -241,6 +299,7 @@ class ScoringJob(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [
+            models.Index(fields=["user", "status", "created_at"]),
             models.Index(fields=["status", "created_at"]),
             models.Index(fields=["provider"]),
         ]
@@ -250,6 +309,12 @@ class ScoringJob(models.Model):
 
 
 class GeneratedPracticeScript(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="generated_practice_scripts",
+        default=default_practice_user_pk,
+    )
     card = models.ForeignKey(
         ImprovementCard,
         on_delete=models.SET_NULL,
@@ -283,6 +348,13 @@ class PracticeLadder(models.Model):
         (SOURCE_GENERATED, "Generated"),
     ]
 
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="practice_ladders",
+        blank=True,
+        null=True,
+    )
     title = models.CharField(max_length=255)
     theme = models.CharField(max_length=512, blank=True)
     source = models.CharField(max_length=32, choices=SOURCE_CHOICES, default=SOURCE_USER)
@@ -298,6 +370,7 @@ class PracticeLadder(models.Model):
     class Meta:
         ordering = ["source", "-created_at", "title"]
         indexes = [
+            models.Index(fields=["user", "source", "active"]),
             models.Index(fields=["source", "active"]),
             models.Index(fields=["created_at"]),
         ]
@@ -356,6 +429,12 @@ class PracticeSettings(models.Model):
         (TRANSCRIPTION_UPLOAD, "Transcript sidecar"),
     ]
 
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="practice_settings",
+        default=default_practice_user_pk,
+    )
     script_generation_provider = models.CharField(
         max_length=32,
         default="local_template",
@@ -418,8 +497,10 @@ class PracticeSettings(models.Model):
         return "SpeechPractice settings"
 
     @classmethod
-    def load(cls) -> "PracticeSettings":
-        obj, _created = cls.objects.get_or_create(pk=1)
+    def load(cls, user=None) -> "PracticeSettings":
+        if user is None or not getattr(user, "is_authenticated", False):
+            user = get_user_model().objects.get(pk=default_practice_user_pk())
+        obj, _created = cls.objects.get_or_create(user=user)
         return obj
 
     def set_secret(self, field: str, value: str | None) -> None:

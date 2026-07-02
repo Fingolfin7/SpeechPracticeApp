@@ -25,6 +25,12 @@
       <a href="{% url 'practice:scripts' %}">Scripts</a>
       <a href="{% url 'practice:sessions' %}">History</a>
       <a href="{% url 'practice:account' %}">Account</a>
+      {% if request.user.is_authenticated %}
+        <form class="nav-logout" method="post" action="{% url 'logout' %}">
+          {% csrf_token %}
+          <button type="submit">{{ request.user.get_username }} - Sign out</button>
+        </form>
+      {% endif %}
     </nav>
   </header>
 

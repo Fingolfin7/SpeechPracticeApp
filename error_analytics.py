@@ -224,8 +224,9 @@ def _scored_sessions_in_range(
     start_dt: datetime,
     end_dt: datetime,
     script_name: str | None = None,
+    user_id: int | None = None,
 ) -> List[db.PracticeSession]:
-    sessions = db.get_all_sessions(db_session)
+    sessions = db.get_all_sessions(db_session, user_id=user_id)
     out: List[db.PracticeSession] = []
     for sess in sessions:
         if not sess.script_text or not sess.transcript:
@@ -329,6 +330,7 @@ def get_word_trend_summary(
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
     script_name: str | None = None,
+    user_id: int | None = None,
     top_n: int = 8,
     min_attempts: int = 3,
 ) -> Dict[str, List[Dict]]:
@@ -336,7 +338,7 @@ def get_word_trend_summary(
         start_dt, end_dt
     )
     recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name
+        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
     )
     recent_stats = _word_stats_for_sessions(db_session, recent_sessions)
 
@@ -359,7 +361,7 @@ def get_word_trend_summary(
         }
 
     prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name
+        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
     )
     prev_stats = _word_stats_for_sessions(db_session, prev_sessions)
     top, improved, regressed = _summarize_recent_vs_prev(
@@ -466,6 +468,7 @@ def get_phrase_trend_summary(
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
     script_name: str | None = None,
+    user_id: int | None = None,
     top_n: int = 5,
     min_attempts: int = 1,
     phrase_size: int = 3,
@@ -474,7 +477,7 @@ def get_phrase_trend_summary(
         start_dt, end_dt
     )
     recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name
+        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
     )
     recent_stats = _phrase_stats_for_sessions(
         db_session, recent_sessions, phrase_size=phrase_size
@@ -500,7 +503,7 @@ def get_phrase_trend_summary(
         }
 
     prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name
+        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
     )
     prev_stats = _phrase_stats_for_sessions(
         db_session, prev_sessions, phrase_size=phrase_size
@@ -575,13 +578,14 @@ def get_character_trend_summary(
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
     script_name: str | None = None,
+    user_id: int | None = None,
     top_n: int = 6,
 ) -> Dict:
     recent_start, recent_end, prev_start, prev_end = _window_bounds(
         start_dt, end_dt
     )
     recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name
+        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
     )
     recent_stats = _character_stats_for_sessions(db_session, recent_sessions)
 
@@ -601,7 +605,7 @@ def get_character_trend_summary(
         }
 
     prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name
+        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
     )
     prev_stats = _character_stats_for_sessions(db_session, prev_sessions)
     _, improved, regressed = _summarize_recent_vs_prev(
@@ -683,13 +687,14 @@ def get_position_trend_summary(
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
     script_name: str | None = None,
+    user_id: int | None = None,
     top_n: int = 4,
 ) -> Dict:
     recent_start, recent_end, prev_start, prev_end = _window_bounds(
         start_dt, end_dt
     )
     recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name
+        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
     )
     recent_stats = _position_stats_for_sessions(db_session, recent_sessions)
     top_pos = sorted(recent_stats.values(), key=lambda x: x["error_rate"], reverse=True)[:top_n]
@@ -702,7 +707,7 @@ def get_position_trend_summary(
         }
 
     prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name
+        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
     )
     prev_stats = _position_stats_for_sessions(db_session, prev_sessions)
     _, improved, regressed = _summarize_recent_vs_prev(
@@ -833,6 +838,7 @@ def get_phoneme_trend_summary(
     start_dt: datetime | None = None,
     end_dt: datetime | None = None,
     script_name: str | None = None,
+    user_id: int | None = None,
     top_n: int = 6,
     min_attempts: int = 4,
 ) -> Dict:
@@ -840,7 +846,7 @@ def get_phoneme_trend_summary(
         start_dt, end_dt
     )
     recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name
+        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
     )
     recent_stats, top_pairs = _phoneme_stats_for_sessions(db_session, recent_sessions)
     top_symbols = sorted(
@@ -862,7 +868,7 @@ def get_phoneme_trend_summary(
         }
 
     prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name
+        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
     )
     prev_stats, _ = _phoneme_stats_for_sessions(db_session, prev_sessions)
     _, improved, regressed = _summarize_recent_vs_prev(

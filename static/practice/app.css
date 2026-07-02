@@ -80,7 +80,18 @@ h2 {
 .site-nav {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
+}
+
+.nav-logout {
+  margin: 0;
+}
+
+.nav-logout button {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--panel);
 }
 
 .site-nav a,

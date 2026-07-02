@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from django import forms
 from django.conf import settings
+from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.models import User
+from django.db.models import Q
 
 from .models import ImprovementCard, PracticeScript, PracticeSession, PracticeSettings
 from .services.transcription import provider_label
@@ -52,6 +55,12 @@ class PracticeScriptForm(forms.ModelForm):
         return instance
 
 
+class SignUpForm(UserCreationForm):
+    class Meta:
+        model = User
+        fields = ["username", "password1", "password2"]
+
+
 class PracticeRunForm(forms.Form):
     MODE_SCRIPT = "script"
     MODE_QUICK = "quick"
@@ -91,11 +100,14 @@ class PracticeRunForm(forms.Form):
     )
 
     def __init__(self, *args, **kwargs):
+        user = kwargs.pop("user", None)
         initial_script = kwargs.pop("initial_script", None)
         initial_card = kwargs.pop("initial_card", None)
         script_kind = kwargs.pop("script_kind", PracticeScript.KIND_READING)
         super().__init__(*args, **kwargs)
-        scripts = PracticeScript.objects.filter(active=True)
+        scripts = PracticeScript.objects.filter(active=True).filter(
+            Q(user=user) | Q(user__isnull=True)
+        )
         if script_kind:
             scripts = scripts.filter(practice_kind=script_kind)
         self.fields["script"].queryset = scripts
@@ -103,9 +115,10 @@ class PracticeRunForm(forms.Form):
             self.fields["script"].label = "Practice drill"
         elif script_kind == PracticeScript.KIND_READING:
             self.fields["script"].label = "Reading script"
-        self.fields["card"].queryset = ImprovementCard.objects.exclude(
-            status=ImprovementCard.STATUS_PAUSED
-        )
+        cards = ImprovementCard.objects.none()
+        if user is not None and getattr(user, "is_authenticated", False):
+            cards = ImprovementCard.objects.filter(user=user)
+        self.fields["card"].queryset = cards.exclude(status=ImprovementCard.STATUS_PAUSED)
         if initial_script is not None:
             self.fields["script"].initial = initial_script
         elif not self.is_bound:
@@ -113,12 +126,15 @@ class PracticeRunForm(forms.Form):
         if initial_card is not None:
             self.fields["card"].initial = initial_card
         provider_choices = [
-            ("local_whisper", provider_label("local_whisper")),
-            ("openai", provider_label("openai")),
-            ("uploaded_transcript", provider_label("uploaded_transcript")),
+            ("local_whisper", provider_label("local_whisper", user=user)),
+            ("openai", provider_label("openai", user=user)),
+            ("uploaded_transcript", provider_label("uploaded_transcript", user=user)),
         ]
         self.fields["provider"].choices = provider_choices
-        self.fields["provider"].initial = settings.TRANSCRIPTION_PROVIDER
+        provider_initial = settings.TRANSCRIPTION_PROVIDER
+        if user is not None and getattr(user, "is_authenticated", False):
+            provider_initial = PracticeSettings.load(user).transcription_provider
+        self.fields["provider"].initial = provider_initial
 
     def clean(self):
         cleaned = super().clean()

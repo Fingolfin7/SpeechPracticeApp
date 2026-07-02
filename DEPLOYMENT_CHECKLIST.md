@@ -29,8 +29,9 @@ durable production job processing.
 - [x] App still includes a long-running worker command for a future paid worker.
 - [x] Existing local audio has been copied to S3 and its database references updated.
   - `migrate_audio_storage` copied 73 unique local audio refs to `recordings/legacy/` in S3.
-- [ ] Resolve or accept the seven missing legacy audio references found by the migration.
+- [x] Resolve or accept the seven missing legacy audio references found by the migration.
   - These were already missing locally before upload, so their old scoring-job references remain unresolved.
+  - Accepted as unrecoverable missing local files.
 - [x] Existing SQLite application data has been imported into Neon.
   - Loaded 1,805 practice objects from the local SQLite fixture. Local encrypted `PracticeSettings` secrets were intentionally excluded.
 
@@ -68,5 +69,6 @@ durable production job processing.
 - [x] Seek through storage-backed audio and receive `206 Partial Content`.
 - [x] Verify queued-worker behavior remains covered for a future paid worker.
 - [x] Verify the 390x844 mobile layout has no horizontal overflow or browser errors.
-- [ ] Complete a live throttled-network upload and OpenAI scoring run.
-  - Normal live upload/scoring is verified; explicit browser/network throttling is still pending.
+- [x] Complete a live throttled-network upload and OpenAI scoring run.
+  - Edge DevTools `3G` throttling uploaded a 2,428,672-byte audio Blob and completed OpenAI scoring through `/jobs/23/status/`.
+  - Upload took about 50.6 seconds; full upload, processing, and polling completed in about 68.0 seconds.

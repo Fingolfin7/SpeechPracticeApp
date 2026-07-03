@@ -9,12 +9,13 @@
   </div>
   <div class="card-page-actions">
     <span class="card-count">{{ total_count }}</span>
-    <form class="card-refresh-form" method="get" action="{% url 'practice:cards' %}">
+    <form class="card-refresh-form" method="post" action="{% url 'practice:cards' %}">
+      {% csrf_token %}
       <input type="hidden" name="refresh" value="1">
       <label for="card-refresh-start">Start date</label>
-      <input id="card-refresh-start" type="date" name="start" required>
+      <input id="card-refresh-start" type="date" name="start" value="{{ refresh_default_start|date:'Y-m-d' }}" required>
       <label for="card-refresh-end">End date</label>
-      <input id="card-refresh-end" type="date" name="end" required>
+      <input id="card-refresh-end" type="date" name="end" value="{{ refresh_default_end|date:'Y-m-d' }}" required>
       <button type="submit">Refresh cards</button>
     </form>
   </div>
@@ -83,12 +84,13 @@
   <section class="empty-card-state">
     <p class="eyebrow">No cards yet</p>
     <h2>Refresh from scored sessions to build your first focus set.</h2>
-    <form class="card-refresh-form" method="get" action="{% url 'practice:cards' %}">
+    <form class="card-refresh-form" method="post" action="{% url 'practice:cards' %}">
+      {% csrf_token %}
       <input type="hidden" name="refresh" value="1">
       <label for="empty-card-refresh-start">Start date</label>
-      <input id="empty-card-refresh-start" type="date" name="start" required>
+      <input id="empty-card-refresh-start" type="date" name="start" value="{{ refresh_default_start|date:'Y-m-d' }}" required>
       <label for="empty-card-refresh-end">End date</label>
-      <input id="empty-card-refresh-end" type="date" name="end" required>
+      <input id="empty-card-refresh-end" type="date" name="end" value="{{ refresh_default_end|date:'Y-m-d' }}" required>
       <button type="submit">Refresh cards</button>
     </form>
   </section>

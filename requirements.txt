@@ -10,7 +10,6 @@ openai>=1.66
 # Optional cloud providers:
 # anthropic>=0.30
 jiwer>=3.0
-SQLAlchemy>=1.4
 cryptography>=42.0
 requests>=2.31
 # Local Whisper is optional and lives in requirements-local.txt. Production

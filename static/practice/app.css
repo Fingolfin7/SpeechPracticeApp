@@ -84,6 +84,12 @@ h2 {
   gap: 10px;
 }
 
+.site-nav a[aria-current="page"] {
+  background: var(--accent);
+  border-color: var(--accent-dark);
+  color: #fffaf0;
+}
+
 .nav-logout {
   margin: 0;
 }
@@ -149,11 +155,33 @@ main:has(.practice-workbench) {
 }
 
 .messages p {
-  margin: 0;
+  margin: 0 0 8px;
   padding: 12px 14px;
   border: 1px solid var(--accent);
   border-radius: 6px;
   background: #e3f5ed;
+}
+
+.messages p:last-child {
+  margin-bottom: 0;
+}
+
+.messages .message-error {
+  border-color: var(--ember);
+  background: #f9e0d4;
+  color: #7f2410;
+}
+
+.messages .message-warning {
+  border-color: #8d6812;
+  background: #f8ecc9;
+  color: #64490a;
+}
+
+.messages .message-info {
+  border-color: #4156a5;
+  background: #e9ecff;
+  color: #263f9a;
 }
 
 .hero-panel,
@@ -1320,6 +1348,13 @@ select {
   border-color: rgba(255, 250, 240, 0.22);
 }
 
+.practice-recorder-panel .secondary-button {
+  border-color: rgba(255, 250, 240, 0.32);
+  background: rgba(255, 250, 240, 0.08);
+  color: #edf8f1;
+  box-shadow: none;
+}
+
 .recorder-header {
   display: flex;
   justify-content: space-between;
@@ -2046,6 +2081,13 @@ select {
   font-weight: 700;
 }
 
+.transport-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
 .copy-score-button {
   flex: 0 0 auto;
   min-width: 112px;
@@ -2145,6 +2187,77 @@ select {
 
 .form-error {
   color: #a12b18;
+  font-weight: 700;
+}
+
+.errorlist {
+  margin: 0;
+  padding-left: 18px;
+  color: #a12b18;
+  font-weight: 700;
+}
+
+.account-card {
+  display: grid;
+  gap: 14px;
+  width: min(520px, 100%);
+  margin: clamp(24px, 8vh, 72px) auto 0;
+  padding: clamp(24px, 5vw, 40px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.94);
+  box-shadow: var(--shadow);
+}
+
+.account-card h1 {
+  font-size: clamp(28px, 4vw, 38px);
+  line-height: 1.1;
+}
+
+.account-card .eyebrow {
+  margin-bottom: 0;
+}
+
+.account-card form {
+  display: grid;
+  gap: 14px;
+}
+
+.account-card form p {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.account-card form label {
+  color: var(--ember);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.account-card .helptext {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.account-card .helptext ul,
+.account-card ul.helptext {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.form-note {
+  margin: 0;
+  color: var(--muted);
+}
+
+.form-note a {
+  color: var(--accent-dark);
   font-weight: 700;
 }
 
@@ -2838,6 +2951,7 @@ select {
   }
 
   .site-header {
+    position: static;
     gap: 12px;
     padding: 14px 16px;
   }
@@ -2921,7 +3035,7 @@ select {
   }
 
   .settings-tabs {
-    top: 71px;
+    top: 0;
     margin-left: -16px;
     margin-right: -16px;
     border-left: 0;
@@ -2940,7 +3054,7 @@ select {
 
   .practice-task-tabs {
     position: sticky;
-    top: 71px;
+    top: 0;
     z-index: 4;
     display: flex;
     gap: 8px;
@@ -3046,7 +3160,9 @@ select {
   }
 
   .transport-bar .score-button,
-  .transport-bar .autumn-button {
+  .transport-secondary button,
+  .transport-secondary .button-link {
     width: auto;
+    flex: 1 1 auto;
   }
 }

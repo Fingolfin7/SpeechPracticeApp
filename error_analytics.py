@@ -3,9 +3,8 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, Iterable, List, Sequence
 
-import db
 from alignment_utils import (
     align_tokens,
     char_level_spans_for_substitution,
@@ -190,22 +189,16 @@ def extract_error_events(ref_text: str, hyp_text: str) -> List[Dict]:
     return events
 
 
-def _parse_timestamp(ts: str) -> datetime | None:
-    if not ts:
-        return None
-    try:
-        return datetime.fromisoformat(ts)
-    except Exception:
-        try:
-            return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
-        except Exception:
-            return None
-
-
-def _window_bounds(
+def window_bounds(
     start_dt: datetime | None,
     end_dt: datetime | None,
 ) -> tuple[datetime, datetime, datetime | None, datetime | None]:
+    """Return (recent_start, recent_end, prev_start, prev_end).
+
+    The previous window mirrors the recent one immediately before it and is
+    used for improved/regressed comparisons; its bounds are None when the
+    recent window has no span.
+    """
     now = datetime.now()
     recent_end = end_dt or now
     recent_start = start_dt or (recent_end - timedelta(days=30))
@@ -219,42 +212,16 @@ def _window_bounds(
     return recent_start, recent_end, prev_start, prev_end
 
 
-def _scored_sessions_in_range(
-    db_session,
-    start_dt: datetime,
-    end_dt: datetime,
-    script_name: str | None = None,
-    user_id: int | None = None,
-) -> List[db.PracticeSession]:
-    sessions = db.get_all_sessions(db_session, user_id=user_id)
-    out: List[db.PracticeSession] = []
-    for sess in sessions:
-        if not sess.script_text or not sess.transcript:
-            continue
-        ts = _parse_timestamp(sess.timestamp)
-        if ts is None:
-            continue
-        if start_dt <= ts <= end_dt:
-            if script_name and script_name != "All scripts":
-                if (sess.script_name or "") != script_name:
-                    continue
-            out.append(sess)
-    return out
+# The trend functions below are storage-agnostic: callers fetch the scored
+# sessions and their error events (via the Django ORM or any objects with the
+# same attributes) and pass them in. Session-like objects need `id` and
+# `script_text`; event-like objects need the `session_errors` columns they
+# reference (`session_id`, `op`, `error_kind`, `ref_token`, `hyp_token`,
+# `ref_start`, `ref_end`, `ref_local_start`, `ref_local_end`, `ref_token_len`).
 
 
-def _events_for_sessions(db_session, sessions: List[db.PracticeSession]):
-    sess_ids = [s.id for s in sessions if getattr(s, "id", None) is not None]
-    if not sess_ids:
-        return []
-    return (
-        db_session.query(db.SessionError)
-        .filter(db.SessionError.session_id.in_(sess_ids))
-        .all()
-    )
-
-
-def _word_stats_for_sessions(
-    db_session, sessions: List[db.PracticeSession]
+def _word_stats(
+    sessions: Sequence, events: Iterable
 ) -> Dict[str, Dict[str, float]]:
     stats: Dict[str, Dict[str, float]] = {}
     if not sessions:
@@ -266,7 +233,7 @@ def _word_stats_for_sessions(
         attempts.update(words)
 
     errors = Counter()
-    for row in _events_for_sessions(db_session, sessions):
+    for row in events:
         if row.op not in ("sub", "del") or not row.ref_token:
             continue
         errors[row.ref_token.strip().lower()] += 1
@@ -325,29 +292,24 @@ def _summarize_recent_vs_prev(
     return top_trouble, most_improved, most_regressed
 
 
-def get_word_trend_summary(
-    db_session,
-    start_dt: datetime | None = None,
-    end_dt: datetime | None = None,
-    script_name: str | None = None,
-    user_id: int | None = None,
+def word_trend_summary(
+    recent_sessions: Sequence,
+    recent_events: Sequence,
+    prev_sessions: Sequence | None = None,
+    prev_events: Sequence | None = None,
+    *,
     top_n: int = 8,
     min_attempts: int = 3,
 ) -> Dict[str, List[Dict]]:
-    recent_start, recent_end, prev_start, prev_end = _window_bounds(
-        start_dt, end_dt
-    )
-    recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
-    )
-    recent_stats = _word_stats_for_sessions(db_session, recent_sessions)
+    recent_stats = _word_stats(recent_sessions, recent_events)
 
-    if prev_start is None or prev_end is None:
+    if prev_sessions is None:
         top = sorted(
             [
                 v
                 for v in recent_stats.values()
                 if int(v.get("attempts", 0)) >= int(min_attempts)
+                and float(v.get("errors", 0.0)) > 0
             ],
             key=lambda x: (x["error_rate"], x["errors"]),
             reverse=True,
@@ -360,13 +322,11 @@ def get_word_trend_summary(
             "previous_session_count": 0,
         }
 
-    prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
-    )
-    prev_stats = _word_stats_for_sessions(db_session, prev_sessions)
+    prev_stats = _word_stats(prev_sessions, prev_events or [])
     top, improved, regressed = _summarize_recent_vs_prev(
         recent_stats, prev_stats, top_n, min_attempts, "word"
     )
+    top = [row for row in top if float(row.get("errors", 0.0)) > 0]
     return {
         "top_trouble_words": top,
         "most_improved_words": improved,
@@ -413,16 +373,16 @@ def _phrase_for_token(words: List[str], token_idx: int, phrase_size: int) -> str
     return " ".join(words[start : start + window])
 
 
-def _phrase_stats_for_sessions(
-    db_session,
-    sessions: List[db.PracticeSession],
+def _phrase_stats(
+    sessions: Sequence,
+    events: Iterable,
     phrase_size: int = 3,
 ) -> Dict[str, Dict[str, float]]:
     if not sessions:
         return {}
 
-    events_by_session: Dict[int, List[db.SessionError]] = {}
-    for row in _events_for_sessions(db_session, sessions):
+    events_by_session: Dict[int, List] = {}
+    for row in events:
         if row.op not in ("sub", "del") or not row.ref_token:
             continue
         events_by_session.setdefault(int(row.session_id), []).append(row)
@@ -463,27 +423,19 @@ def _phrase_stats_for_sessions(
     return stats
 
 
-def get_phrase_trend_summary(
-    db_session,
-    start_dt: datetime | None = None,
-    end_dt: datetime | None = None,
-    script_name: str | None = None,
-    user_id: int | None = None,
+def phrase_trend_summary(
+    recent_sessions: Sequence,
+    recent_events: Sequence,
+    prev_sessions: Sequence | None = None,
+    prev_events: Sequence | None = None,
+    *,
     top_n: int = 5,
     min_attempts: int = 1,
     phrase_size: int = 3,
 ) -> Dict[str, List[Dict]]:
-    recent_start, recent_end, prev_start, prev_end = _window_bounds(
-        start_dt, end_dt
-    )
-    recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
-    )
-    recent_stats = _phrase_stats_for_sessions(
-        db_session, recent_sessions, phrase_size=phrase_size
-    )
+    recent_stats = _phrase_stats(recent_sessions, recent_events, phrase_size=phrase_size)
 
-    if prev_start is None or prev_end is None:
+    if prev_sessions is None:
         top = sorted(
             [
                 v
@@ -502,12 +454,7 @@ def get_phrase_trend_summary(
             "previous_session_count": 0,
         }
 
-    prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
-    )
-    prev_stats = _phrase_stats_for_sessions(
-        db_session, prev_sessions, phrase_size=phrase_size
-    )
+    prev_stats = _phrase_stats(prev_sessions, prev_events or [], phrase_size=phrase_size)
     top, improved, regressed = _summarize_recent_vs_prev(
         recent_stats, prev_stats, top_n, min_attempts, "phrase"
     )
@@ -521,8 +468,8 @@ def get_phrase_trend_summary(
     }
 
 
-def _character_stats_for_sessions(
-    db_session, sessions: List[db.PracticeSession]
+def _character_stats(
+    sessions: Sequence, events: Iterable
 ) -> Dict[str, Dict[str, float]]:
     opportunities = 0
     for sess in sessions:
@@ -530,7 +477,7 @@ def _character_stats_for_sessions(
     opportunities = max(1, opportunities)
 
     counts = Counter()
-    for row in _events_for_sessions(db_session, sessions):
+    for row in events:
         kind = (row.error_kind or "").strip()
         if kind in ("char_replace", "char_insert", "vowel_delete", "cons_delete"):
             counts[kind] += 1
@@ -547,9 +494,9 @@ def _character_stats_for_sessions(
     return stats
 
 
-def _top_char_confusions(db_session, sessions: List[db.PracticeSession], top_n: int) -> List[Dict]:
+def _top_char_confusions(events: Iterable, top_n: int) -> List[Dict]:
     pairs = Counter()
-    for row in _events_for_sessions(db_session, sessions):
+    for row in events:
         if row.error_kind != "char_replace":
             continue
         ref_token = (row.ref_token or "").lower()
@@ -573,30 +520,24 @@ def _top_char_confusions(db_session, sessions: List[db.PracticeSession], top_n: 
     return out
 
 
-def get_character_trend_summary(
-    db_session,
-    start_dt: datetime | None = None,
-    end_dt: datetime | None = None,
-    script_name: str | None = None,
-    user_id: int | None = None,
+def character_trend_summary(
+    recent_sessions: Sequence,
+    recent_events: Sequence,
+    prev_sessions: Sequence | None = None,
+    prev_events: Sequence | None = None,
+    *,
     top_n: int = 6,
 ) -> Dict:
-    recent_start, recent_end, prev_start, prev_end = _window_bounds(
-        start_dt, end_dt
-    )
-    recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
-    )
-    recent_stats = _character_stats_for_sessions(db_session, recent_sessions)
+    recent_stats = _character_stats(recent_sessions, recent_events)
 
     top_kinds = sorted(
         recent_stats.values(),
         key=lambda x: x["error_rate"],
         reverse=True,
     )[:top_n]
-    confusions = _top_char_confusions(db_session, recent_sessions, top_n=top_n)
+    confusions = _top_char_confusions(recent_events, top_n=top_n)
 
-    if prev_start is None or prev_end is None:
+    if prev_sessions is None:
         return {
             "top_character_kinds": top_kinds,
             "most_improved_kinds": [],
@@ -604,10 +545,7 @@ def get_character_trend_summary(
             "top_character_confusions": confusions,
         }
 
-    prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
-    )
-    prev_stats = _character_stats_for_sessions(db_session, prev_sessions)
+    prev_stats = _character_stats(prev_sessions, prev_events or [])
     _, improved, regressed = _summarize_recent_vs_prev(
         recent_stats,
         prev_stats,
@@ -637,8 +575,8 @@ def _position_bucket(local_start: int | None, local_end: int | None, tok_len: in
     return "middle"
 
 
-def _position_stats_for_sessions(
-    db_session, sessions: List[db.PracticeSession]
+def _position_stats(
+    sessions: Sequence, events: Iterable
 ) -> Dict[str, Dict[str, float]]:
     starts = 0
     middles = 0
@@ -662,7 +600,7 @@ def _position_stats_for_sessions(
         "whole": max(1, wholes),
     }
     counts = Counter()
-    for row in _events_for_sessions(db_session, sessions):
+    for row in events:
         if row.op not in ("sub", "del"):
             continue
         bucket = _position_bucket(row.ref_local_start, row.ref_local_end, row.ref_token_len)
@@ -682,34 +620,25 @@ def _position_stats_for_sessions(
     return stats
 
 
-def get_position_trend_summary(
-    db_session,
-    start_dt: datetime | None = None,
-    end_dt: datetime | None = None,
-    script_name: str | None = None,
-    user_id: int | None = None,
+def position_trend_summary(
+    recent_sessions: Sequence,
+    recent_events: Sequence,
+    prev_sessions: Sequence | None = None,
+    prev_events: Sequence | None = None,
+    *,
     top_n: int = 4,
 ) -> Dict:
-    recent_start, recent_end, prev_start, prev_end = _window_bounds(
-        start_dt, end_dt
-    )
-    recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
-    )
-    recent_stats = _position_stats_for_sessions(db_session, recent_sessions)
+    recent_stats = _position_stats(recent_sessions, recent_events)
     top_pos = sorted(recent_stats.values(), key=lambda x: x["error_rate"], reverse=True)[:top_n]
 
-    if prev_start is None or prev_end is None:
+    if prev_sessions is None:
         return {
             "top_position_buckets": top_pos,
             "most_improved_positions": [],
             "most_regressed_positions": [],
         }
 
-    prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
-    )
-    prev_stats = _position_stats_for_sessions(db_session, prev_sessions)
+    prev_stats = _position_stats(prev_sessions, prev_events or [])
     _, improved, regressed = _summarize_recent_vs_prev(
         recent_stats, prev_stats, top_n=top_n, min_attempts=1, item_key="bucket"
     )
@@ -780,8 +709,8 @@ def _word_to_phoneme_symbols(word: str) -> List[str]:
     return out
 
 
-def _phoneme_stats_for_sessions(
-    db_session, sessions: List[db.PracticeSession]
+def _phoneme_stats(
+    sessions: Sequence, events: Iterable
 ) -> tuple[Dict[str, Dict[str, float]], List[Dict]]:
     opportunities = Counter()
     for sess in sessions:
@@ -789,7 +718,7 @@ def _phoneme_stats_for_sessions(
             opportunities.update(_word_to_phoneme_symbols(w))
 
     confusion_pairs = Counter()
-    for row in _events_for_sessions(db_session, sessions):
+    for row in events:
         if row.op != "sub" or not row.ref_token or not row.hyp_token:
             continue
         ref_syms = _word_to_phoneme_symbols(row.ref_token)
@@ -833,22 +762,16 @@ def _phoneme_stats_for_sessions(
     return stats, top_pairs
 
 
-def get_phoneme_trend_summary(
-    db_session,
-    start_dt: datetime | None = None,
-    end_dt: datetime | None = None,
-    script_name: str | None = None,
-    user_id: int | None = None,
+def phoneme_trend_summary(
+    recent_sessions: Sequence,
+    recent_events: Sequence,
+    prev_sessions: Sequence | None = None,
+    prev_events: Sequence | None = None,
+    *,
     top_n: int = 6,
     min_attempts: int = 4,
 ) -> Dict:
-    recent_start, recent_end, prev_start, prev_end = _window_bounds(
-        start_dt, end_dt
-    )
-    recent_sessions = _scored_sessions_in_range(
-        db_session, recent_start, recent_end, script_name=script_name, user_id=user_id
-    )
-    recent_stats, top_pairs = _phoneme_stats_for_sessions(db_session, recent_sessions)
+    recent_stats, top_pairs = _phoneme_stats(recent_sessions, recent_events)
     top_symbols = sorted(
         [
             v
@@ -859,7 +782,7 @@ def get_phoneme_trend_summary(
         reverse=True,
     )[:top_n]
 
-    if prev_start is None or prev_end is None:
+    if prev_sessions is None:
         return {
             "top_trouble_symbols": top_symbols,
             "most_improved_symbols": [],
@@ -867,10 +790,7 @@ def get_phoneme_trend_summary(
             "top_symbol_confusions": top_pairs,
         }
 
-    prev_sessions = _scored_sessions_in_range(
-        db_session, prev_start, prev_end, script_name=script_name, user_id=user_id
-    )
-    prev_stats, _ = _phoneme_stats_for_sessions(db_session, prev_sessions)
+    prev_stats, _ = _phoneme_stats(prev_sessions, prev_events or [])
     _, improved, regressed = _summarize_recent_vs_prev(
         recent_stats, prev_stats, top_n=top_n, min_attempts=min_attempts, item_key="symbol"
     )
@@ -902,7 +822,7 @@ def generate_feedback_summary(
         feedback.append(f"Phrase focus: slow down and repeat these unstable phrases: {focus}.")
 
     char_kinds = char_summary.get("top_character_kinds", [])
-    if char_kinds:
+    if char_kinds and float(char_kinds[0].get("error_rate", 0.0)) > 0:
         top = char_kinds[0]
         feedback.append(
             f"Character pattern: highest error type is {top.get('kind', 'unknown')} "
@@ -910,7 +830,7 @@ def generate_feedback_summary(
         )
 
     pos = pos_summary.get("top_position_buckets", [])
-    if pos:
+    if pos and float(pos[0].get("error_rate", 0.0)) > 0:
         p = pos[0]
         bucket = p.get("bucket", "unknown")
         feedback.append(

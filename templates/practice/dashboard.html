@@ -72,11 +72,11 @@
       <a class="button-link" href="{% url 'practice:cards' %}">Open cards</a>
     </div>
 
-    {% if today_queue %}
+    {% if queue_rest %}
       <div class="today-list">
-        {% for item in today_queue %}
+        {% for item in queue_rest %}
           <div class="today-item {% if item.is_due %}is-due{% endif %}">
-            <div class="today-index">{{ forloop.counter }}</div>
+            <div class="today-index">{{ forloop.counter|add:queue_offset }}</div>
             <div class="today-copy">
               <span class="pill">{{ item.card.get_kind_display }}</span>
               <h2>{{ item.card.display_title }}</h2>
@@ -106,6 +106,8 @@
           </div>
         {% endfor %}
       </div>
+    {% elif today_queue %}
+      <p class="empty">Your next rep is featured above. Nothing else is queued for today.</p>
     {% else %}
       <p class="empty">No cards yet. Refresh cards after scoring a few sessions, or import scripts and start practicing.</p>
     {% endif %}

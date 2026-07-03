@@ -3,7 +3,7 @@
 {% block content %}
 <section class="page-title">
   <div>
-    <p class="eyebrow">Legacy database</p>
+    <p class="eyebrow">Practice history</p>
     <h1>Recording history</h1>
   </div>
 </section>
@@ -23,7 +23,7 @@
             <td>{% if session.artic_rate %}{{ session.artic_rate|floatformat:0 }} wpm{% else %}-{% endif %}</td>
           </tr>
         {% empty %}
-          <tr><td colspan="6">No legacy sessions found.</td></tr>
+          <tr><td colspan="6">No sessions yet. <a href="{% url 'practice:practice' %}">Record your first take</a> to start building history.</td></tr>
         {% endfor %}
       </tbody>
     </table>

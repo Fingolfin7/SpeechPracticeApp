@@ -201,6 +201,9 @@
           <span aria-hidden="true"></span>
         </button>
         <button class="button-link score-button" type="submit" data-score-button disabled>Score recording</button>
+      </div>
+      <small class="score-reason" data-score-reason>Record or upload a take before scoring.</small>
+      <div class="transport-secondary">
         <button class="button-link copy-score-button" type="button" data-copy-practice-score disabled>Copy score</button>
         {% if autumn_timer.configured %}
           <button
@@ -218,7 +221,6 @@
           <a class="button-link secondary-button autumn-button" href="{% url 'practice:account' %}">Connect Autumn</a>
         {% endif %}
       </div>
-      <small class="score-reason" data-score-reason>Record or upload a take before scoring.</small>
     </div>
 
     <div class="practice-metrics" id="practice-review" aria-live="polite" data-practice-metrics>

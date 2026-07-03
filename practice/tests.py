@@ -6,8 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import db as legacy_db
-from error_analytics import get_phrase_trend_summary
+from error_analytics import phrase_trend_summary
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.utils import OperationalError
@@ -211,7 +210,30 @@ class PracticeWebTests(TransactionTestCase):
         self.assertContains(response, "S")
         self.assertContains(response, "Practice drill")
         self.assertContains(response, "Do next")
+        # A single queue item is featured in the hero, not repeated in the list.
+        self.assertContains(response, "This card is due now")
+        self.assertContains(response, "Your next rep is featured above")
+
+    def test_dashboard_queue_list_continues_after_hero(self):
+        self._create_legacy_tables()
+        now = timezone.now()
+        for index in range(3):
+            ImprovementCard.objects.create(
+                title=f"Sound pattern: S{index}",
+                kind=ImprovementCard.KIND_SOUND,
+                target_key=f"S{index}",
+                prompt=f"Practice S{index}.",
+                mastery=0.5,
+                due_at=now - timezone.timedelta(minutes=5 + index),
+            )
+
+        response = self.client.get(reverse("practice:dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        # The hero takes the first card; the list resumes at #2.
         self.assertContains(response, "Why this is next")
+        self.assertContains(response, '<div class="today-index">2</div>', html=False)
+        self.assertNotContains(response, '<div class="today-index">1</div>', html=False)
 
     def test_poetry_foundation_csv_import_shape(self):
         csv_text = (
@@ -297,49 +319,84 @@ class PracticeWebTests(TransactionTestCase):
         self.assertIn("inside a longer sentence", draft.body)
 
     def test_phrase_trend_summary_finds_error_context_phrase(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = str(Path(temp_dir) / "phrase-history.db")
-            session = legacy_db.get_session(db_path)
-            try:
-                scored = legacy_db.add_session(
-                    session,
-                    script_name="Phrase Drill",
-                    script_text="keep steady breath today",
-                    audio_path="recording.txt",
-                    transcript="keep steady today",
-                    wer=0.25,
-                    clarity=4.0,
-                    score=3.5,
-                )
-                legacy_db.replace_session_errors(
-                    session,
-                    scored.id,
-                    scored.timestamp,
-                    scored.script_name,
-                    [
-                        {
-                            "ref_token": "breath",
-                            "hyp_token": None,
-                            "op": "del",
-                            "error_kind": "word_missing",
-                            "ref_start": 12,
-                            "ref_end": 18,
-                            "ref_local_start": 0,
-                            "ref_local_end": 6,
-                            "ref_token_len": 6,
-                        }
-                    ],
-                )
+        scored = SimpleNamespace(
+            id=1,
+            script_name="Phrase Drill",
+            script_text="keep steady breath today",
+        )
+        event = SimpleNamespace(
+            session_id=1,
+            ref_token="breath",
+            hyp_token=None,
+            op="del",
+            error_kind="word_missing",
+            ref_start=12,
+            ref_end=18,
+            ref_local_start=0,
+            ref_local_end=6,
+            ref_token_len=6,
+        )
 
-                summary = get_phrase_trend_summary(session, top_n=3, min_attempts=1)
-            finally:
-                bind = session.get_bind()
-                session.close()
-                bind.dispose()
+        summary = phrase_trend_summary([scored], [event], top_n=3, min_attempts=1)
 
         phrases = summary["top_trouble_phrases"]
         self.assertEqual(phrases[0]["phrase"], "steady breath today")
         self.assertEqual(phrases[0]["errors"], 1.0)
+
+    def test_trend_summary_for_range_reads_django_orm_data(self):
+        self._create_legacy_tables()
+        now = timezone.now()
+        timestamp = now.strftime("%Y-%m-%dT%H:%M:%S")
+        scored = PracticeSession.objects.create(
+            user=self.user,
+            timestamp=timestamp,
+            script_name="Phrase Drill",
+            script_text="keep steady breath today keep steady breath today",
+            audio_path="recording.wav",
+            transcript="keep steady today keep steady breath today",
+            wer=0.25,
+            clarity=0.75,
+            score=3.5,
+        )
+        SessionError.objects.create(
+            user=self.user,
+            session_id=scored.id,
+            timestamp=timestamp,
+            script_name=scored.script_name,
+            ref_token="breath",
+            hyp_token=None,
+            op="del",
+            error_kind="word_missing",
+            ref_start=12,
+            ref_end=18,
+            ref_local_start=0,
+            ref_local_end=6,
+            ref_token_len=6,
+        )
+        other_user = get_user_model().objects.create(username="someone-else")
+        PracticeSession.objects.create(
+            user=other_user,
+            timestamp=timestamp,
+            script_name="Other Drill",
+            script_text="not your words",
+            audio_path="other.wav",
+            transcript="not your words",
+        )
+
+        from .services.analytics import trend_summary_for_range
+
+        summary = trend_summary_for_range(
+            user=self.user,
+            start_dt=(now - timezone.timedelta(days=7)).replace(tzinfo=None),
+            end_dt=now.replace(tzinfo=None),
+        )
+
+        words = {row["word"] for row in summary["words"]["top_trouble_words"]}
+        self.assertIn("breath", words)
+        self.assertNotIn("your", words)
+        phrases = summary["phrases"]["top_trouble_phrases"]
+        self.assertEqual(phrases[0]["phrase"], "steady breath today")
+        self.assertEqual(summary["words"]["recent_session_count"], 1)
 
     def test_build_card_candidates_includes_phrase_focus(self):
         candidates = build_card_candidates(
@@ -1643,7 +1700,7 @@ class PracticeWebTests(TransactionTestCase):
 
     def test_card_refresh_uses_submitted_date_range(self):
         with patch("practice.views.refresh_improvement_cards", return_value=3) as refresh:
-            response = self.client.get(
+            response = self.client.post(
                 reverse("practice:cards"),
                 {
                     "refresh": "1",
@@ -1661,7 +1718,7 @@ class PracticeWebTests(TransactionTestCase):
 
     def test_card_refresh_requires_date_range(self):
         with patch("practice.views.refresh_improvement_cards") as refresh:
-            response = self.client.get(reverse("practice:cards"), {"refresh": "1"})
+            response = self.client.post(reverse("practice:cards"), {"refresh": "1", "start": "", "end": ""})
 
         self.assertRedirects(response, reverse("practice:cards"))
         refresh.assert_not_called()

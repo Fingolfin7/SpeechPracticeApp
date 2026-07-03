@@ -9,14 +9,14 @@ from django.contrib.auth import get_user_model
 from django.db.models import Avg, Count
 from django.utils import timezone
 
-import db as legacy_db
 from error_analytics import (
+    character_trend_summary,
     generate_feedback_summary,
-    get_character_trend_summary,
-    get_phoneme_trend_summary,
-    get_phrase_trend_summary,
-    get_position_trend_summary,
-    get_word_trend_summary,
+    phoneme_trend_summary,
+    phrase_trend_summary,
+    position_trend_summary,
+    window_bounds,
+    word_trend_summary,
 )
 
 from practice.models import (
@@ -26,6 +26,7 @@ from practice.models import (
     PracticeScript,
     PracticeSession,
     ScoringJob,
+    SessionError,
     default_practice_user_pk,
 )
 
@@ -154,6 +155,72 @@ def trend_summary(user=None, days: int = 30) -> dict[str, Any]:
     return trend_summary_for_range(user=user, start_dt=start_dt, end_dt=end_dt)
 
 
+def _fetch_trend_windows(
+    user,
+    recent_start: datetime,
+    recent_end: datetime,
+    prev_start: datetime | None,
+    prev_end: datetime | None,
+    script_name: str | None = None,
+) -> tuple[list, list, list | None, list | None]:
+    """Load scored sessions and their error events for both trend windows.
+
+    One session query and one event query cover all five trend summaries.
+    Returns (recent_sessions, recent_events, prev_sessions, prev_events);
+    the prev pair is None when there is no previous window.
+    """
+    fetch_start = prev_start if prev_start is not None else recent_start
+    sessions_qs = (
+        PracticeSession.objects.filter(user=user)
+        .exclude(script_text="")
+        .exclude(transcript__isnull=True)
+        .exclude(transcript="")
+        .only("id", "timestamp", "script_name", "script_text")
+    )
+    if script_name and script_name != "All scripts":
+        sessions_qs = sessions_qs.filter(script_name=script_name)
+    # Coarse SQL prefilter on the ISO date prefix; timestamps are strings, so
+    # exact bounds are applied in Python after parsing.
+    sessions_qs = sessions_qs.filter(timestamp__gte=fetch_start.date().isoformat())
+
+    recent_sessions: list = []
+    prev_sessions: list = []
+    for sess in sessions_qs:
+        parsed = _parse_session_timestamp(sess.timestamp)
+        if parsed is None:
+            continue
+        if recent_start <= parsed <= recent_end:
+            recent_sessions.append(sess)
+        elif prev_start is not None and prev_start <= parsed <= prev_end:
+            prev_sessions.append(sess)
+
+    session_ids = [s.id for s in recent_sessions] + [s.id for s in prev_sessions]
+    events: list = []
+    if session_ids:
+        events = list(
+            SessionError.objects.filter(session_id__in=session_ids).only(
+                "id",
+                "session_id",
+                "op",
+                "error_kind",
+                "ref_token",
+                "hyp_token",
+                "ref_start",
+                "ref_end",
+                "ref_local_start",
+                "ref_local_end",
+                "ref_token_len",
+            )
+        )
+    recent_ids = {s.id for s in recent_sessions}
+    recent_events = [e for e in events if e.session_id in recent_ids]
+    prev_events = [e for e in events if e.session_id not in recent_ids]
+
+    if prev_start is None:
+        return recent_sessions, recent_events, None, None
+    return recent_sessions, recent_events, prev_sessions, prev_events
+
+
 def trend_summary_for_range(
     *,
     user=None,
@@ -162,61 +229,38 @@ def trend_summary_for_range(
     script_name: str | None = None,
 ) -> dict[str, Any]:
     user = _resolve_user(user)
-    session = legacy_db.get_session(str(settings.LEGACY_DB_PATH))
-    try:
-        words = get_word_trend_summary(
-            session,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            script_name=script_name,
-            user_id=user.pk,
-            top_n=6,
-            min_attempts=2,
-        )
-        chars = get_character_trend_summary(
-            session,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            script_name=script_name,
-            user_id=user.pk,
-            top_n=5,
-        )
-        positions = get_position_trend_summary(
-            session,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            script_name=script_name,
-            user_id=user.pk,
-            top_n=4,
-        )
-        sounds = get_phoneme_trend_summary(
-            session,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            script_name=script_name,
-            user_id=user.pk,
-            top_n=5,
-            min_attempts=3,
-        )
-        phrases = get_phrase_trend_summary(
-            session,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            script_name=script_name,
-            user_id=user.pk,
-            top_n=5,
-            min_attempts=1,
-        )
-        return {
-            "words": words,
-            "characters": chars,
-            "positions": positions,
-            "sounds": sounds,
-            "phrases": phrases,
-            "feedback": generate_feedback_summary(words, chars, positions, sounds, phrases),
-        }
-    finally:
-        session.close()
+    recent_start, recent_end, prev_start, prev_end = window_bounds(start_dt, end_dt)
+    recent_sessions, recent_events, prev_sessions, prev_events = _fetch_trend_windows(
+        user,
+        recent_start,
+        recent_end,
+        prev_start,
+        prev_end,
+        script_name=script_name,
+    )
+    words = word_trend_summary(
+        recent_sessions, recent_events, prev_sessions, prev_events, top_n=6, min_attempts=2
+    )
+    chars = character_trend_summary(
+        recent_sessions, recent_events, prev_sessions, prev_events, top_n=5
+    )
+    positions = position_trend_summary(
+        recent_sessions, recent_events, prev_sessions, prev_events, top_n=4
+    )
+    sounds = phoneme_trend_summary(
+        recent_sessions, recent_events, prev_sessions, prev_events, top_n=5, min_attempts=3
+    )
+    phrases = phrase_trend_summary(
+        recent_sessions, recent_events, prev_sessions, prev_events, top_n=5, min_attempts=1
+    )
+    return {
+        "words": words,
+        "characters": chars,
+        "positions": positions,
+        "sounds": sounds,
+        "phrases": phrases,
+        "feedback": generate_feedback_summary(words, chars, positions, sounds, phrases),
+    }
 
 
 def script_name_options(user=None) -> list[str]:

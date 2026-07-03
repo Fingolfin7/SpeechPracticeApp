@@ -18,18 +18,25 @@
       </span>
     </a>
     <nav class="site-nav" aria-label="Primary navigation">
-      <a href="{% url 'practice:dashboard' %}">Today</a>
-      <a href="{% url 'practice:practice' %}">Practice</a>
-      <a href="{% url 'practice:cards' %}">Cards</a>
-      <a href="{% url 'practice:progress' %}">Progress</a>
-      <a href="{% url 'practice:scripts' %}">Scripts</a>
-      <a href="{% url 'practice:sessions' %}">History</a>
-      <a href="{% url 'practice:account' %}">Account</a>
       {% if request.user.is_authenticated %}
+        {% with current=request.resolver_match.url_name %}
+          <a href="{% url 'practice:dashboard' %}" {% if current == "dashboard" %}aria-current="page"{% endif %}>Today</a>
+          <a href="{% url 'practice:practice' %}" {% if current == "practice" %}aria-current="page"{% endif %}>Practice</a>
+          <a href="{% url 'practice:cards' %}" {% if current == "cards" or current == "card_detail" %}aria-current="page"{% endif %}>Cards</a>
+          <a href="{% url 'practice:progress' %}" {% if current == "progress" %}aria-current="page"{% endif %}>Progress</a>
+          <a href="{% url 'practice:scripts' %}" {% if current == "scripts" or current == "script_create" or current == "script_import" or current == "script_edit" or current == "script_delete" %}aria-current="page"{% endif %}>Scripts</a>
+          <a href="{% url 'practice:sessions' %}" {% if current == "sessions" or current == "session_detail" %}aria-current="page"{% endif %}>History</a>
+          <a href="{% url 'practice:account' %}" {% if current == "account" %}aria-current="page"{% endif %}>Account</a>
+        {% endwith %}
         <form class="nav-logout" method="post" action="{% url 'logout' %}">
           {% csrf_token %}
           <button type="submit">{{ request.user.get_username }} - Sign out</button>
         </form>
+      {% else %}
+        {% with current=request.resolver_match.url_name %}
+          <a href="{% url 'login' %}" {% if current == "login" %}aria-current="page"{% endif %}>Sign in</a>
+          <a href="{% url 'practice:signup' %}" {% if current == "signup" %}aria-current="page"{% endif %}>Create account</a>
+        {% endwith %}
       {% endif %}
     </nav>
   </header>
@@ -37,7 +44,7 @@
   {% if messages %}
     <section class="messages" aria-live="polite">
       {% for message in messages %}
-        <p>{{ message }}</p>
+        <p class="message{% if message.tags %} message-{{ message.tags }}{% endif %}">{{ message }}</p>
       {% endfor %}
     </section>
   {% endif %}

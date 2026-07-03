@@ -143,12 +143,19 @@ def _adopt_placeholder_owner_data(user) -> None:
 
 def dashboard(request):
     summary = trend_summary(request.user)
+    queue = today_queue(request.user)
+    active_jobs = active_scoring_jobs(request.user)
+    # When the "Do next" hero features the first queue item, the list below
+    # continues from the second item instead of repeating it.
+    hero_takes_first = bool(queue) and not active_jobs
     context = {
         "stats": dashboard_stats(request.user),
         "recent_sessions": recent_sessions(request.user),
         "summary": summary,
-        "today_queue": today_queue(request.user),
-        "active_jobs": active_scoring_jobs(request.user),
+        "today_queue": queue,
+        "queue_rest": queue[1:] if hero_takes_first else queue,
+        "queue_offset": 1 if hero_takes_first else 0,
+        "active_jobs": active_jobs,
         "recent_jobs": recent_scoring_jobs(request.user),
         "score_distribution": score_distribution(request.user),
     }
@@ -917,8 +924,8 @@ def script_import(request):
 
 
 def card_list(request):
-    if request.GET.get("refresh") == "1":
-        start_dt, end_dt, error = _card_refresh_range(request.GET.get("start"), request.GET.get("end"))
+    if request.method == "POST" and request.POST.get("refresh") == "1":
+        start_dt, end_dt, error = _card_refresh_range(request.POST.get("start"), request.POST.get("end"))
         if error:
             messages.error(request, error)
             return redirect("practice:cards")
@@ -947,6 +954,7 @@ def card_list(request):
                 "due_count": sum(1 for card in group_cards if card.due_at <= timezone.now()),
             }
         )
+    today = timezone.localdate()
     return render(
         request,
         "practice/card_list.html",
@@ -954,6 +962,8 @@ def card_list(request):
             "cards": cards,
             "grouped_cards": grouped_cards,
             "total_count": len(cards),
+            "refresh_default_start": today - timedelta(days=30),
+            "refresh_default_end": today,
         },
     )
 

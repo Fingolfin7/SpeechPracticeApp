@@ -150,7 +150,6 @@ if USE_S3 and not AWS_STORAGE_BUCKET_NAME:
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-LEGACY_DB_PATH = Path(os.getenv("SPEECHPRACTICE_DB", str(BASE_DIR / "sessions.db")))
 LEGACY_SCRIPTS_DIR = Path(os.getenv("SPEECHPRACTICE_SCRIPTS_DIR", BASE_DIR / "scripts"))
 
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER", "openai")

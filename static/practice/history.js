@@ -99,8 +99,8 @@
 
   function drawEmpty(message) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#6f665b";
-    ctx.font = "18px Georgia, serif";
+    ctx.fillStyle = "#6b5e52";
+    ctx.font = "18px Fraunces, Georgia, serif";
     ctx.fillText(message, 24, canvas.height / 2);
   }
 
@@ -112,9 +112,9 @@
     const step = Math.max(1, Math.floor(data.length / width));
 
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "#fffaf0";
+    ctx.fillStyle = "#f5e9d9";
     ctx.fillRect(0, 0, width, height);
-    ctx.strokeStyle = "#0f766e";
+    ctx.strokeStyle = "#3e7a5c";
     ctx.lineWidth = 1;
 
     for (let x = 0; x < width; x += 1) {
@@ -139,7 +139,7 @@
       return;
     }
     const x = (audio.currentTime / audio.duration) * canvas.width;
-    ctx.fillStyle = "rgba(184, 68, 33, 0.82)";
+    ctx.fillStyle = "rgba(232, 112, 58, 0.85)";
     ctx.fillRect(Math.max(0, x - 1), 0, 3, canvas.height);
   }
 

@@ -8,10 +8,10 @@
   <p>{{ session.timestamp }}</p>
   <div class="action-row">
     <a class="button-link" href="#edit-transcript">Edit transcript</a>
-    <a class="button-link" href="{% url 'practice:session_report' session.pk %}">Export report</a>
-    <button type="button" data-copy-score>Copy score</button>
+    <a class="button-link secondary-button" href="{% url 'practice:session_report' session.pk %}">Export report</a>
+    <button class="secondary-button" type="button" data-copy-score>Copy score</button>
     {% if mistake_lines %}
-      <button type="button" data-copy-mistakes>Copy mistakes</button>
+      <button class="secondary-button" type="button" data-copy-mistakes>Copy mistakes</button>
       <button class="secondary-button" type="button" data-toggle-highlights>Toggle highlights</button>
     {% endif %}
     <form method="post">

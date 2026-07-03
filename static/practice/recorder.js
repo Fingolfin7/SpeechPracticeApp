@@ -550,15 +550,15 @@
 
     context.clearRect(0, 0, width, height);
     context.lineWidth = Math.max(1, window.devicePixelRatio || 1);
-    context.strokeStyle = "rgba(169, 195, 191, 0.26)";
+    context.strokeStyle = "rgba(185, 207, 192, 0.26)";
     context.beginPath();
     context.moveTo(0, middle);
     context.lineTo(width, middle);
     context.stroke();
 
     context.beginPath();
-    context.strokeStyle = "#28d7e8";
-    context.fillStyle = "rgba(40, 215, 232, 0.14)";
+    context.strokeStyle = "#f0b84b";
+    context.fillStyle = "rgba(240, 184, 75, 0.14)";
     context.moveTo(0, middle);
     for (let i = 0; i < barCount; i += 1) {
       const sample = Math.abs(values[Math.floor(i * stride)] || 0);
@@ -576,7 +576,7 @@
     context.fill();
 
     context.beginPath();
-    context.strokeStyle = "#52f0ff";
+    context.strokeStyle = "#ffd98a";
     for (let i = 0; i < barCount; i += 1) {
       const sample = Math.abs(values[Math.floor(i * stride)] || 0);
       const x = (i / Math.max(1, barCount - 1)) * width;

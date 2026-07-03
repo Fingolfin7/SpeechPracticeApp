@@ -1,0 +1,1040 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Today — SpeechPractice</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+
+  :root{
+    --paper: #FBF3E9;
+    --paper-deep: #F5E9D9;
+    --ink: #2B2320;
+    --ink-soft: #6B5E52;
+    --card: #FFFDF9;
+    --line: #E7DBC9;
+
+    --grove: #3E7A5C;
+    --grove-dark: #2C5B44;
+    --grove-tint: #E4F0E7;
+
+    --clay: #E8703A;
+    --clay-dark: #C25725;
+    --clay-tint: #FBE6D8;
+
+    --gold: #F0B84B;
+    --gold-tint: #FDF1D8;
+
+    --locked: #D8CBB8;
+
+    --shadow-sm: 0 2px 0 rgba(43,35,32,0.08);
+    --shadow-card: 0 12px 28px rgba(60, 45, 25, 0.10), 0 2px 6px rgba(60,45,25,0.06);
+    --shadow-pop: 0 18px 40px rgba(60, 45, 25, 0.16);
+
+    --r-lg: 28px;
+    --r-md: 20px;
+    --r-sm: 14px;
+  }
+
+  *{ box-sizing: border-box; }
+
+  html{ scroll-behavior: smooth; }
+
+  body{
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+
+  /* faint dot texture, like paper grain — not a grid, softer */
+  body{
+    background-image: radial-gradient(rgba(43,35,32,0.05) 1px, transparent 1.4px);
+    background-size: 22px 22px;
+    background-attachment: fixed;
+  }
+
+  h1, h2, h3, .display{
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+
+  .num{ font-family: 'Space Grotesk', sans-serif; font-weight: 600; }
+
+  a{ color: inherit; }
+
+  .wrap{
+    width: min(1120px, calc(100% - 40px));
+    margin: 0 auto;
+  }
+
+  /* ============ HEADER ============ */
+  .site-header{
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(251, 243, 233, 0.86);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .site-header .wrap{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 0;
+  }
+
+  .brand{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-decoration: none;
+  }
+
+  .brand-mark{
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: linear-gradient(155deg, var(--grove) 0%, var(--grove-dark) 100%);
+    display: grid;
+    place-items: center;
+    color: var(--gold-tint);
+    font-family: 'Fraunces', serif;
+    font-weight: 700;
+    font-size: 18px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .brand-text strong{
+    display: block;
+    font-family: 'Fraunces', serif;
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .brand-text small{
+    display: block;
+    color: var(--ink-soft);
+    font-size: 12px;
+  }
+
+  .site-nav{
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    padding: 5px;
+    border-radius: 999px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .site-nav a{
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    padding: 8px 16px;
+    border-radius: 999px;
+    transition: background .15s ease, color .15s ease;
+  }
+
+  .site-nav a[aria-current="page"]{
+    background: var(--grove);
+    color: #fff;
+  }
+  .site-nav a:hover:not([aria-current="page"]){
+    background: var(--paper-deep);
+    color: var(--ink);
+  }
+
+  .header-user{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .streak-chip{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--clay-tint);
+    color: var(--clay-dark);
+    border-radius: 999px;
+    padding: 8px 14px 8px 10px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+  }
+
+  /* ============ MAIN LAYOUT ============ */
+  main{ padding-bottom: 100px; }
+
+  .page-head{
+    padding: 40px 0 28px;
+  }
+
+  .page-head .eyebrow{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--grove-dark);
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin: 0 0 10px;
+  }
+
+  .page-head .eyebrow::before{
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--clay);
+    display: inline-block;
+  }
+
+  .page-head h1{
+    font-size: clamp(32px, 4vw, 44px);
+    max-width: 640px;
+  }
+
+  .page-head p{
+    color: var(--ink-soft);
+    font-size: 16px;
+    max-width: 520px;
+    margin-top: 10px;
+  }
+
+  /* ============ HERO GRID ============ */
+  .hero-grid{
+    display: grid;
+    grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+    gap: 22px;
+    align-items: stretch;
+  }
+
+  /* --- streak / ring panel --- */
+  .streak-panel{
+    background: linear-gradient(165deg, var(--grove) 0%, var(--grove-dark) 100%);
+    border-radius: var(--r-lg);
+    padding: 26px;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    box-shadow: var(--shadow-card);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .streak-panel::after{
+    content: "";
+    position: absolute;
+    inset: auto -40px -60px auto;
+    width: 180px;
+    height: 180px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(240,184,75,0.35), transparent 70%);
+  }
+
+  .streak-top{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .streak-top .label{
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.75;
+  }
+
+  .streak-flame{
+    font-size: 20px;
+  }
+
+  .ring-wrap{
+    position: relative;
+    width: 168px;
+    height: 168px;
+    margin: 4px auto 0;
+  }
+
+  .ring-wrap svg{ transform: rotate(-90deg); }
+
+  .ring-center{
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .ring-center .n{
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 40px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .ring-center .d{
+    font-size: 12px;
+    opacity: 0.8;
+    margin-top: 4px;
+  }
+
+  .streak-foot{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    opacity: 0.9;
+    border-top: 1px solid rgba(255,255,255,0.18);
+    padding-top: 14px;
+  }
+  .streak-foot strong{ font-family: 'Space Grotesk', sans-serif; font-size: 15px; display:block; }
+
+  /* --- main hero: next-up card + trend --- */
+  .hero-main{
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .next-card{
+    flex: 1;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 30px 32px;
+    box-shadow: var(--shadow-card);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    position: relative;
+  }
+
+  .next-card-top{
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+  }
+
+  .kind-pill{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--gold-tint);
+    color: #7A5300;
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 600;
+    font-size: 12.5px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    margin-bottom: 12px;
+  }
+
+  .next-card h2{
+    font-size: 27px;
+    line-height: 1.2;
+  }
+
+  .next-card .prompt{
+    color: var(--ink-soft);
+    font-size: 15px;
+    max-width: 62ch;
+  }
+
+  .stack-peek{
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .stack-peek .card-sliver{
+    width: 34px;
+    height: 78px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    margin-left: -18px;
+    box-shadow: var(--shadow-sm);
+  }
+  .stack-peek .card-sliver:nth-child(1){ background: #F1E4CE; z-index: 1; }
+  .stack-peek .card-sliver:nth-child(2){ background: var(--clay-tint); z-index: 2; }
+  .stack-peek .card-sliver:nth-child(3){ background: var(--grove-tint); z-index: 3; margin-left: -18px; }
+
+  .next-card-meta{
+    display: flex;
+    gap: 22px;
+    flex-wrap: wrap;
+    font-size: 13.5px;
+    color: var(--ink-soft);
+  }
+  .next-card-meta b{ color: var(--ink); font-family:'Space Grotesk',sans-serif; }
+
+  .next-card-actions{
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 4px;
+  }
+
+  .btn{
+    font: inherit;
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    border: none;
+    border-radius: 999px;
+    padding: 15px 28px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .btn:active{ transform: translateY(2px); }
+
+  .btn-primary{
+    background: var(--clay);
+    color: #fff;
+    box-shadow: 0 6px 0 var(--clay-dark), 0 10px 22px rgba(232,112,58,0.28);
+  }
+  .btn-primary:hover{ box-shadow: 0 4px 0 var(--clay-dark), 0 10px 22px rgba(232,112,58,0.32); transform: translateY(2px); }
+
+  .btn-ghost{
+    background: transparent;
+    color: var(--ink-soft);
+    border: 1.5px solid var(--line);
+    box-shadow: none;
+    padding: 13px 22px;
+  }
+  .btn-ghost:hover{ border-color: var(--ink-soft); color: var(--ink); }
+
+  .queue-count{
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-left: auto;
+  }
+  .queue-count b{ color: var(--grove-dark); font-family:'Space Grotesk',sans-serif; }
+
+  /* trend strip inside hero */
+  .trend-strip{
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: 16px 22px;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    box-shadow: var(--shadow-sm);
+  }
+  .trend-strip .trend-label{
+    font-size: 13px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .trend-strip .trend-label strong{
+    display:block; color: var(--ink); font-size: 15px; font-family:'Fraunces',serif; font-weight:600;
+  }
+  .sparkline{ flex-shrink: 0; }
+  .trend-delta{
+    margin-left: auto;
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--grove-dark);
+    background: var(--grove-tint);
+    padding: 6px 12px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  /* ============ TODAY QUEUE (fanned cards) ============ */
+  .section{
+    margin-top: 56px;
+  }
+
+  .section-head{
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    gap: 16px;
+  }
+
+  .section-head h2{ font-size: 24px; }
+  .section-head .see-all{
+    font-family:'Space Grotesk',sans-serif;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--grove-dark);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .section-head .see-all:hover{ text-decoration: underline; }
+
+  .queue-row{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+
+  .queue-card{
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: var(--shadow-sm);
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .queue-card:hover{
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-card);
+  }
+
+  .queue-card .qc-kind{
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 4px 10px;
+    border-radius: 999px;
+    width: fit-content;
+  }
+  .qc-kind.word{ background: var(--clay-tint); color: var(--clay-dark); }
+  .qc-kind.phrase{ background: var(--gold-tint); color: #7A5300; }
+  .qc-kind.sound{ background: var(--grove-tint); color: var(--grove-dark); }
+  .qc-kind.pace{ background: #E7E2F5; color: #4C3E9E; }
+
+  .queue-card h3{
+    font-size: 17px;
+    line-height: 1.3;
+  }
+
+  .qc-mastery{
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .qc-mastery .bar{
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--paper-deep);
+    overflow: hidden;
+  }
+  .qc-mastery .bar span{
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--grove);
+  }
+  .qc-mastery small{
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 12px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+
+  .qc-due{
+    font-size: 12.5px;
+    color: var(--ink-soft);
+  }
+  .qc-due.due-now{ color: var(--clay-dark); font-weight: 600; }
+
+  /* ============ LADDER SECTION ============ */
+  .ladder-panel{
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 36px 40px 30px;
+    box-shadow: var(--shadow-card);
+  }
+
+  .ladder-intro{
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 8px;
+  }
+
+  .ladder-intro h3{ font-size: 21px; }
+  .ladder-intro p{ color: var(--ink-soft); font-size: 14.5px; max-width: 46ch; margin-top: 6px; }
+
+  .ladder-progress-tag{
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    background: var(--grove-tint);
+    color: var(--grove-dark);
+    padding: 8px 14px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  .trail-wrap{
+    margin-top: 18px;
+    position: relative;
+  }
+
+  .trail-svg{ width: 100%; height: auto; display: block; }
+
+  .trail-steps{
+    position: relative;
+  }
+
+  .step{
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    gap: 18px;
+    align-items: center;
+    padding: 14px 10px;
+  }
+
+  .step-node{
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    font-size: 18px;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .step.done .step-node{
+    background: var(--grove);
+    color: #fff;
+    box-shadow: 0 4px 0 var(--grove-dark);
+  }
+  .step.current .step-node{
+    background: var(--clay);
+    color: #fff;
+    box-shadow: 0 0 0 6px var(--clay-tint), 0 4px 0 var(--clay-dark);
+  }
+  .step.locked .step-node{
+    background: var(--paper-deep);
+    color: var(--ink-soft);
+    border: 2px dashed var(--locked);
+  }
+
+  .step-body{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 14px 20px;
+  }
+  .step.current .step-body{
+    background: var(--clay-tint);
+    border-color: #EFC1A3;
+  }
+  .step.locked .step-body{
+    background: transparent;
+    border-style: dashed;
+  }
+
+  .step-text strong{
+    display: block;
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 16.5px;
+  }
+  .step-text span{
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  .step.locked .step-text strong{ color: var(--ink-soft); }
+
+  .step-status{
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 12.5px;
+    font-weight: 700;
+    white-space: nowrap;
+    padding: 6px 12px;
+    border-radius: 999px;
+  }
+  .step.done .step-status{ background: var(--grove-tint); color: var(--grove-dark); }
+  .step.current .step-status{ background: var(--clay); color: #fff; }
+  .step.locked .step-status{ background: var(--paper-deep); color: var(--ink-soft); }
+
+  /* ============ METRICS STRIP ============ */
+  .metrics-strip{
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 14px;
+  }
+
+  .metric-pill{
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: 18px 16px;
+    text-align: left;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .metric-pill .m-label{
+    font-size: 12px;
+    color: var(--ink-soft);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .metric-pill .m-value{
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 25px;
+    font-weight: 700;
+    margin-top: 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+  .metric-pill .m-value small{ font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+
+  .m-tag{
+    display: inline-block;
+    margin-top: 8px;
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 999px;
+  }
+  .m-tag.good{ background: var(--grove-tint); color: var(--grove-dark); }
+  .m-tag.ok{ background: var(--gold-tint); color: #7A5300; }
+
+  /* ============ FOOTER ============ */
+  .site-footer{
+    text-align: center;
+    padding: 30px 0 50px;
+    color: var(--ink-soft);
+    font-size: 13px;
+  }
+
+  /* ============ RESPONSIVE ============ */
+  @media (max-width: 980px){
+    .hero-grid{ grid-template-columns: 1fr; }
+    .queue-row{ grid-template-columns: repeat(2, 1fr); }
+    .metrics-strip{ grid-template-columns: repeat(3, 1fr); }
+  }
+
+  @media (max-width: 600px){
+    .site-nav{ display: none; }
+    .queue-row{ grid-template-columns: 1fr; }
+    .metrics-strip{ grid-template-columns: repeat(2, 1fr); }
+    .next-card{ padding: 22px 20px; }
+    .stack-peek{ display: none; }
+    .ladder-panel{ padding: 26px 20px; }
+    .step{ grid-template-columns: 44px 1fr; gap: 12px; }
+    .step-node{ width: 44px; height: 44px; font-size: 14px; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *{ transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+  }
+
+</style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="#">
+        <span class="brand-mark">SP</span>
+        <span class="brand-text">
+          <strong>SpeechPractice</strong>
+          <small>your daily speaking coach</small>
+        </span>
+      </a>
+      <nav class="site-nav" aria-label="Primary">
+        <a href="#" aria-current="page">Today</a>
+        <a href="#">Practice</a>
+        <a href="#">Cards</a>
+        <a href="#ladder-section">Ladders</a>
+        <a href="#">Progress</a>
+        <a href="#">Scripts</a>
+      </nav>
+      <div class="header-user">
+        <span class="streak-chip">🔥 12-day streak</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap">
+
+      <section class="page-head">
+        <p class="eyebrow">Tuesday, July 3</p>
+        <h1>Ready when you are, Maren.</h1>
+        <p>Four reps queued for today, all built from patterns your last few takes flagged. About 14 minutes, start to finish.</p>
+      </section>
+
+      <!-- ============ HERO: streak ring + next-up ============ -->
+      <section class="hero-grid">
+
+        <div class="streak-panel">
+          <div class="streak-top">
+            <span class="label">Current streak</span>
+            <span class="streak-flame">🔥</span>
+          </div>
+          <div class="ring-wrap">
+            <svg width="168" height="168" viewBox="0 0 168 168">
+              <circle cx="84" cy="84" r="72" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="14"/>
+              <circle cx="84" cy="84" r="72" fill="none" stroke="#F0B84B" stroke-width="14"
+                      stroke-linecap="round"
+                      stroke-dasharray="452.4"
+                      stroke-dashoffset="113"/>
+            </svg>
+            <div class="ring-center">
+              <span class="n">12</span>
+              <span class="d">days running</span>
+            </div>
+          </div>
+          <div class="streak-foot">
+            <div>
+              <strong>3 of 4</strong>
+              reps done today
+            </div>
+            <div style="text-align:right;">
+              <strong>28</strong>
+              best streak
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-main">
+          <div class="next-card">
+            <div class="next-card-top">
+              <div>
+                <span class="kind-pill">🎯 Trouble word drill</span>
+                <h2>Nail "particularly" &amp; "statistics"</h2>
+                <p class="prompt">A short passage built around your two most-missed words this week — read it at a natural pace and we'll listen for clean consonant clusters.</p>
+              </div>
+              <div class="stack-peek" aria-hidden="true">
+                <span class="card-sliver"></span>
+                <span class="card-sliver"></span>
+                <span class="card-sliver"></span>
+              </div>
+            </div>
+            <div class="next-card-meta">
+              <span>Mastery <b>0.42</b></span>
+              <span>Est. <b>3 min</b></span>
+              <span>Reviewed <b>5×</b></span>
+            </div>
+            <div class="next-card-actions">
+              <a class="btn btn-primary" href="#">▶ Start today's practice</a>
+              <a class="btn btn-ghost" href="#">Peek at card</a>
+              <span class="queue-count"><b>4</b> queued &middot; <b>1</b> due now</span>
+            </div>
+          </div>
+
+          <div class="trend-strip">
+            <div class="trend-label">Clarity trend<strong>93% this week</strong></div>
+            <svg class="sparkline" width="180" height="44" viewBox="0 0 180 44">
+              <polyline fill="none" stroke="#E7DBC9" stroke-width="3" points="0,30 30,26 60,32 90,20 120,24 150,14 180,10" opacity="0"/>
+              <polyline fill="none" stroke="#3E7A5C" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"
+                        points="0,34 30,30 60,34 90,22 120,26 150,16 180,9"/>
+              <circle cx="180" cy="9" r="5" fill="#3E7A5C"/>
+            </svg>
+            <span class="trend-delta">▲ 4 pts vs last week</span>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ============ TODAY'S QUEUE ============ -->
+      <section class="section" aria-label="Today's practice queue">
+        <div class="section-head">
+          <h2>Today's practice</h2>
+          <a class="see-all" href="#">See full queue →</a>
+        </div>
+        <div class="queue-row">
+
+          <div class="queue-card">
+            <span class="qc-kind word">Word</span>
+            <h3>"Particularly" &amp; "statistics"</h3>
+            <div class="qc-due due-now">Due now</div>
+            <div class="qc-mastery">
+              <div class="bar"><span style="width:42%"></span></div>
+              <small>0.42</small>
+            </div>
+          </div>
+
+          <div class="queue-card">
+            <span class="qc-kind sound">Sound</span>
+            <h3>Soft "r" in "rural," "arduous"</h3>
+            <div class="qc-due due-now">Due now</div>
+            <div class="qc-mastery">
+              <div class="bar"><span style="width:35%"></span></div>
+              <small>0.35</small>
+            </div>
+          </div>
+
+          <div class="queue-card">
+            <span class="qc-kind phrase">Phrase</span>
+            <h3>"In terms of the overall..."</h3>
+            <div class="qc-due">Upcoming · tomorrow</div>
+            <div class="qc-mastery">
+              <div class="bar"><span style="width:61%"></span></div>
+              <small>0.61</small>
+            </div>
+          </div>
+
+          <div class="queue-card">
+            <span class="qc-kind pace">Pace</span>
+            <h3>Trim rushed sentence endings</h3>
+            <div class="qc-due">Upcoming · Thu</div>
+            <div class="qc-mastery">
+              <div class="bar"><span style="width:58%"></span></div>
+              <small>0.58</small>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ============ LADDER SECTION ============ -->
+      <section class="section" id="ladder-section" aria-label="Practice ladder">
+        <div class="section-head">
+          <h2>Your ladders</h2>
+          <a class="see-all" href="#">All ladders →</a>
+        </div>
+
+        <div class="ladder-panel">
+          <div class="ladder-intro">
+            <div>
+              <h3>Boardroom Q&amp;A — delivery ladder</h3>
+              <p>Four rungs, each one adds a constraint. Clear the current rung twice in a row to unlock the next.</p>
+            </div>
+            <span class="ladder-progress-tag">Rung 2 of 4</span>
+          </div>
+
+          <div class="trail-wrap">
+            <div class="trail-steps">
+
+              <div class="step done">
+                <div class="step-node">✓</div>
+                <div class="step-body">
+                  <div class="step-text">
+                    <strong>Slow read</strong>
+                    <span>Half pace, every syllable landed. Cleared twice.</span>
+                  </div>
+                  <span class="step-status">Done</span>
+                </div>
+              </div>
+
+              <div class="step current">
+                <div class="step-node">2</div>
+                <div class="step-body">
+                  <div class="step-text">
+                    <strong>Normal pace</strong>
+                    <span>Natural conversational speed, same script, no notes.</span>
+                  </div>
+                  <span class="step-status">In progress · 1 of 2</span>
+                </div>
+              </div>
+
+              <div class="step locked">
+                <div class="step-node">3</div>
+                <div class="step-body">
+                  <div class="step-text">
+                    <strong>Eyes-up delivery</strong>
+                    <span>Glance at the page only for anchor phrases.</span>
+                  </div>
+                  <span class="step-status">Locked</span>
+                </div>
+              </div>
+
+              <div class="step locked">
+                <div class="step-node">4</div>
+                <div class="step-body">
+                  <div class="step-text">
+                    <strong>Cold, unscripted Q&amp;A</strong>
+                    <span>Answer three follow-up prompts with no script at all.</span>
+                  </div>
+                  <span class="step-status">Locked</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ METRICS STRIP ============ -->
+      <section class="section" aria-label="Metrics summary">
+        <div class="section-head">
+          <h2>This week at a glance</h2>
+          <a class="see-all" href="#">Full progress →</a>
+        </div>
+
+        <div class="metrics-strip">
+          <div class="metric-pill">
+            <div class="m-label">WER</div>
+            <div class="m-value">6.8<small>%</small></div>
+            <span class="m-tag ok">Good</span>
+          </div>
+          <div class="metric-pill">
+            <div class="m-label">CER</div>
+            <div class="m-value">2.1<small>%</small></div>
+            <span class="m-tag ok">Good</span>
+          </div>
+          <div class="metric-pill">
+            <div class="m-label">Clarity</div>
+            <div class="m-value">93<small>%</small></div>
+            <span class="m-tag good">Excellent</span>
+          </div>
+          <div class="metric-pill">
+            <div class="m-label">Avg confidence</div>
+            <div class="m-value">0.88</div>
+            <span class="m-tag good">Excellent</span>
+          </div>
+          <div class="metric-pill">
+            <div class="m-label">Articulation</div>
+            <div class="m-value">148<small>wpm</small></div>
+            <span class="m-tag good">On target</span>
+          </div>
+          <div class="metric-pill">
+            <div class="m-label">Pause ratio</div>
+            <div class="m-value">27<small>%</small></div>
+            <span class="m-tag ok">Watch</span>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    Practiced 41 sessions this month &middot; keep the streak alive tomorrow morning.
+  </footer>
+
+</body>
+</html>

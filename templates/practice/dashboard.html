@@ -1,218 +1,242 @@
 {% extends "practice/base.html" %}
 {% block title %}Today | SpeechPractice{% endblock %}
 {% block content %}
-<section class="page-title">
-  <h1>Today</h1>
+<section class="page-head">
+  <p class="eyebrow">{{ today_label }}</p>
+  <h1>Ready when you are, {{ request.user.get_username }}.</h1>
+  {% if today_queue %}
+    <p>
+      {{ home.queued_count }} rep{{ home.queued_count|pluralize }} queued for today{% if home.due_count %},
+      {{ home.due_count }} due now{% endif %}. About {{ home.est_minutes }} minutes, start to finish.
+    </p>
+  {% else %}
+    <p>Nothing queued yet. Score a practice take and tomorrow's queue will fill with specific follow-up.</p>
+  {% endif %}
 </section>
 
-<section class="today-recommendation panel" aria-label="Recommended next action">
-  <div>
-    <p class="eyebrow">Do next</p>
-    {% if active_jobs %}
-      {% for job in active_jobs %}
-        {% if forloop.first %}
-          <h2>Check the {{ job.get_status_display|lower }} scoring job</h2>
-          <p>Finish the feedback loop for {{ job.script_name }} before starting another rep.</p>
-        {% endif %}
-      {% endfor %}
-    {% elif today_queue %}
-      {% for item in today_queue %}
-        {% if forloop.first %}
-          <h2>{% if item.script %}Practice {{ item.card.display_title }}{% else %}Generate {{ item.card.display_title }} drill{% endif %}</h2>
-          <p>
-            {% if item.is_due %}This card is due now{% else %}This card is coming up{% endif %}
-            with mastery {{ item.card.mastery|floatformat:2 }}.
-            {% if summary.feedback %}{{ summary.feedback.0 }}{% endif %}
-          </p>
-        {% endif %}
-      {% endfor %}
-    {% elif summary.phrases.top_trouble_phrases %}
-      {% for row in summary.phrases.top_trouble_phrases %}
-        {% if forloop.first %}
-          <h2>Review {{ row.phrase }}</h2>
-          <p>This phrase is the clearest pattern in recent scoring.</p>
-        {% endif %}
-      {% endfor %}
-    {% else %}
-      <h2>Start with a clean rep</h2>
-      <p>Score a practice take to fill today&apos;s queue with specific follow-up.</p>
-    {% endif %}
-  </div>
-  <div class="today-recommendation-action">
-    {% if active_jobs %}
-      {% for job in active_jobs %}
-        {% if forloop.first %}
-          <a class="button-link" href="{% url 'practice:scoring_job' job.pk %}">Open job</a>
-        {% endif %}
-      {% endfor %}
-    {% elif today_queue %}
-      {% for item in today_queue %}
-        {% if forloop.first %}
-          {% if item.script %}
-            <a class="button-link" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ item.script.pk }}&amp;card={{ item.card.pk }}">Practice drill</a>
-          {% else %}
-            <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
-              {% csrf_token %}
-              <input type="hidden" name="provider" value="local_template">
-              <button type="submit">Generate drill</button>
-            </form>
-          {% endif %}
-        {% endif %}
-      {% endfor %}
-    {% else %}
-      <a class="button-link" href="{% url 'practice:practice' %}">Open Practice</a>
-    {% endif %}
-  </div>
-</section>
-
-<section class="today-layout">
-  <article class="panel today-main">
-    <div class="panel-heading">
-      <p class="eyebrow">Next reps</p>
-      <a class="button-link" href="{% url 'practice:cards' %}">Open cards</a>
+<section class="hero-grid">
+  <div class="streak-panel">
+    <div class="streak-top">
+      <span class="label">Current streak</span>
+      <span class="streak-flame" aria-hidden="true">&#128293;</span>
     </div>
+    <div class="ring-wrap">
+      <svg width="168" height="168" viewBox="0 0 168 168" aria-hidden="true">
+        <circle cx="84" cy="84" r="72" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="14"/>
+        <circle cx="84" cy="84" r="72" fill="none" stroke="#f0b84b" stroke-width="14"
+                stroke-linecap="round"
+                stroke-dasharray="452.4"
+                stroke-dashoffset="{{ home.ring_offset }}"/>
+      </svg>
+      <div class="ring-center">
+        <span class="n">{{ home.streak_days }}</span>
+        <span class="d">day{{ home.streak_days|pluralize }} running</span>
+      </div>
+    </div>
+    <div class="streak-foot">
+      <div>
+        <strong>{{ home.reps_today }} of {{ home.daily_goal }}</strong>
+        reps done today
+      </div>
+      <div class="streak-foot-right">
+        <strong>{{ home.best_streak }}</strong>
+        best streak
+      </div>
+    </div>
+  </div>
 
-    {% if queue_rest %}
-      <div class="today-list">
-        {% for item in queue_rest %}
-          <div class="today-item {% if item.is_due %}is-due{% endif %}">
-            <div class="today-index">{{ forloop.counter|add:queue_offset }}</div>
-            <div class="today-copy">
-              <span class="pill">{{ item.card.get_kind_display }}</span>
-              <h2>{{ item.card.display_title }}</h2>
-              <p>{{ item.card.prompt }}</p>
-              <p class="today-why">
-                {% if item.is_due %}Why this is next: due now{% else %}Why this is next: upcoming{% endif %}
-                at mastery {{ item.card.mastery|floatformat:2 }}{% if forloop.first and summary.feedback %}; {{ summary.feedback.0 }}{% endif %}.
-              </p>
-              <small>
-                {% if item.is_due %}Due now{% else %}Upcoming{% endif %}
-                &middot; mastery {{ item.card.mastery|floatformat:2 }}
-                &middot; {{ item.review_count }} reviews
-              </small>
+  <div class="hero-main">
+    <div class="next-card">
+      {% if active_jobs %}
+        {% with job=active_jobs.0 %}
+          <div class="next-card-top">
+            <div>
+              <span class="kind-pill">&#9201; Scoring in flight</span>
+              <h2>Check the {{ job.get_status_display|lower }} scoring job</h2>
+              <p class="prompt">Finish the feedback loop for {{ job.script_name }} before starting another rep.</p>
             </div>
-              <div class="today-actions">
-              {% if item.script %}
-                <a class="button-link" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ item.script.pk }}&amp;card={{ item.card.pk }}">Practice drill</a>
-              {% else %}
-                <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
-                  {% csrf_token %}
-                  <input type="hidden" name="provider" value="local_template">
-                  <button type="submit">Generate drill</button>
-                </form>
-              {% endif %}
-              <a class="quiet-link" href="{% url 'practice:card_detail' item.card.pk %}">Card details</a>
+            <div class="stack-peek" aria-hidden="true">
+              <span class="card-sliver"></span><span class="card-sliver"></span><span class="card-sliver"></span>
             </div>
           </div>
-        {% endfor %}
+          <div class="next-card-actions">
+            <a class="button-link btn-hero" href="{% url 'practice:scoring_job' job.pk %}">Open job</a>
+            <span class="queue-count"><b>{{ home.queued_count }}</b> queued &middot; <b>{{ home.due_count }}</b> due now</span>
+          </div>
+        {% endwith %}
+      {% elif today_queue %}
+        {% with item=today_queue.0 %}
+          <div class="next-card-top">
+            <div>
+              <span class="kind-pill">&#127919; {{ item.card.get_kind_display }} drill</span>
+              <h2>{{ item.card.display_title }}</h2>
+              <p class="prompt">
+                {% if item.card.prompt %}{{ item.card.prompt }}{% elif summary.feedback %}{{ summary.feedback.0 }}{% else %}Built from the patterns your recent takes flagged.{% endif %}
+              </p>
+            </div>
+            <div class="stack-peek" aria-hidden="true">
+              <span class="card-sliver"></span><span class="card-sliver"></span><span class="card-sliver"></span>
+            </div>
+          </div>
+          <div class="next-card-meta">
+            <span>Mastery <b>{{ item.card.mastery|floatformat:2 }}</b></span>
+            <span>Est. <b>3 min</b></span>
+            <span>Reviewed <b>{{ item.review_count }}&times;</b></span>
+          </div>
+          <div class="next-card-actions">
+            {% if item.script %}
+              <a class="button-link btn-hero" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ item.script.pk }}&amp;card={{ item.card.pk }}">&#9654; Start today's practice</a>
+            {% else %}
+              <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="provider" value="local_template">
+                <button class="btn-hero" type="submit">&#9654; Generate &amp; start</button>
+              </form>
+            {% endif %}
+            <a class="button-link secondary-button" href="{% url 'practice:card_detail' item.card.pk %}">Peek at card</a>
+            <span class="queue-count"><b>{{ home.queued_count }}</b> queued &middot; <b>{{ home.due_count }}</b> due now</span>
+          </div>
+        {% endwith %}
+      {% elif summary.phrases.top_trouble_phrases %}
+        {% with row=summary.phrases.top_trouble_phrases.0 %}
+          <div class="next-card-top">
+            <div>
+              <span class="kind-pill">&#127919; Phrase focus</span>
+              <h2>Review "{{ row.phrase }}"</h2>
+              <p class="prompt">This phrase is the clearest pattern in recent scoring.</p>
+            </div>
+            <div class="stack-peek" aria-hidden="true">
+              <span class="card-sliver"></span><span class="card-sliver"></span><span class="card-sliver"></span>
+            </div>
+          </div>
+          <div class="next-card-actions">
+            <a class="button-link btn-hero" href="{% url 'practice:practice' %}">&#9654; Open Practice</a>
+          </div>
+        {% endwith %}
+      {% else %}
+        <div class="next-card-top">
+          <div>
+            <span class="kind-pill">&#127793; First rep</span>
+            <h2>Start with a clean rep</h2>
+            <p class="prompt">Score a practice take to fill today's queue with specific follow-up.</p>
+          </div>
+          <div class="stack-peek" aria-hidden="true">
+            <span class="card-sliver"></span><span class="card-sliver"></span><span class="card-sliver"></span>
+          </div>
+        </div>
+        <div class="next-card-actions">
+          <a class="button-link btn-hero" href="{% url 'practice:practice' %}">&#9654; Open Practice</a>
+        </div>
+      {% endif %}
+    </div>
+
+    {% if home.spark_points %}
+      <div class="trend-strip">
+        <div class="trend-label">Clarity trend<strong>{{ home.clarity_now }}% this week</strong></div>
+        <svg class="sparkline" width="180" height="44" viewBox="0 0 180 44" aria-hidden="true">
+          <polyline fill="none" stroke="#3e7a5c" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"
+                    points="{{ home.spark_points }}"/>
+          <circle cx="{{ home.spark_last_x }}" cy="{{ home.spark_last_y }}" r="5" fill="#3e7a5c"/>
+        </svg>
+        {% if home.clarity_delta is not None %}
+          <span class="trend-delta{% if home.clarity_delta < 0 %} is-down{% endif %}">
+            {% if home.clarity_delta >= 0 %}&#9650;{% else %}&#9660;{% endif %}
+            {{ home.clarity_delta_abs }} pt{{ home.clarity_delta_abs|pluralize }} vs last week
+          </span>
+        {% endif %}
       </div>
-    {% elif today_queue %}
-      <p class="empty">Your next rep is featured above. Nothing else is queued for today.</p>
-    {% else %}
-      <p class="empty">No cards yet. Refresh cards after scoring a few sessions, or import scripts and start practicing.</p>
     {% endif %}
-  </article>
-
-  <aside class="today-side">
-    <article class="panel">
-      <p class="eyebrow">Scoring jobs</p>
-      <div class="job-mini-list">
-        {% for job in active_jobs %}
-          <a class="job-mini" href="{% url 'practice:scoring_job' job.pk %}">
-            <strong>{{ job.get_status_display }}</strong>
-            <span>{{ job.script_name }}</span>
-          </a>
-        {% empty %}
-          <p class="empty">No active scoring jobs.</p>
-        {% endfor %}
-      </div>
-    </article>
-
-    <article class="panel">
-      <p class="eyebrow">Coach notes</p>
-      <ul class="plain-list">
-        {% for line in summary.feedback %}
-          <li>{{ line }}</li>
-        {% endfor %}
-      </ul>
-    </article>
-  </aside>
+  </div>
 </section>
 
-<section class="dashboard-grid">
-  <article class="panel">
-    <p class="eyebrow">Trouble words</p>
-    <div class="rank-list">
-      {% for row in summary.words.top_trouble_words %}
-        <div><strong>{{ row.word }}</strong><span>{{ row.error_rate|floatformat:0 }} error rate</span></div>
-      {% empty %}
-        <p class="empty">More scored sessions will fill this in.</p>
+<section class="section" aria-label="Today's practice queue">
+  <div class="section-head">
+    <h2>Today's practice</h2>
+    <a class="see-all" href="{% url 'practice:cards' %}">See full queue &rarr;</a>
+  </div>
+  {% if today_queue %}
+    <div class="queue-row">
+      {% for item in today_queue %}
+        <div class="queue-card{% if item.is_due %} is-due{% endif %}">
+          <span class="qc-kind kind-{{ item.card.kind }}">{{ item.card.get_kind_display }}</span>
+          <h3>{{ item.card.display_title }}</h3>
+          <div class="qc-due{% if item.is_due %} due-now{% endif %}">
+            {% if item.is_due %}Due now{% else %}Upcoming &middot; {{ item.card.due_at|date:"D" }}{% endif %}
+          </div>
+          <div class="qc-mastery">
+            <div class="bar"><span style="width: {% widthratio item.card.mastery 1 100 %}%"></span></div>
+            <small>{{ item.card.mastery|floatformat:2 }}</small>
+          </div>
+          <div class="qc-actions">
+            {% if item.script %}
+              <a class="button-link qc-btn" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ item.script.pk }}&amp;card={{ item.card.pk }}">Practice</a>
+            {% else %}
+              <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
+                {% csrf_token %}
+                <input type="hidden" name="provider" value="local_template">
+                <button class="qc-btn" type="submit">Generate</button>
+              </form>
+            {% endif %}
+            <a class="quiet-link" href="{% url 'practice:card_detail' item.card.pk %}">Details</a>
+          </div>
+        </div>
       {% endfor %}
     </div>
-  </article>
-  <article class="panel">
-    <p class="eyebrow">Phrase focus</p>
-    <div class="rank-list">
-      {% for row in summary.phrases.top_trouble_phrases %}
-        <div><strong>{{ row.phrase }}</strong><span>{{ row.error_rate|floatformat:0 }} error rate</span></div>
-      {% empty %}
-        <p class="empty">Phrase-level patterns will appear after more scored repetitions.</p>
-      {% endfor %}
-    </div>
-  </article>
+  {% else %}
+    <p class="empty">No cards yet. Refresh cards after scoring a few sessions, or import scripts and start practicing.</p>
+  {% endif %}
 </section>
 
-<section class="dashboard-grid">
-  <article class="panel">
-    <p class="eyebrow">Sound patterns</p>
-    <div class="rank-list">
-      {% for row in summary.sounds.top_trouble_symbols %}
-        <div><strong>{{ row.symbol }}</strong><span>{{ row.errors|floatformat:0 }} errors / {{ row.attempts|floatformat:0 }} attempts</span></div>
-      {% empty %}
-        <p class="empty">No sound patterns yet.</p>
-      {% endfor %}
+{% if home_ladders %}
+  <section class="section" aria-label="Practice ladders">
+    <div class="section-head">
+      <h2>Your ladders</h2>
+      <a class="see-all" href="{% url 'practice:practice' %}?mode=quick">All ladders &rarr;</a>
     </div>
-  </article>
-  <article class="panel">
-    <div class="panel-heading">
-      <p class="eyebrow">Recent scoring jobs</p>
-    </div>
-    <div class="job-mini-list">
-      {% for job in recent_jobs %}
-        <a class="job-mini" href="{% url 'practice:scoring_job' job.pk %}">
-          <strong>{{ job.get_status_display }}</strong>
-          <span>{{ job.script_name }}</span>
-        </a>
-      {% empty %}
-        <p class="empty">No completed jobs yet.</p>
-      {% endfor %}
-    </div>
-  </article>
-</section>
-
-<section class="dashboard-grid">
-  <article class="panel">
-    <div class="panel-heading">
-      <p class="eyebrow">Recent scoring history</p>
-      <a class="button-link" href="{% url 'practice:sessions' %}">View all</a>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Date</th><th>Script</th><th>Score</th><th>WER</th></tr></thead>
-        <tbody>
-          {% for session in recent_sessions %}
-            <tr>
-              <td>{{ session.timestamp }}</td>
-              <td>{{ session.script_name }}</td>
-              <td>{{ session.score|floatformat:2 }}</td>
-              <td>{{ session.wer|floatformat:2 }}</td>
-            </tr>
-          {% empty %}
-            <tr><td colspan="4">No scored sessions yet.</td></tr>
+    {% for ladder in home_ladders %}
+      <div class="ladder-home-panel">
+        <div class="ladder-intro">
+          <div>
+            <h3>{{ ladder.title }}</h3>
+            {% if ladder.theme %}<p>{{ ladder.theme }}</p>{% endif %}
+          </div>
+          <span class="ladder-progress-tag">{{ ladder.steps.count }} rung{{ ladder.steps.count|pluralize }}</span>
+        </div>
+        <div class="trail-steps">
+          {% for step in ladder.steps.all %}
+            <div class="trail-step">
+              <div class="step-node">{{ step.level }}</div>
+              <div class="step-body">
+                <div class="step-text">
+                  <strong>{{ step.title }}</strong>
+                  {% if step.focus %}<span>{{ step.focus|join:", " }}</span>{% endif %}
+                </div>
+                <a class="button-link qc-btn" href="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ ladder.pk }}&amp;level={{ step.level }}&amp;script={{ step.script.pk }}">Practice</a>
+              </div>
+            </div>
           {% endfor %}
-        </tbody>
-      </table>
+        </div>
+      </div>
+    {% endfor %}
+  </section>
+{% endif %}
+
+{% if home.metrics %}
+  <section class="section" aria-label="Metrics summary">
+    <div class="section-head">
+      <h2>This week at a glance</h2>
+      <a class="see-all" href="{% url 'practice:progress' %}">Full progress &rarr;</a>
     </div>
-  </article>
-</section>
+    <div class="metrics-strip">
+      {% for metric in home.metrics %}
+        <div class="metric-pill">
+          <div class="m-label">{{ metric.label }}</div>
+          <div class="m-value">{{ metric.display }}{% if metric.unit %}<small>{{ metric.unit }}</small>{% endif %}</div>
+          <span class="m-tag {{ metric.tag_class }}">{{ metric.tag }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+{% endif %}
+
 {% endblock %}

@@ -50,11 +50,8 @@ from .models import (
 )
 from .services.analytics import (
     active_scoring_jobs,
-    dashboard_stats,
-    recent_scoring_jobs,
-    recent_sessions,
+    home_snapshot,
     refresh_improvement_cards,
-    score_distribution,
     progress_series,
     script_name_options,
     today_queue,
@@ -145,19 +142,16 @@ def dashboard(request):
     summary = trend_summary(request.user)
     queue = today_queue(request.user)
     active_jobs = active_scoring_jobs(request.user)
-    # When the "Do next" hero features the first queue item, the list below
-    # continues from the second item instead of repeating it.
-    hero_takes_first = bool(queue) and not active_jobs
+    now = datetime.now()
+    ladders = _practice_ladders(request.user)
+    own_ladders = [ladder for ladder in ladders if ladder.user_id == request.user.pk]
     context = {
-        "stats": dashboard_stats(request.user),
-        "recent_sessions": recent_sessions(request.user),
         "summary": summary,
         "today_queue": queue,
-        "queue_rest": queue[1:] if hero_takes_first else queue,
-        "queue_offset": 1 if hero_takes_first else 0,
         "active_jobs": active_jobs,
-        "recent_jobs": recent_scoring_jobs(request.user),
-        "score_distribution": score_distribution(request.user),
+        "home": home_snapshot(request.user, queue),
+        "today_label": f"{now:%A}, {now:%B} {now.day}",
+        "home_ladders": (own_ladders or ladders)[:1],
     }
     return render(request, "practice/dashboard.html", context)
 

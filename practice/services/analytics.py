@@ -116,6 +116,163 @@ def recent_scoring_jobs(user=None, limit: int = 4):
     ).order_by("-finished_at", "-created_at")[:limit]
 
 
+def _metric_tag(metric: str, value: float) -> tuple[str, str]:
+    if metric == "wer":
+        if value <= 0.05:
+            return "Excellent", "good"
+        if value <= 0.10:
+            return "Good", "ok"
+        return "Needs work", "watch"
+    if metric == "cer":
+        if value <= 0.02:
+            return "Excellent", "good"
+        if value <= 0.04:
+            return "Good", "ok"
+        return "Needs work", "watch"
+    if metric == "clarity":
+        if value >= 0.95:
+            return "Excellent", "good"
+        if value >= 0.90:
+            return "Good", "ok"
+        return "Watch", "watch"
+    if metric == "avg_conf":
+        if value >= 0.85:
+            return "Excellent", "good"
+        if value >= 0.75:
+            return "Good", "ok"
+        return "Watch", "watch"
+    if metric == "artic_rate":
+        if 120 <= value <= 160:
+            return "On target", "good"
+        if 100 <= value < 120 or 160 < value <= 170:
+            return "Near target", "ok"
+        return "Watch", "watch"
+    if metric == "pause_ratio":
+        if 0.10 <= value <= 0.25:
+            return "On target", "good"
+        if 0.25 < value <= 0.35:
+            return "OK", "ok"
+        return "Watch", "watch"
+    return "", "ok"
+
+
+_HOME_METRICS = [
+    ("wer", "WER", "pct1"),
+    ("cer", "CER", "pct1"),
+    ("clarity", "Clarity", "pct0"),
+    ("avg_conf", "Avg confidence", "conf"),
+    ("artic_rate", "Articulation", "wpm"),
+    ("pause_ratio", "Pause ratio", "pct0"),
+]
+
+
+def home_snapshot(user=None, queue: list[TodayQueueItem] | None = None) -> dict[str, Any]:
+    """Streak, weekly metric bands, and clarity trend for the dashboard hero."""
+    user = _resolve_user(user)
+    queue = queue or []
+    now = datetime.now()
+    rows = PracticeSession.objects.filter(user=user).exclude(score__isnull=True).values_list(
+        "timestamp", "wer", "cer", "clarity", "avg_conf", "artic_rate", "pause_ratio"
+    )
+    dated: list[tuple[datetime, tuple]] = []
+    for ts, *vals in rows:
+        dt = _parse_session_timestamp(ts)
+        if dt is not None:
+            dated.append((dt, tuple(vals)))
+    dated.sort(key=lambda item: item[0])
+
+    practice_days = {dt.date() for dt, _ in dated}
+    today = now.date()
+    streak_days = 0
+    cursor = today if today in practice_days else today - timedelta(days=1)
+    while cursor in practice_days:
+        streak_days += 1
+        cursor -= timedelta(days=1)
+    best_streak = 0
+    run = 0
+    previous = None
+    for day in sorted(practice_days):
+        run = run + 1 if previous is not None and day - previous == timedelta(days=1) else 1
+        best_streak = max(best_streak, run)
+        previous = day
+
+    reps_today = sum(1 for dt, _ in dated if dt.date() == today)
+    due_count = sum(1 for item in queue if item.is_due)
+    daily_goal = max(reps_today + due_count, 1)
+    ring_fraction = min(1.0, reps_today / daily_goal)
+    circumference = 452.4  # 2 * pi * r for the r=72 ring
+    ring_offset = round(circumference * (1 - ring_fraction), 1)
+
+    def _averages(entries: list[tuple]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for index, (key, _label, _fmt) in enumerate(_HOME_METRICS):
+            values = [row[index] for row in entries if row[index] is not None]
+            if values:
+                out[key] = sum(values) / len(values)
+        return out
+
+    week_rows = [vals for dt, vals in dated if dt >= now - timedelta(days=7)]
+    prev_rows = [vals for dt, vals in dated if now - timedelta(days=14) <= dt < now - timedelta(days=7)]
+    week_avg = _averages(week_rows or [vals for _, vals in dated[-6:]])
+    prev_avg = _averages(prev_rows)
+
+    metrics = []
+    for key, label, fmt in _HOME_METRICS:
+        value = week_avg.get(key)
+        if value is None:
+            continue
+        if fmt == "pct1":
+            display, unit = f"{value * 100:.1f}", "%"
+        elif fmt == "pct0":
+            display, unit = f"{value * 100:.0f}", "%"
+        elif fmt == "wpm":
+            display, unit = f"{value:.0f}", "wpm"
+        else:
+            display, unit = f"{value:.2f}", ""
+        tag_label, tag_class = _metric_tag(key, value)
+        metrics.append(
+            {"label": label, "display": display, "unit": unit, "tag": tag_label, "tag_class": tag_class}
+        )
+
+    clarity_now = week_avg.get("clarity")
+    clarity_prev = prev_avg.get("clarity")
+    clarity_delta = None
+    if clarity_now is not None and clarity_prev is not None:
+        clarity_delta = round((clarity_now - clarity_prev) * 100)
+
+    spark_values = [vals[2] for _, vals in dated if vals[2] is not None][-8:]
+    spark_points = None
+    spark_last = None
+    if len(spark_values) >= 2:
+        low, high = min(spark_values), max(spark_values)
+        spread = (high - low) or 1.0
+        coords = []
+        for index, value in enumerate(spark_values):
+            x = round(index * 180 / (len(spark_values) - 1), 1)
+            y = round(38 - ((value - low) / spread) * 32, 1)
+            coords.append(f"{x},{y}")
+        spark_points = " ".join(coords)
+        spark_last = coords[-1].split(",")
+
+    return {
+        "streak_days": streak_days,
+        "best_streak": best_streak,
+        "reps_today": reps_today,
+        "daily_goal": daily_goal,
+        "ring_offset": ring_offset,
+        "metrics": metrics,
+        "clarity_now": round(clarity_now * 100) if clarity_now is not None else None,
+        "clarity_delta": clarity_delta,
+        "clarity_delta_abs": abs(clarity_delta) if clarity_delta is not None else None,
+        "spark_points": spark_points,
+        "spark_last_x": spark_last[0] if spark_last else None,
+        "spark_last_y": spark_last[1] if spark_last else None,
+        "queued_count": len(queue),
+        "due_count": due_count,
+        "est_minutes": 3 * len(queue),
+    }
+
+
 def _latest_generated_scripts(cards: list[ImprovementCard]) -> dict[int, PracticeScript]:
     card_ids = [card.pk for card in cards]
     if not card_ids:

@@ -1,0 +1,1569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpeechPractice — Training</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+
+:root{
+  --paper:#f5f6f4;
+  --panel:#ffffff;
+  --ink:#10151a;
+  --ink-soft:#4b5560;
+  --muted:#7b8790;
+  --line:#e1e4e1;
+  --line-strong:#cdd3d0;
+  --volt:#c6ff3d;
+  --volt-deep:#7ec916;
+  --volt-ink:#233300;
+  --good:#1faa6e;
+  --good-soft:#e4f7ee;
+  --warn:#e5a93b;
+  --warn-soft:#fdf3e1;
+  --bad:#e5484d;
+  --bad-soft:#fdeaea;
+  --shadow-sm: 0 1px 2px rgba(16,21,26,0.06);
+  --shadow-md: 0 8px 24px rgba(16,21,26,0.08);
+  --shadow-lg: 0 20px 48px rgba(16,21,26,0.12);
+  --radius: 14px;
+}
+
+*{ box-sizing:border-box; }
+
+html{ -webkit-font-smoothing:antialiased; }
+
+body{
+  margin:0;
+  background:
+    radial-gradient(1100px 480px at 12% -10%, rgba(198,255,61,0.14), transparent 60%),
+    var(--paper);
+  color:var(--ink);
+  font-family:"Inter", system-ui, sans-serif;
+  line-height:1.45;
+}
+
+.numeral, .metric-value, .gauge-value, .brand-mark, .streak-count, .load-value{
+  font-family:"Space Grotesk", "Inter", sans-serif;
+}
+
+.mono{
+  font-family:"IBM Plex Mono", ui-monospace, monospace;
+}
+
+a{ color:inherit; }
+
+/* ---------- Header / nav ---------- */
+
+.site-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:24px;
+  padding:16px clamp(20px, 4vw, 56px);
+  border-bottom:1px solid var(--line);
+  background:rgba(255,255,255,0.92);
+  backdrop-filter:blur(10px);
+  position:sticky;
+  top:0;
+  z-index:20;
+}
+
+.brand{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  text-decoration:none;
+  color:var(--ink);
+}
+
+.brand-mark{
+  display:grid;
+  place-items:center;
+  width:38px;
+  height:38px;
+  border-radius:10px;
+  background:var(--ink);
+  color:var(--volt);
+  font-weight:700;
+  font-size:15px;
+  letter-spacing:0.02em;
+}
+
+.brand-text strong{
+  display:block;
+  font-size:15px;
+  font-weight:700;
+  letter-spacing:-0.01em;
+}
+
+.brand-text small{
+  display:block;
+  font-size:11px;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:0.09em;
+  font-weight:600;
+}
+
+.site-nav{
+  display:flex;
+  align-items:center;
+  gap:4px;
+  flex-wrap:wrap;
+}
+
+.site-nav a{
+  padding:8px 14px;
+  border-radius:8px;
+  text-decoration:none;
+  font-size:13.5px;
+  font-weight:600;
+  color:var(--ink-soft);
+}
+
+.site-nav a[aria-current="page"]{
+  background:var(--ink);
+  color:var(--volt);
+}
+
+.nav-user{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding-left:10px;
+  margin-left:6px;
+  border-left:1px solid var(--line);
+  font-size:13px;
+  color:var(--muted);
+  font-weight:600;
+}
+
+.nav-user .avatar{
+  width:28px;
+  height:28px;
+  border-radius:50%;
+  background:linear-gradient(135deg, var(--volt), var(--good));
+  display:inline-block;
+}
+
+main{
+  width:min(1160px, calc(100% - 40px));
+  margin:0 auto;
+  padding:32px 0 80px;
+}
+
+/* ---------- Page title / streak strip ---------- */
+
+.page-head{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:24px;
+  margin-bottom:20px;
+  flex-wrap:wrap;
+}
+
+.page-head h1{
+  margin:0;
+  font-family:"Space Grotesk", sans-serif;
+  font-size:34px;
+  font-weight:700;
+  letter-spacing:-0.02em;
+}
+
+.page-head .sub{
+  margin:4px 0 0;
+  color:var(--muted);
+  font-size:14.5px;
+}
+
+.streak-strip{
+  display:flex;
+  align-items:stretch;
+  gap:0;
+  background:var(--ink);
+  border-radius:16px;
+  overflow:hidden;
+  margin-bottom:22px;
+  box-shadow:var(--shadow-lg);
+}
+
+.streak-block{
+  flex:1;
+  padding:20px 24px;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:2px;
+  border-right:1px solid rgba(255,255,255,0.08);
+  position:relative;
+}
+
+.streak-block:last-child{ border-right:none; }
+
+.streak-label{
+  font-size:10.5px;
+  text-transform:uppercase;
+  letter-spacing:0.12em;
+  color:rgba(255,255,255,0.5);
+  font-weight:600;
+}
+
+.streak-count{
+  font-size:30px;
+  font-weight:700;
+  color:#fff;
+  letter-spacing:-0.01em;
+}
+
+.streak-count .unit{
+  font-size:13px;
+  color:rgba(255,255,255,0.55);
+  font-family:"Inter", sans-serif;
+  font-weight:600;
+  margin-left:4px;
+}
+
+.streak-count.volt{ color:var(--volt); }
+
+.streak-days{
+  display:flex;
+  gap:4px;
+  margin-top:8px;
+}
+
+.streak-day{
+  width:14px;
+  height:22px;
+  border-radius:3px;
+  background:rgba(255,255,255,0.12);
+}
+
+.streak-day.done{ background:var(--volt); }
+.streak-day.today{ background:rgba(255,255,255,0.28); outline:1.5px solid var(--volt); outline-offset:2px; }
+
+.load-bar-wrap{
+  flex:1.4;
+  padding:20px 24px;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:8px;
+}
+
+.load-bar-top{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+}
+
+.load-value{
+  font-size:22px;
+  font-weight:700;
+  color:#fff;
+}
+
+.load-bar{
+  height:10px;
+  border-radius:6px;
+  background:rgba(255,255,255,0.12);
+  overflow:hidden;
+  display:flex;
+}
+
+.load-bar-fill{
+  height:100%;
+  border-radius:6px;
+  background:linear-gradient(90deg, var(--volt-deep), var(--volt));
+}
+
+/* ---------- Recommendation banner ---------- */
+
+.next-up{
+  display:flex;
+  align-items:center;
+  gap:20px;
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  padding:18px 22px;
+  margin-bottom:26px;
+  box-shadow:var(--shadow-sm);
+}
+
+.next-up-badge{
+  flex:none;
+  width:46px;
+  height:46px;
+  border-radius:12px;
+  background:var(--volt);
+  display:grid;
+  place-items:center;
+  font-weight:700;
+  color:var(--volt-ink);
+  font-family:"Space Grotesk", sans-serif;
+  font-size:13px;
+}
+
+.next-up-copy{ flex:1; min-width:200px; }
+
+.next-up-copy .eyebrow{ margin:0 0 3px; }
+
+.next-up-copy h2{
+  margin:0 0 3px;
+  font-size:17px;
+  font-weight:700;
+  font-family:"Space Grotesk", sans-serif;
+}
+
+.next-up-copy p{
+  margin:0;
+  font-size:13.5px;
+  color:var(--ink-soft);
+}
+
+.next-up-cta{
+  flex:none;
+  background:var(--ink);
+  color:var(--volt);
+  border:none;
+  border-radius:9px;
+  padding:12px 20px;
+  font-weight:700;
+  font-size:13.5px;
+  text-decoration:none;
+  cursor:pointer;
+  white-space:nowrap;
+}
+
+.eyebrow{
+  text-transform:uppercase;
+  letter-spacing:0.11em;
+  font-size:10.5px;
+  font-weight:700;
+  color:var(--muted);
+  margin:0 0 10px;
+}
+
+/* ---------- Section headers ---------- */
+
+.section-head{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  margin:36px 0 14px;
+}
+
+.section-head h2{
+  margin:0;
+  font-family:"Space Grotesk", sans-serif;
+  font-size:19px;
+  font-weight:700;
+  letter-spacing:-0.01em;
+}
+
+.section-head .link{
+  font-size:12.5px;
+  font-weight:700;
+  color:var(--ink-soft);
+  text-decoration:none;
+  border-bottom:1.5px solid var(--line-strong);
+}
+
+/* ---------- Gauge grid ---------- */
+
+.gauge-grid{
+  display:grid;
+  grid-template-columns:repeat(4, 1fr);
+  gap:16px;
+}
+
+.gauge-card{
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  padding:18px 18px 16px;
+  box-shadow:var(--shadow-sm);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  text-align:center;
+}
+
+.gauge-card .gauge-title{
+  font-size:11.5px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  color:var(--ink-soft);
+  margin-bottom:6px;
+}
+
+.gauge-svg{ width:150px; height:96px; display:block; }
+
+.gauge-value{
+  font-size:30px;
+  font-weight:700;
+  letter-spacing:-0.02em;
+  margin-top:-16px;
+}
+
+.gauge-value .gauge-unit{
+  font-size:12px;
+  font-weight:600;
+  color:var(--muted);
+  font-family:"Inter", sans-serif;
+  margin-left:2px;
+}
+
+.gauge-target{
+  font-size:11px;
+  color:var(--muted);
+  margin-top:2px;
+  font-weight:500;
+}
+
+.gauge-status{
+  margin-top:10px;
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  font-size:11px;
+  font-weight:700;
+  padding:4px 10px;
+  border-radius:100px;
+}
+
+.gauge-status.good{ background:var(--good-soft); color:var(--good); }
+.gauge-status.warn{ background:var(--warn-soft); color:#9c6a1a; }
+.gauge-status.bad{ background:var(--bad-soft); color:var(--bad); }
+
+.gauge-status::before{
+  content:"";
+  width:6px; height:6px;
+  border-radius:50%;
+  background:currentColor;
+}
+
+/* ---------- Trend sparkline row ---------- */
+
+.trend-grid{
+  display:grid;
+  grid-template-columns:repeat(4, 1fr);
+  gap:16px;
+}
+
+.trend-card{
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  padding:16px 18px;
+  box-shadow:var(--shadow-sm);
+}
+
+.trend-top{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+}
+
+.trend-label{
+  font-size:11.5px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:0.07em;
+  color:var(--ink-soft);
+}
+
+.trend-delta{
+  font-size:11.5px;
+  font-weight:700;
+  padding:2px 7px;
+  border-radius:6px;
+}
+
+.trend-delta.up{ color:var(--good); background:var(--good-soft); }
+.trend-delta.down{ color:var(--bad); background:var(--bad-soft); }
+
+.trend-value{
+  font-size:26px;
+  font-weight:700;
+  margin:6px 0 2px;
+  letter-spacing:-0.02em;
+}
+
+.trend-svg{ width:100%; height:44px; display:block; margin-top:6px; }
+
+/* ---------- Two column: plan / coach ---------- */
+
+.split-grid{
+  display:grid;
+  grid-template-columns:1.55fr 1fr;
+  gap:16px;
+  align-items:start;
+}
+
+.panel{
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);
+}
+
+.panel-pad{ padding:20px 22px; }
+
+.plan-list{
+  display:flex;
+  flex-direction:column;
+}
+
+.plan-item{
+  display:flex;
+  align-items:center;
+  gap:16px;
+  padding:16px 22px;
+  border-top:1px solid var(--line);
+}
+
+.plan-item:first-child{ border-top:none; }
+
+.plan-rank{
+  flex:none;
+  width:34px;
+  height:34px;
+  border-radius:9px;
+  display:grid;
+  place-items:center;
+  font-family:"Space Grotesk", sans-serif;
+  font-weight:700;
+  font-size:13px;
+  background:var(--paper);
+  color:var(--ink-soft);
+  border:1px solid var(--line);
+}
+
+.plan-item.due .plan-rank{
+  background:var(--ink);
+  color:var(--volt);
+  border-color:var(--ink);
+}
+
+.plan-copy{ flex:1; min-width:0; }
+
+.plan-tag{
+  display:inline-block;
+  font-size:10px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  padding:2px 8px;
+  border-radius:100px;
+  background:var(--paper);
+  border:1px solid var(--line);
+  color:var(--ink-soft);
+  margin-bottom:5px;
+}
+
+.plan-tag.due{ background:var(--volt); border-color:var(--volt-deep); color:var(--volt-ink); }
+
+.plan-copy h3{
+  margin:0 0 3px;
+  font-size:14.5px;
+  font-weight:700;
+}
+
+.plan-copy p{
+  margin:0;
+  font-size:12.5px;
+  color:var(--muted);
+}
+
+.plan-mastery{
+  flex:none;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:5px;
+  width:56px;
+}
+
+.mastery-ring{ width:40px; height:40px; }
+
+.mastery-ring text{
+  font-family:"Space Grotesk", sans-serif;
+  font-weight:700;
+}
+
+.mastery-label{
+  font-size:9.5px;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  font-weight:600;
+}
+
+.plan-action{
+  flex:none;
+  background:var(--ink);
+  color:var(--volt);
+  border:none;
+  border-radius:8px;
+  padding:9px 14px;
+  font-weight:700;
+  font-size:12.5px;
+  cursor:pointer;
+  white-space:nowrap;
+  text-decoration:none;
+}
+
+.plan-item.due .plan-action{ background:var(--volt); color:var(--volt-ink); }
+
+/* Coach notes */
+
+.coach-note{
+  display:flex;
+  gap:10px;
+  padding:12px 0;
+  border-top:1px solid var(--line);
+  font-size:13px;
+  color:var(--ink-soft);
+}
+
+.coach-note:first-of-type{ border-top:none; padding-top:0; }
+
+.coach-note .dot{
+  flex:none;
+  width:7px; height:7px;
+  margin-top:6px;
+  border-radius:50%;
+  background:var(--volt-deep);
+}
+
+.jobs-panel{ margin-top:16px; }
+
+.job-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:11px 0;
+  border-top:1px solid var(--line);
+  font-size:12.5px;
+}
+
+.job-row:first-of-type{ border-top:none; padding-top:0; }
+
+.job-status-dot{
+  width:8px; height:8px;
+  border-radius:50%;
+  flex:none;
+}
+
+.job-status-dot.running{ background:var(--warn); }
+.job-status-dot.done{ background:var(--good); }
+
+.job-row strong{ font-weight:700; }
+.job-row span{ color:var(--muted); margin-left:auto; }
+
+/* ---------- Trouble words / sounds ---------- */
+
+.trouble-grid{
+  display:grid;
+  grid-template-columns:1.3fr 1fr 1fr;
+  gap:16px;
+}
+
+.trouble-list{ display:flex; flex-direction:column; }
+
+.trouble-row{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:11px 0;
+  border-top:1px solid var(--line);
+}
+
+.trouble-row:first-child{ border-top:none; }
+
+.trouble-word{
+  font-weight:700;
+  font-size:14px;
+  flex:none;
+  width:118px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.trouble-bar-track{
+  flex:1;
+  height:8px;
+  border-radius:5px;
+  background:var(--paper);
+  overflow:hidden;
+}
+
+.trouble-bar-fill{
+  height:100%;
+  border-radius:5px;
+  background:linear-gradient(90deg, var(--warn), var(--bad));
+}
+
+.trouble-pct{
+  flex:none;
+  width:38px;
+  text-align:right;
+  font-size:12.5px;
+  font-weight:700;
+  color:var(--ink-soft);
+}
+
+/* ---------- Workout log table ---------- */
+
+.log-table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:13px;
+}
+
+.log-table th{
+  text-align:left;
+  font-size:10.5px;
+  text-transform:uppercase;
+  letter-spacing:0.07em;
+  color:var(--muted);
+  font-weight:700;
+  padding:0 18px 10px;
+  border-bottom:1px solid var(--line);
+}
+
+.log-table td{
+  padding:13px 18px;
+  border-bottom:1px solid var(--line);
+  vertical-align:middle;
+}
+
+.log-table tr:last-child td{ border-bottom:none; }
+
+.log-script{ font-weight:700; }
+.log-date{ color:var(--muted); font-size:12px; }
+
+.score-pill{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-weight:700;
+  font-family:"Space Grotesk", sans-serif;
+}
+
+.score-pill .chip{
+  width:8px; height:8px;
+  border-radius:50%;
+}
+
+.chip.good{ background:var(--good); }
+.chip.warn{ background:var(--warn); }
+.chip.bad{ background:var(--bad); }
+
+.mini-spark{ width:64px; height:22px; vertical-align:middle; }
+
+/* =========================================================
+   SESSION DETAIL SECTION
+   ========================================================= */
+
+.detail-divider{
+  margin:64px 0 32px;
+  display:flex;
+  align-items:center;
+  gap:16px;
+}
+
+.detail-divider .line{
+  flex:1;
+  height:1px;
+  background:var(--line-strong);
+}
+
+.detail-divider span{
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:0.14em;
+  color:var(--muted);
+  white-space:nowrap;
+}
+
+.session-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  flex-wrap:wrap;
+  gap:16px;
+  margin-bottom:20px;
+}
+
+.session-head h1{
+  margin:0 0 4px;
+  font-family:"Space Grotesk", sans-serif;
+  font-size:28px;
+  font-weight:700;
+}
+
+.session-head .meta{
+  font-size:13px;
+  color:var(--muted);
+}
+
+.session-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+
+.btn{
+  border:1px solid var(--line-strong);
+  background:var(--panel);
+  color:var(--ink);
+  padding:9px 15px;
+  border-radius:8px;
+  font-size:12.5px;
+  font-weight:700;
+  cursor:pointer;
+  text-decoration:none;
+}
+
+.btn.primary{ background:var(--ink); color:var(--volt); border-color:var(--ink); }
+
+/* readout strip */
+
+.readout-strip{
+  display:grid;
+  grid-template-columns:repeat(6, 1fr);
+  gap:1px;
+  background:var(--line);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  overflow:hidden;
+  margin-bottom:24px;
+}
+
+.readout-cell{
+  background:var(--panel);
+  padding:16px 14px;
+  text-align:center;
+}
+
+.readout-cell.hero{ background:var(--ink); }
+
+.readout-cell .rlabel{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  color:var(--muted);
+  font-weight:700;
+  margin-bottom:6px;
+}
+
+.readout-cell.hero .rlabel{ color:rgba(255,255,255,0.5); }
+
+.readout-cell .rvalue{
+  font-size:24px;
+  font-weight:700;
+  letter-spacing:-0.02em;
+}
+
+.readout-cell.hero .rvalue{ color:var(--volt); font-size:26px; }
+
+.readout-cell .rvalue.good{ color:var(--good); }
+.readout-cell .rvalue.warn{ color:#9c6a1a; }
+.readout-cell .rvalue.bad{ color:var(--bad); }
+
+.readout-cell .rband{ font-size:10.5px; color:var(--muted); margin-top:3px; }
+
+/* transcript compare */
+
+.compare-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+  margin-bottom:24px;
+}
+
+.legend-row{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:12px;
+}
+
+.legend-chip{
+  font-size:10.5px;
+  font-weight:700;
+  padding:4px 9px;
+  border-radius:100px;
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+}
+
+.legend-chip::before{
+  content:"";
+  width:7px; height:7px;
+  border-radius:2px;
+  background:currentColor;
+}
+
+.legend-chip.miss{ background:var(--bad-soft); color:var(--bad); }
+.legend-chip.ins{ background:var(--good-soft); color:var(--good); }
+.legend-chip.sub{ background:var(--warn-soft); color:#9c6a1a; }
+
+.script-box{
+  font-size:15px;
+  line-height:2;
+  color:var(--ink-soft);
+}
+
+.script-box mark.miss{
+  background:var(--bad-soft);
+  color:var(--bad);
+  text-decoration:line-through;
+  text-decoration-thickness:1.5px;
+  border-radius:4px;
+  padding:1px 4px;
+  font-weight:600;
+}
+
+.script-box mark.ins{
+  background:var(--good-soft);
+  color:var(--good);
+  border-radius:4px;
+  padding:1px 4px;
+  font-weight:600;
+}
+
+.script-box mark.sub{
+  background:var(--warn-soft);
+  color:#9c6a1a;
+  border-radius:4px;
+  padding:1px 4px;
+  font-weight:700;
+  border-bottom:2px solid var(--warn);
+}
+
+/* waveform mock */
+
+.waveform-panel{ margin-bottom:24px; }
+
+.waveform-svg{ width:100%; height:72px; display:block; }
+
+/* footer note */
+
+.foot-note{
+  text-align:center;
+  color:var(--muted);
+  font-size:12px;
+  margin-top:48px;
+}
+
+@media (max-width: 980px){
+  .gauge-grid, .trend-grid{ grid-template-columns:repeat(2, 1fr); }
+  .split-grid{ grid-template-columns:1fr; }
+  .trouble-grid{ grid-template-columns:1fr; }
+  .readout-strip{ grid-template-columns:repeat(3, 1fr); }
+  .compare-grid{ grid-template-columns:1fr; }
+  .streak-strip{ flex-wrap:wrap; }
+  .streak-block, .load-bar-wrap{ flex:1 1 45%; border-bottom:1px solid rgba(255,255,255,0.08); }
+}
+
+@media (max-width: 620px){
+  .gauge-grid, .trend-grid{ grid-template-columns:1fr; }
+  .readout-strip{ grid-template-columns:repeat(2, 1fr); }
+  .site-nav{ display:none; }
+}
+
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="brand" href="#">
+    <span class="brand-mark">SP</span>
+    <span class="brand-text">
+      <strong>SpeechPractice</strong>
+      <small>Training Log</small>
+    </span>
+  </a>
+  <nav class="site-nav" aria-label="Primary navigation">
+    <a href="#" aria-current="page">Today</a>
+    <a href="#">Practice</a>
+    <a href="#">Plan</a>
+    <a href="#">Progress</a>
+    <a href="#">Scripts</a>
+    <a href="#">History</a>
+  </nav>
+  <div class="nav-user">
+    <span>marcus_v</span>
+    <span class="avatar"></span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============ PAGE HEAD ============ -->
+  <div class="page-head">
+    <div>
+      <h1>Today's session</h1>
+      <p class="sub">Thursday, July 3 &middot; last workout 18h ago</p>
+    </div>
+  </div>
+
+  <!-- ============ STREAK / LOAD STRIP ============ -->
+  <section class="streak-strip">
+    <div class="streak-block">
+      <span class="streak-label">Streak</span>
+      <span class="streak-count volt">12<span class="unit">days</span></span>
+      <div class="streak-days">
+        <span class="streak-day done"></span>
+        <span class="streak-day done"></span>
+        <span class="streak-day done"></span>
+        <span class="streak-day done"></span>
+        <span class="streak-day done"></span>
+        <span class="streak-day done"></span>
+        <span class="streak-day today"></span>
+      </div>
+    </div>
+    <div class="streak-block">
+      <span class="streak-label">Reps this week</span>
+      <span class="streak-count">9<span class="unit">takes</span></span>
+      <div class="streak-days">
+        <span class="streak-day done"></span>
+        <span class="streak-day done"></span>
+        <span class="streak-day done"></span>
+        <span class="streak-day done"></span>
+        <span class="streak-day"></span>
+        <span class="streak-day"></span>
+        <span class="streak-day"></span>
+      </div>
+    </div>
+    <div class="load-bar-wrap">
+      <div class="load-bar-top">
+        <span class="streak-label">Weekly training load</span>
+        <span class="load-value">74<span class="unit" style="color:rgba(255,255,255,.55); font-size:12px;">/100</span></span>
+      </div>
+      <div class="load-bar"><div class="load-bar-fill" style="width:74%"></div></div>
+      <span style="font-size:11px; color:rgba(255,255,255,.5);">On pace for a personal best week</span>
+    </div>
+  </section>
+
+  <!-- ============ NEXT UP ============ -->
+  <section class="next-up">
+    <div class="next-up-badge">NEXT</div>
+    <div class="next-up-copy">
+      <p class="eyebrow" style="margin-bottom:2px;">Do next &middot; due now</p>
+      <h2>Drill: consonant clusters in "particularly" &amp; "statistics"</h2>
+      <p>Mastery sitting at 0.42 &mdash; three reps under target WER will push this card into review rotation.</p>
+    </div>
+    <a class="next-up-cta" href="#">Start rep &rarr;</a>
+  </section>
+
+  <!-- ============ GAUGES ============ -->
+  <div class="section-head">
+    <h2>Performance vs. target</h2>
+    <a class="link" href="#">Full metric history</a>
+  </div>
+  <section class="gauge-grid">
+
+    <!-- WER gauge -->
+    <div class="gauge-card">
+      <span class="gauge-title">Word error rate</span>
+      <svg class="gauge-svg" viewBox="0 0 150 96">
+        <path d="M 15 84 A 60 60 0 0 1 135 84" fill="none" stroke="#e1e4e1" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 15 84 A 60 60 0 0 1 55 27.5" fill="none" stroke="#1faa6e" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 55 27.5 A 60 60 0 0 1 82 25.3" fill="none" stroke="#e5a93b" stroke-width="12"/>
+        <path d="M 82 25.3 A 60 60 0 0 1 135 84" fill="none" stroke="#e5484d" stroke-width="12" stroke-linecap="round"/>
+        <g transform="rotate(65 75 84)">
+          <line x1="75" y1="84" x2="75" y2="44" stroke="#10151a" stroke-width="3" stroke-linecap="round"/>
+        </g>
+        <circle cx="75" cy="84" r="5" fill="#10151a"/>
+      </svg>
+      <div class="gauge-value">6.8<span class="gauge-unit">%</span></div>
+      <div class="gauge-target">target &le; 5%</div>
+      <span class="gauge-status warn">Good</span>
+    </div>
+
+    <!-- Clarity gauge -->
+    <div class="gauge-card">
+      <span class="gauge-title">Clarity</span>
+      <svg class="gauge-svg" viewBox="0 0 150 96">
+        <path d="M 15 84 A 60 60 0 0 1 135 84" fill="none" stroke="#e1e4e1" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 15 84 A 60 60 0 0 1 66 25" fill="none" stroke="#e5484d" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 66 25 A 60 60 0 0 1 100 30" fill="none" stroke="#e5a93b" stroke-width="12"/>
+        <path d="M 100 30 A 60 60 0 0 1 135 84" fill="none" stroke="#1faa6e" stroke-width="12" stroke-linecap="round"/>
+        <g transform="rotate(148 75 84)">
+          <line x1="75" y1="84" x2="75" y2="44" stroke="#10151a" stroke-width="3" stroke-linecap="round"/>
+        </g>
+        <circle cx="75" cy="84" r="5" fill="#10151a"/>
+      </svg>
+      <div class="gauge-value">93<span class="gauge-unit">%</span></div>
+      <div class="gauge-target">target &ge; 95%</div>
+      <span class="gauge-status warn">Good</span>
+    </div>
+
+    <!-- Articulation rate gauge -->
+    <div class="gauge-card">
+      <span class="gauge-title">Articulation rate</span>
+      <svg class="gauge-svg" viewBox="0 0 150 96">
+        <path d="M 15 84 A 60 60 0 0 1 135 84" fill="none" stroke="#e1e4e1" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 15 84 A 60 60 0 0 1 48 32" fill="none" stroke="#e5484d" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 48 32 A 60 60 0 0 1 102 32" fill="none" stroke="#1faa6e" stroke-width="12"/>
+        <path d="M 102 32 A 60 60 0 0 1 135 84" fill="none" stroke="#e5484d" stroke-width="12" stroke-linecap="round"/>
+        <g transform="rotate(108 75 84)">
+          <line x1="75" y1="84" x2="75" y2="44" stroke="#10151a" stroke-width="3" stroke-linecap="round"/>
+        </g>
+        <circle cx="75" cy="84" r="5" fill="#10151a"/>
+      </svg>
+      <div class="gauge-value">148<span class="gauge-unit">wpm</span></div>
+      <div class="gauge-target">target 120&ndash;160</div>
+      <span class="gauge-status good">Excellent</span>
+    </div>
+
+    <!-- Pause ratio gauge -->
+    <div class="gauge-card">
+      <span class="gauge-title">Pause ratio</span>
+      <svg class="gauge-svg" viewBox="0 0 150 96">
+        <path d="M 15 84 A 60 60 0 0 1 135 84" fill="none" stroke="#e1e4e1" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 15 84 A 60 60 0 0 1 45 35" fill="none" stroke="#e5484d" stroke-width="12" stroke-linecap="round"/>
+        <path d="M 45 35 A 60 60 0 0 1 92 27.8" fill="none" stroke="#1faa6e" stroke-width="12"/>
+        <path d="M 92 27.8 A 60 60 0 0 1 135 84" fill="none" stroke="#e5484d" stroke-width="12" stroke-linecap="round"/>
+        <g transform="rotate(97 75 84)">
+          <line x1="75" y1="84" x2="75" y2="44" stroke="#10151a" stroke-width="3" stroke-linecap="round"/>
+        </g>
+        <circle cx="75" cy="84" r="5" fill="#10151a"/>
+      </svg>
+      <div class="gauge-value">21<span class="gauge-unit">%</span></div>
+      <div class="gauge-target">target 10&ndash;25%</div>
+      <span class="gauge-status good">Excellent</span>
+    </div>
+
+  </section>
+
+  <!-- ============ TRENDS ============ -->
+  <div class="section-head">
+    <h2>14-day trend</h2>
+    <a class="link" href="#">See progress</a>
+  </div>
+  <section class="trend-grid">
+
+    <div class="trend-card">
+      <div class="trend-top">
+        <span class="trend-label">WER</span>
+        <span class="trend-delta up">&darr; 2.1pt</span>
+      </div>
+      <div class="trend-value">6.8%</div>
+      <svg class="trend-svg" viewBox="0 0 220 44" preserveAspectRatio="none">
+        <polyline points="0,14 20,18 40,12 60,22 80,20 100,28 120,24 140,32 160,26 180,34 200,30 220,36" fill="none" stroke="#7ec916" stroke-width="2.5"/>
+        <circle cx="220" cy="36" r="3.5" fill="#7ec916"/>
+      </svg>
+    </div>
+
+    <div class="trend-card">
+      <div class="trend-top">
+        <span class="trend-label">Clarity</span>
+        <span class="trend-delta up">&uarr; 3pt</span>
+      </div>
+      <div class="trend-value">93%</div>
+      <svg class="trend-svg" viewBox="0 0 220 44" preserveAspectRatio="none">
+        <polyline points="0,34 20,30 40,32 60,24 80,26 100,18 120,20 140,14 160,16 180,10 200,12 220,6" fill="none" stroke="#7ec916" stroke-width="2.5"/>
+        <circle cx="220" cy="6" r="3.5" fill="#7ec916"/>
+      </svg>
+    </div>
+
+    <div class="trend-card">
+      <div class="trend-top">
+        <span class="trend-label">Articulation</span>
+        <span class="trend-delta down">&uarr; 6 wpm</span>
+      </div>
+      <div class="trend-value">148 <span style="font-size:14px; color:var(--muted); font-weight:600;">wpm</span></div>
+      <svg class="trend-svg" viewBox="0 0 220 44" preserveAspectRatio="none">
+        <polyline points="0,10 20,14 40,12 60,20 80,18 100,26 120,22 140,28 160,24 180,30 200,26 220,20" fill="none" stroke="#e5a93b" stroke-width="2.5"/>
+        <circle cx="220" cy="20" r="3.5" fill="#e5a93b"/>
+      </svg>
+    </div>
+
+    <div class="trend-card">
+      <div class="trend-top">
+        <span class="trend-label">Avg confidence</span>
+        <span class="trend-delta up">&uarr; 0.04</span>
+      </div>
+      <div class="trend-value">0.81</div>
+      <svg class="trend-svg" viewBox="0 0 220 44" preserveAspectRatio="none">
+        <polyline points="0,30 20,28 40,26 60,28 80,22 100,24 120,18 140,20 160,14 180,16 200,10 220,12" fill="none" stroke="#7ec916" stroke-width="2.5"/>
+        <circle cx="220" cy="12" r="3.5" fill="#7ec916"/>
+      </svg>
+    </div>
+
+  </section>
+
+  <!-- ============ TRAINING PLAN + COACH ============ -->
+  <div class="section-head">
+    <h2>Training plan</h2>
+    <a class="link" href="#">Open full plan</a>
+  </div>
+  <section class="split-grid">
+
+    <div class="panel plan-list">
+
+      <div class="plan-item due">
+        <div class="plan-rank">01</div>
+        <div class="plan-copy">
+          <span class="plan-tag due">Due now</span>
+          <h3>Consonant clusters &mdash; "particularly"</h3>
+          <p>4 reviews logged &middot; last WER 9.2% on this card</p>
+        </div>
+        <div class="plan-mastery">
+          <svg class="mastery-ring" viewBox="0 0 40 40">
+            <circle cx="20" cy="20" r="16" fill="none" stroke="#e1e4e1" stroke-width="4"/>
+            <circle cx="20" cy="20" r="16" fill="none" stroke="#e5a93b" stroke-width="4" stroke-dasharray="100.5" stroke-dashoffset="58" transform="rotate(-90 20 20)" stroke-linecap="round"/>
+            <text x="20" y="24" text-anchor="middle" font-size="11" fill="#10151a">.42</text>
+          </svg>
+          <span class="mastery-label">Mastery</span>
+        </div>
+        <a class="plan-action" href="#">Drill</a>
+      </div>
+
+      <div class="plan-item">
+        <div class="plan-rank">02</div>
+        <div class="plan-copy">
+          <span class="plan-tag">Upcoming</span>
+          <h3>Rural / plural R-blends</h3>
+          <p>2 reviews logged &middot; drill script not yet generated</p>
+        </div>
+        <div class="plan-mastery">
+          <svg class="mastery-ring" viewBox="0 0 40 40">
+            <circle cx="20" cy="20" r="16" fill="none" stroke="#e1e4e1" stroke-width="4"/>
+            <circle cx="20" cy="20" r="16" fill="none" stroke="#e5484d" stroke-width="4" stroke-dasharray="100.5" stroke-dashoffset="76" transform="rotate(-90 20 20)" stroke-linecap="round"/>
+            <text x="20" y="24" text-anchor="middle" font-size="11" fill="#10151a">.24</text>
+          </svg>
+          <span class="mastery-label">Mastery</span>
+        </div>
+        <a class="plan-action" href="#">Generate</a>
+      </div>
+
+      <div class="plan-item">
+        <div class="plan-rank">03</div>
+        <div class="plan-copy">
+          <span class="plan-tag">Upcoming</span>
+          <h3>Sentence-final devoicing</h3>
+          <p>6 reviews logged &middot; trending toward mastery</p>
+        </div>
+        <div class="plan-mastery">
+          <svg class="mastery-ring" viewBox="0 0 40 40">
+            <circle cx="20" cy="20" r="16" fill="none" stroke="#e1e4e1" stroke-width="4"/>
+            <circle cx="20" cy="20" r="16" fill="none" stroke="#1faa6e" stroke-width="4" stroke-dasharray="100.5" stroke-dashoffset="24" transform="rotate(-90 20 20)" stroke-linecap="round"/>
+            <text x="20" y="24" text-anchor="middle" font-size="11" fill="#10151a">.76</text>
+          </svg>
+          <span class="mastery-label">Mastery</span>
+        </div>
+        <a class="plan-action" href="#">Drill</a>
+      </div>
+
+      <div class="plan-item">
+        <div class="plan-rank">04</div>
+        <div class="plan-copy">
+          <span class="plan-tag">Upcoming</span>
+          <h3>"Statistics" &mdash; multisyllabic /st/ onset</h3>
+          <p>1 review logged &middot; new card from Tuesday's session</p>
+        </div>
+        <div class="plan-mastery">
+          <svg class="mastery-ring" viewBox="0 0 40 40">
+            <circle cx="20" cy="20" r="16" fill="none" stroke="#e1e4e1" stroke-width="4"/>
+            <circle cx="20" cy="20" r="16" fill="none" stroke="#e5484d" stroke-width="4" stroke-dasharray="100.5" stroke-dashoffset="88" transform="rotate(-90 20 20)" stroke-linecap="round"/>
+            <text x="20" y="24" text-anchor="middle" font-size="11" fill="#10151a">.12</text>
+          </svg>
+          <span class="mastery-label">Mastery</span>
+        </div>
+        <a class="plan-action" href="#">Drill</a>
+      </div>
+
+    </div>
+
+    <aside style="display:flex; flex-direction:column; gap:16px;">
+      <div class="panel panel-pad">
+        <p class="eyebrow">Coach notes</p>
+        <div class="coach-note"><span class="dot"></span><span>Your WER on multisyllabic words is 2.3x your single-syllable rate &mdash; keep leaning on the cluster drills.</span></div>
+        <div class="coach-note"><span class="dot"></span><span>Pause ratio has stabilized inside target for 5 straight sessions. Nice control.</span></div>
+        <div class="coach-note"><span class="dot"></span><span>Articulation rate crept above 150 wpm twice this week &mdash; ease off slightly on familiar scripts.</span></div>
+      </div>
+
+      <div class="panel panel-pad jobs-panel">
+        <p class="eyebrow">Scoring jobs</p>
+        <div class="job-row">
+          <span class="job-status-dot running"></span>
+          <strong>Scoring</strong>
+          <span>Boardroom Intro v3</span>
+        </div>
+        <div class="job-row">
+          <span class="job-status-dot done"></span>
+          <strong>Complete</strong>
+          <span>Cluster Drill 04</span>
+        </div>
+      </div>
+    </aside>
+
+  </section>
+
+  <!-- ============ TROUBLE WORDS / SOUNDS / PHRASES ============ -->
+  <div class="section-head">
+    <h2>Where the errors live</h2>
+  </div>
+  <section class="trouble-grid">
+
+    <div class="panel panel-pad">
+      <p class="eyebrow">Trouble words</p>
+      <div class="trouble-list">
+        <div class="trouble-row">
+          <span class="trouble-word">particularly</span>
+          <div class="trouble-bar-track"><div class="trouble-bar-fill" style="width:78%"></div></div>
+          <span class="trouble-pct">78%</span>
+        </div>
+        <div class="trouble-row">
+          <span class="trouble-word">statistics</span>
+          <div class="trouble-bar-track"><div class="trouble-bar-fill" style="width:64%"></div></div>
+          <span class="trouble-pct">64%</span>
+        </div>
+        <div class="trouble-row">
+          <span class="trouble-word">rural</span>
+          <div class="trouble-bar-track"><div class="trouble-bar-fill" style="width:57%"></div></div>
+          <span class="trouble-pct">57%</span>
+        </div>
+        <div class="trouble-row">
+          <span class="trouble-word">quarterly</span>
+          <div class="trouble-bar-track"><div class="trouble-bar-fill" style="width:41%"></div></div>
+          <span class="trouble-pct">41%</span>
+        </div>
+        <div class="trouble-row">
+          <span class="trouble-word">specifically</span>
+          <div class="trouble-bar-track"><div class="trouble-bar-fill" style="width:33%"></div></div>
+          <span class="trouble-pct">33%</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel panel-pad">
+      <p class="eyebrow">Sound patterns</p>
+      <div class="trouble-list">
+        <div class="trouble-row">
+          <span class="trouble-word mono">/str/</span>
+          <div class="trouble-bar-track"><div class="trouble-bar-fill" style="width:70%"></div></div>
+          <span class="trouble-pct">14/20</span>
+        </div>
+        <div class="trouble-row">
+          <span class="trouble-word mono">/r/</span>
+          <div class="trouble-bar-track"><div class="trouble-bar-fill" style="width:52%"></div></div>
+          <span class="trouble-pct">11/21</span>
+        </div>
+        <div class="trouble-row">
+          <span class="trouble-word mono">/kl/</span>
+          <div class="trouble-bar-track"><div class="trouble-bar-fill" style="width:38%"></div></div>
+          <span class="trouble-pct">8/21</span>
+        </div>
+        <div class="trouble-row">
+          <span class="trouble-word mono">/th/</span>
+          <div class="trouble-bar-track"><div class="trouble-bar-fill" style="width:24%"></div></div>
+          <span class="trouble-pct">5/21</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel panel-pad">
+      <p class="eyebrow">Phrase focus</p>
+      <div class="trouble-list">
+        <div class="trouble-row">
+          <span class="trouble-word" style="width:auto; flex:1;">"a rural district"</span>
+          <span class="trouble-pct">61%</span>
+        </div>
+        <div class="trouble-row">
+          <span class="trouble-word" style="width:auto; flex:1;">"quarterly statistics show"</span>
+          <span class="trouble-pct">55%</span>
+        </div>
+        <div class="trouble-row">
+          <span class="trouble-word" style="width:auto; flex:1;">"particularly relevant to"</span>
+          <span class="trouble-pct">48%</span>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ============ WORKOUT LOG ============ -->
+  <div class="section-head">
+    <h2>Recent workouts</h2>
+    <a class="link" href="#">View all sessions</a>
+  </div>
+  <section class="panel">
+    <table class="log-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Script</th>
+          <th>Score</th>
+          <th>WER</th>
+          <th>Clarity</th>
+          <th>Trend</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="log-date">Jul 3, 9:14 AM</span></td>
+          <td><span class="log-script">Boardroom Intro v3</span></td>
+          <td><span class="score-pill"><span class="chip good"></span>91.2</span></td>
+          <td>6.8%</td>
+          <td>93%</td>
+          <td><svg class="mini-spark" viewBox="0 0 64 22"><polyline points="0,14 12,10 24,16 36,8 48,12 64,6" fill="none" stroke="#7ec916" stroke-width="2"/></svg></td>
+        </tr>
+        <tr>
+          <td><span class="log-date">Jul 2, 7:02 PM</span></td>
+          <td><span class="log-script">Cluster Drill 04</span></td>
+          <td><span class="score-pill"><span class="chip warn"></span>82.4</span></td>
+          <td>11.3%</td>
+          <td>88%</td>
+          <td><svg class="mini-spark" viewBox="0 0 64 22"><polyline points="0,8 12,12 24,10 36,16 48,14 64,18" fill="none" stroke="#e5a93b" stroke-width="2"/></svg></td>
+        </tr>
+        <tr>
+          <td><span class="log-date">Jul 2, 8:11 AM</span></td>
+          <td><span class="log-script">Wedding Toast Draft</span></td>
+          <td><span class="score-pill"><span class="chip good"></span>94.6</span></td>
+          <td>4.1%</td>
+          <td>96%</td>
+          <td><svg class="mini-spark" viewBox="0 0 64 22"><polyline points="0,16 12,14 24,10 36,10 48,6 64,4" fill="none" stroke="#7ec916" stroke-width="2"/></svg></td>
+        </tr>
+        <tr>
+          <td><span class="log-date">Jun 30, 6:40 PM</span></td>
+          <td><span class="log-script">Rural District Passage</span></td>
+          <td><span class="score-pill"><span class="chip bad"></span>68.0</span></td>
+          <td>19.5%</td>
+          <td>77%</td>
+          <td><svg class="mini-spark" viewBox="0 0 64 22"><polyline points="0,4 12,8 24,6 36,12 48,16 64,20" fill="none" stroke="#e5484d" stroke-width="2"/></svg></td>
+        </tr>
+        <tr>
+          <td><span class="log-date">Jun 29, 9:20 AM</span></td>
+          <td><span class="log-script">Boardroom Intro v2</span></td>
+          <td><span class="score-pill"><span class="chip good"></span>89.1</span></td>
+          <td>7.9%</td>
+          <td>91%</td>
+          <td><svg class="mini-spark" viewBox="0 0 64 22"><polyline points="0,10 12,12 24,8 36,10 48,6 64,8" fill="none" stroke="#7ec916" stroke-width="2"/></svg></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================================================================
+       SESSION DETAIL VIEW
+       ================================================================ -->
+
+  <div class="detail-divider">
+    <span>Session detail &middot; example workout</span>
+    <div class="line"></div>
+  </div>
+
+  <section class="session-head">
+    <div>
+      <h1>Boardroom Intro v3</h1>
+      <p class="meta">Scored take &middot; Jul 3, 2026, 9:14 AM &middot; take 3 of 4</p>
+    </div>
+    <div class="session-actions">
+      <a class="btn" href="#">Export report</a>
+      <button class="btn">Copy mistakes</button>
+      <button class="btn primary">Regenerate drill</button>
+    </div>
+  </section>
+
+  <section class="readout-strip">
+    <div class="readout-cell hero">
+      <div class="rlabel">Score</div>
+      <div class="rvalue">91.2</div>
+      <div class="rband" style="color:rgba(255,255,255,.4);">personal best 94.6</div>
+    </div>
+    <div class="readout-cell">
+      <div class="rlabel">WER</div>
+      <div class="rvalue warn">6.8%</div>
+      <div class="rband">target &le; 5%</div>
+    </div>
+    <div class="readout-cell">
+      <div class="rlabel">CER</div>
+      <div class="rvalue good">2.1%</div>
+      <div class="rband">target &le; 2%</div>
+    </div>
+    <div class="readout-cell">
+      <div class="rlabel">Clarity</div>
+      <div class="rvalue warn">93%</div>
+      <div class="rband">target &ge; 95%</div>
+    </div>
+    <div class="readout-cell">
+      <div class="rlabel">Avg confidence</div>
+      <div class="rvalue good">0.81</div>
+      <div class="rband">target &ge; 0.85</div>
+    </div>
+    <div class="readout-cell">
+      <div class="rlabel">Artic. rate</div>
+      <div class="rvalue good">148 wpm</div>
+      <div class="rband">target 120&ndash;160</div>
+    </div>
+  </section>
+
+  <section class="panel panel-pad waveform-panel">
+    <p class="eyebrow" style="margin-bottom:12px;">Replay &middot; click waveform to seek</p>
+    <svg class="waveform-svg" viewBox="0 0 1000 72" preserveAspectRatio="none">
+      <rect x="0" y="0" width="1000" height="72" fill="#f5f6f4"/>
+      <g fill="#cdd3d0">
+        <rect x="0" y="30" width="4" height="12"/><rect x="8" y="22" width="4" height="28"/><rect x="16" y="12" width="4" height="48"/><rect x="24" y="26" width="4" height="20"/><rect x="32" y="18" width="4" height="36"/><rect x="40" y="8" width="4" height="56"/><rect x="48" y="20" width="4" height="32"/><rect x="56" y="28" width="4" height="16"/><rect x="64" y="14" width="4" height="44"/><rect x="72" y="24" width="4" height="24"/><rect x="80" y="10" width="4" height="52"/><rect x="88" y="30" width="4" height="12"/><rect x="96" y="18" width="4" height="36"/><rect x="104" y="26" width="4" height="20"/><rect x="112" y="12" width="4" height="48"/><rect x="120" y="22" width="4" height="28"/>
+      </g>
+      <g fill="#233300">
+        <rect x="128" y="16" width="4" height="40"/><rect x="136" y="8" width="4" height="56"/><rect x="144" y="20" width="4" height="32"/><rect x="152" y="28" width="4" height="16"/><rect x="160" y="10" width="4" height="52"/><rect x="168" y="18" width="4" height="36"/><rect x="176" y="24" width="4" height="24"/><rect x="184" y="14" width="4" height="44"/><rect x="192" y="26" width="4" height="20"/><rect x="200" y="12" width="4" height="48"/>
+      </g>
+      <g fill="#cdd3d0">
+        <rect x="208" y="22" width="4" height="28"/><rect x="216" y="18" width="4" height="36"/><rect x="224" y="8" width="4" height="56"/><rect x="232" y="20" width="4" height="32"/><rect x="240" y="28" width="4" height="16"/><rect x="248" y="14" width="4" height="44"/><rect x="256" y="24" width="4" height="24"/><rect x="264" y="10" width="4" height="52"/><rect x="272" y="30" width="4" height="12"/><rect x="280" y="18" width="4" height="36"/><rect x="288" y="26" width="4" height="20"/><rect x="296" y="12" width="4" height="48"/><rect x="304" y="22" width="4" height="28"/><rect x="312" y="16" width="4" height="40"/><rect x="320" y="8" width="4" height="56"/><rect x="328" y="20" width="4" height="32"/><rect x="336" y="28" width="4" height="16"/><rect x="344" y="10" width="4" height="52"/><rect x="352" y="18" width="4" height="36"/><rect x="360" y="24" width="4" height="24"/><rect x="368" y="14" width="4" height="44"/><rect x="376" y="26" width="4" height="20"/><rect x="384" y="12" width="4" height="48"/><rect x="392" y="22" width="4" height="28"/>
+      </g>
+      <line x1="420" y1="0" x2="420" y2="72" stroke="#c6ff3d" stroke-width="2"/>
+      <g fill="#e1e4e1">
+        <rect x="428" y="18" width="4" height="36"/><rect x="436" y="26" width="4" height="20"/><rect x="444" y="12" width="4" height="48"/><rect x="452" y="22" width="4" height="28"/><rect x="460" y="16" width="4" height="40"/><rect x="468" y="8" width="4" height="56"/><rect x="476" y="20" width="4" height="32"/><rect x="484" y="28" width="4" height="16"/><rect x="492" y="14" width="4" height="44"/><rect x="500" y="24" width="4" height="24"/><rect x="508" y="10" width="4" height="52"/><rect x="516" y="30" width="4" height="12"/><rect x="524" y="18" width="4" height="36"/><rect x="532" y="26" width="4" height="20"/><rect x="540" y="12" width="4" height="48"/><rect x="548" y="22" width="4" height="28"/><rect x="556" y="16" width="4" height="40"/><rect x="564" y="8" width="4" height="56"/><rect x="572" y="20" width="4" height="32"/><rect x="580" y="28" width="4" height="16"/><rect x="588" y="14" width="4" height="44"/><rect x="596" y="24" width="4" height="24"/><rect x="604" y="10" width="4" height="52"/><rect x="612" y="30" width="4" height="12"/><rect x="620" y="18" width="4" height="36"/><rect x="628" y="26" width="4" height="20"/><rect x="636" y="12" width="4" height="48"/><rect x="644" y="22" width="4" height="28"/><rect x="652" y="16" width="4" height="40"/><rect x="660" y="8" width="4" height="56"/><rect x="668" y="20" width="4" height="32"/><rect x="676" y="28" width="4" height="16"/><rect x="684" y="14" width="4" height="44"/><rect x="692" y="24" width="4" height="24"/><rect x="700" y="10" width="4" height="52"/><rect x="708" y="18" width="4" height="36"/><rect x="716" y="26" width="4" height="20"/><rect x="724" y="12" width="4" height="48"/><rect x="732" y="22" width="4" height="28"/><rect x="740" y="16" width="4" height="40"/><rect x="748" y="8" width="4" height="56"/><rect x="756" y="20" width="4" height="32"/><rect x="764" y="28" width="4" height="16"/><rect x="772" y="14" width="4" height="44"/><rect x="780" y="24" width="4" height="24"/><rect x="788" y="10" width="4" height="52"/><rect x="796" y="30" width="4" height="12"/><rect x="804" y="18" width="4" height="36"/><rect x="812" y="26" width="4" height="20"/><rect x="820" y="12" width="4" height="48"/><rect x="828" y="22" width="4" height="28"/><rect x="836" y="16" width="4" height="40"/><rect x="844" y="8" width="4" height="56"/><rect x="852" y="20" width="4" height="32"/><rect x="860" y="28" width="4" height="16"/><rect x="868" y="14" width="4" height="44"/><rect x="876" y="24" width="4" height="24"/><rect x="884" y="10" width="4" height="52"/><rect x="892" y="30" width="4" height="12"/><rect x="900" y="18" width="4" height="36"/><rect x="908" y="26" width="4" height="20"/><rect x="916" y="12" width="4" height="48"/><rect x="924" y="22" width="4" height="28"/><rect x="932" y="16" width="4" height="40"/><rect x="940" y="8" width="4" height="56"/><rect x="948" y="20" width="4" height="32"/><rect x="956" y="28" width="4" height="16"/><rect x="964" y="14" width="4" height="44"/><rect x="972" y="24" width="4" height="24"/><rect x="980" y="10" width="4" height="52"/><rect x="988" y="18" width="4" height="36"/>
+      </g>
+    </svg>
+  </section>
+
+  <section class="compare-grid">
+    <div class="panel panel-pad">
+      <p class="eyebrow" style="margin-bottom:8px;">Target script</p>
+      <div class="legend-row">
+        <span class="legend-chip miss">omitted</span>
+        <span class="legend-chip sub">substituted</span>
+      </div>
+      <div class="script-box">
+        Good morning, everyone. I'd like to walk you through the <mark class="sub">quarterly</mark> statistics from our <mark class="miss">rural</mark> district launch, and explain why this rollout is <mark class="sub">particularly</mark> relevant to our expansion plan.
+      </div>
+    </div>
+    <div class="panel panel-pad">
+      <p class="eyebrow" style="margin-bottom:8px;">What was heard</p>
+      <div class="legend-row">
+        <span class="legend-chip ins">inserted</span>
+        <span class="legend-chip sub">substituted</span>
+      </div>
+      <div class="script-box">
+        Good morning, everyone. I'd like to walk you through the <mark class="sub">quarter</mark> statistics from our <mark class="ins">the</mark> district launch, and explain why this rollout is <mark class="sub">particurly</mark> relevant to our expansion plan.
+      </div>
+    </div>
+  </section>
+
+  <section class="panel panel-pad">
+    <p class="eyebrow" style="margin-bottom:10px;">Self-review &rarr; training cards</p>
+    <div class="coach-note" style="border-top:none; padding-top:0;">
+      <span class="dot"></span>
+      <span>Dropped the "-ly" ending twice under time pressure. The /r/ in "rural" keeps collapsing into a vowel. Suggest a slow-drill card targeting rhotic endings in multisyllabic words.</span>
+    </div>
+  </section>
+
+</main>
+
+<p class="foot-note">Design concept 03 &middot; Performance Coach &middot; static mockup, no live data</p>
+
+</body>
+</html>

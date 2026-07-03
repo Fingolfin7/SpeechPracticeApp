@@ -1,0 +1,1119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpeechPractice — Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,380;9..144,480;9..144,600&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --stage-black:#0a0b0d;
+    --panel:#131519;
+    --panel-raised:#1a1d22;
+    --panel-raised-2:#20242b;
+    --hairline:#2a2e35;
+    --hairline-soft:#22252b;
+    --amber:#ffb833;
+    --amber-soft:#ffd27a;
+    --amber-dim:#7a5a1f;
+    --amber-glow:rgba(255,184,51,.35);
+    --rec-red:#ff5252;
+    --rec-glow:rgba(255,82,82,.45);
+    --green-led:#6fdc8c;
+    --text-hi:#f2ede2;
+    --text-mid:#9a9da5;
+    --text-low:#5b5e66;
+    --serif:'Fraunces', Georgia, serif;
+    --mono:'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+    --sans:'Inter', 'Segoe UI', sans-serif;
+  }
+
+  *{box-sizing:border-box;}
+  html{background:var(--stage-black);}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(255,184,51,.05), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(255,184,51,.04), transparent 55%),
+      var(--stage-black);
+    color:var(--text-hi);
+    font-family:var(--sans);
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  a{color:inherit;}
+  ::selection{background:var(--amber);color:#1a1206;}
+
+  a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible{
+    outline:2px solid var(--amber);
+    outline-offset:2px;
+    border-radius:4px;
+  }
+
+  .eyebrow{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--text-mid);
+    margin:0 0 8px;
+  }
+
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+
+  /* ============ HEADER / TRANSPORT BAR ============ */
+  .transport{
+    display:flex;
+    align-items:center;
+    gap:28px;
+    padding:14px clamp(18px,3vw,44px);
+    border-bottom:1px solid var(--hairline);
+    background:linear-gradient(180deg, #101216, #0d0f12);
+    position:sticky;
+    top:0;
+    z-index:20;
+  }
+  .brand{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    text-decoration:none;
+    padding-right:24px;
+    border-right:1px solid var(--hairline);
+  }
+  .brand-mark{
+    width:34px;height:34px;
+    border-radius:7px;
+    display:grid;place-items:center;
+    background:linear-gradient(155deg,#22262d,#15171b);
+    border:1px solid var(--hairline);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+    position:relative;
+  }
+  .brand-mark::after{
+    content:"";
+    width:7px;height:7px;
+    border-radius:50%;
+    background:var(--rec-red);
+    box-shadow:0 0 8px var(--rec-glow);
+    position:absolute;
+    top:6px;right:6px;
+  }
+  .brand-mark svg{width:17px;height:17px;color:var(--amber);}
+  .brand strong{
+    font-family:var(--sans);
+    font-weight:700;
+    font-size:14.5px;
+    letter-spacing:.01em;
+    display:block;
+  }
+  .brand small{
+    font-family:var(--mono);
+    font-size:10px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--text-mid);
+  }
+
+  .transport-nav{
+    display:flex;
+    align-items:center;
+    gap:2px;
+    flex:1;
+    flex-wrap:wrap;
+  }
+  .transport-nav a{
+    display:flex;
+    align-items:center;
+    gap:7px;
+    text-decoration:none;
+    font-size:12.5px;
+    font-weight:500;
+    color:var(--text-mid);
+    padding:9px 13px;
+    border-radius:6px;
+    position:relative;
+  }
+  .transport-nav a .led{
+    width:5px;height:5px;
+    border-radius:50%;
+    background:var(--hairline);
+  }
+  .transport-nav a:hover{color:var(--text-hi); background:var(--panel-raised);}
+  .transport-nav a.is-active{color:var(--text-hi);background:var(--panel-raised-2);}
+  .transport-nav a.is-active .led{
+    background:var(--amber);
+    box-shadow:0 0 6px var(--amber-glow);
+  }
+
+  .transport-user{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    font-family:var(--mono);
+    font-size:11.5px;
+    color:var(--text-mid);
+  }
+  .transport-user button{
+    font-family:var(--sans);
+    font-size:12px;
+    color:var(--text-mid);
+    background:transparent;
+    border:1px solid var(--hairline);
+    border-radius:6px;
+    padding:7px 11px;
+    cursor:pointer;
+  }
+  .transport-user button:hover{color:var(--text-hi);border-color:#3a3f48;}
+
+  main{
+    width:min(1160px, calc(100% - 40px));
+    margin:0 auto;
+    padding:36px 0 90px;
+  }
+
+  /* ============ HERO: SESSION HEADER ============ */
+  .session-head{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:20px;
+    margin-bottom:18px;
+    flex-wrap:wrap;
+  }
+  .session-head h1{
+    font-family:var(--serif);
+    font-weight:480;
+    font-size:28px;
+    margin:2px 0 0;
+    letter-spacing:-.01em;
+  }
+  .session-meta{
+    display:flex;
+    gap:22px;
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--text-mid);
+  }
+  .session-meta strong{color:var(--text-hi);font-weight:600;}
+
+  /* ============ HERO GRID ============ */
+  .studio{
+    display:grid;
+    grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);
+    gap:18px;
+    align-items:stretch;
+  }
+
+  /* Teleprompter */
+  .prompter{
+    background:linear-gradient(180deg,#0e1013,#0b0c0f 60%);
+    border:1px solid var(--hairline);
+    border-radius:14px;
+    position:relative;
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+    box-shadow:0 30px 60px -30px rgba(0,0,0,.7);
+  }
+  .prompter-bar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:14px 20px;
+    border-bottom:1px solid var(--hairline-soft);
+    gap:12px;
+  }
+  .prompter-bar .tag{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    font-family:var(--mono);
+    font-size:10.5px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    color:var(--amber-soft);
+    background:rgba(255,184,51,.08);
+    border:1px solid rgba(255,184,51,.25);
+    padding:4px 9px;
+    border-radius:100px;
+  }
+  .prompter-bar .wc{
+    font-family:var(--mono);
+    font-size:11.5px;
+    color:var(--text-mid);
+  }
+
+  .prompter-glass{
+    position:relative;
+    flex:1;
+    padding:38px 44px 44px;
+    min-height:340px;
+    display:flex;
+    align-items:center;
+  }
+  .prompter-glass::before,
+  .prompter-glass::after{
+    content:"";
+    position:absolute;
+    left:0;right:0;
+    height:74px;
+    pointer-events:none;
+    z-index:2;
+  }
+  .prompter-glass::before{
+    top:0;
+    background:linear-gradient(180deg, #0e1013 5%, transparent);
+  }
+  .prompter-glass::after{
+    bottom:0;
+    background:linear-gradient(0deg, #0b0c0f 5%, transparent);
+  }
+  .script-text{
+    font-family:var(--serif);
+    font-weight:380;
+    font-size:26px;
+    line-height:1.65;
+    color:#787c86;
+    letter-spacing:.001em;
+  }
+  .script-text .said{ color:#4b4e56; }
+  .script-text .current{
+    color:var(--text-hi);
+    position:relative;
+    padding:2px 3px;
+    border-radius:5px;
+    background:linear-gradient(90deg, rgba(255,184,51,.14), rgba(255,184,51,.03));
+    box-shadow:inset 0 -2px 0 var(--amber);
+  }
+  .script-text .next{ color:#9498a1; }
+
+  .prompter-foot{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:12px 20px;
+    border-top:1px solid var(--hairline-soft);
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--text-mid);
+  }
+  .prompter-progress{
+    flex:1;
+    margin:0 18px;
+    height:3px;
+    background:var(--hairline);
+    border-radius:3px;
+    overflow:hidden;
+  }
+  .prompter-progress span{
+    display:block;
+    height:100%;
+    width:41%;
+    background:linear-gradient(90deg, var(--amber-dim), var(--amber));
+  }
+
+  /* Channel strip */
+  .channel{
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+  .rack{
+    background:var(--panel);
+    border:1px solid var(--hairline);
+    border-radius:14px;
+    padding:18px 20px;
+  }
+
+  .waveform-rack{
+    padding-bottom:14px;
+  }
+  .waveform-rack .rack-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:12px;
+  }
+  .rec-dot{
+    width:8px;height:8px;border-radius:50%;
+    background:var(--rec-red);
+    box-shadow:0 0 9px var(--rec-glow);
+    display:inline-block;
+    animation:blink 1.4s ease-in-out infinite;
+  }
+  @keyframes blink{ 0%,100%{opacity:1;} 50%{opacity:.25;} }
+  .rec-label{
+    display:flex;align-items:center;gap:7px;
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.08em;
+    color:var(--rec-red);
+    text-transform:uppercase;
+  }
+  .timer{font-family:var(--mono);font-size:13px;color:var(--text-hi);font-weight:600;}
+
+  .waveform{
+    display:flex;
+    align-items:flex-end;
+    gap:2.5px;
+    height:76px;
+    padding:0 2px;
+  }
+  .waveform span{
+    flex:1;
+    min-width:2px;
+    border-radius:2px;
+    background:linear-gradient(180deg, var(--amber), var(--amber-dim));
+    opacity:.85;
+    animation:wave 1.6s ease-in-out infinite;
+  }
+  @keyframes wave{ 0%,100%{ transform:scaleY(.35);} 50%{ transform:scaleY(1);} }
+
+  .record-dock{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:12px;
+    padding:22px 0 6px;
+  }
+  .record-btn{
+    width:96px;height:96px;
+    border-radius:50%;
+    border:none;
+    cursor:pointer;
+    position:relative;
+    background:radial-gradient(circle at 35% 30%, #ff6a6a, #d92f2f 70%);
+    box-shadow:
+      0 0 0 6px rgba(255,82,82,.12),
+      0 0 0 1px rgba(255,255,255,.06) inset,
+      0 14px 30px -8px rgba(255,82,82,.55);
+    display:grid;place-items:center;
+  }
+  .record-btn::before{
+    content:"";
+    position:absolute;
+    inset:-14px;
+    border-radius:50%;
+    border:1.5px solid var(--amber);
+    opacity:.55;
+    animation:pulse-ring 2.2s ease-out infinite;
+  }
+  @keyframes pulse-ring{
+    0%{ transform:scale(.82); opacity:.7;}
+    80%{ transform:scale(1.18); opacity:0;}
+    100%{ opacity:0;}
+  }
+  .record-btn span{
+    width:30px;height:30px;
+    border-radius:8px;
+    background:#fff;
+  }
+  .record-caption{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    color:var(--text-mid);
+  }
+  .record-hint{
+    font-size:11.5px;
+    color:var(--text-low);
+  }
+
+  .take-rack .rack-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    margin-bottom:14px;
+  }
+  .take-rack .rack-top h3{
+    font-size:12.5px;
+    margin:0;
+    letter-spacing:.03em;
+  }
+  .take-rack .rack-top span{
+    font-family:var(--mono);
+    font-size:10.5px;
+    color:var(--text-mid);
+  }
+
+  .meter-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:12px 18px;
+  }
+  .meter{
+    display:flex;
+    flex-direction:column;
+    gap:5px;
+  }
+  .meter-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+  }
+  .meter-label{
+    font-size:10.5px;
+    letter-spacing:.07em;
+    text-transform:uppercase;
+    color:var(--text-mid);
+  }
+  .meter-value{
+    font-family:var(--mono);
+    font-size:16.5px;
+    font-weight:600;
+    color:var(--text-hi);
+  }
+  .meter-value.good{ color:var(--green-led); }
+  .meter-value.warn{ color:var(--amber-soft); }
+  .meter-bar{
+    height:5px;
+    border-radius:3px;
+    background:var(--hairline);
+    overflow:hidden;
+  }
+  .meter-bar span{
+    display:block;
+    height:100%;
+    border-radius:3px;
+    background:var(--green-led);
+  }
+  .meter-bar span.warn{ background:var(--amber); }
+  .meter-bar span.bad{ background:var(--rec-red); }
+
+  /* ============ SESSION LOG STRIP ============ */
+  .session-log{
+    margin-top:18px;
+    background:var(--panel);
+    border:1px solid var(--hairline);
+    border-radius:14px;
+    padding:16px 20px;
+    display:flex;
+    align-items:center;
+    gap:18px;
+    overflow-x:auto;
+  }
+  .session-log .tag{
+    font-family:var(--mono);
+    font-size:10.5px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--text-mid);
+    white-space:nowrap;
+  }
+  .log-take{
+    flex-shrink:0;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    padding:10px 14px;
+    border-radius:9px;
+    border:1px solid var(--hairline-soft);
+    min-width:118px;
+  }
+  .log-take.is-best{ border-color:rgba(255,184,51,.4); background:rgba(255,184,51,.05); }
+  .log-take .lt-mini{
+    display:flex;
+    gap:1.5px;
+    height:20px;
+    align-items:flex-end;
+  }
+  .log-take .lt-mini i{
+    flex:1;
+    background:#454a54;
+    border-radius:1px;
+  }
+  .log-take.is-best .lt-mini i{ background:var(--amber-dim); }
+  .log-take .lt-label{ font-family:var(--mono); font-size:10px; color:var(--text-mid); display:flex; justify-content:space-between;}
+  .log-take .lt-label strong{ color:var(--text-hi); font-weight:600;}
+
+  /* ============ SECTION DIVIDER ============ */
+  .console-divider{
+    display:flex;
+    align-items:center;
+    gap:16px;
+    margin:64px 0 26px;
+  }
+  .console-divider::before,
+  .console-divider::after{
+    content:"";
+    flex:1;
+    height:1px;
+    background:var(--hairline);
+  }
+  .console-divider h2{
+    font-family:var(--mono);
+    font-size:12px;
+    letter-spacing:.18em;
+    text-transform:uppercase;
+    color:var(--text-mid);
+    margin:0;
+    white-space:nowrap;
+  }
+
+  /* ============ DASHBOARD ============ */
+  .desk-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-end;
+    margin-bottom:20px;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+  .desk-top h1{
+    font-family:var(--serif);
+    font-weight:480;
+    font-size:26px;
+    margin:2px 0 0;
+  }
+  .desk-top .streak{
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--text-mid);
+    display:flex;
+    gap:8px;
+    align-items:center;
+  }
+  .desk-top .streak strong{ color:var(--amber-soft); font-weight:600;}
+
+  .desk-grid{
+    display:grid;
+    grid-template-columns:2fr 1fr;
+    gap:16px;
+    margin-bottom:16px;
+  }
+
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--hairline);
+    border-radius:14px;
+    padding:20px 22px;
+  }
+  .panel-heading{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:16px;
+  }
+  .panel-heading h3{
+    font-size:13px;
+    margin:0;
+    letter-spacing:.02em;
+    font-weight:600;
+  }
+  .panel-link{
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--amber-soft);
+    text-decoration:none;
+  }
+  .panel-link:hover{ text-decoration:underline; }
+
+  /* VU meters (dashboard overview) */
+  .vu-rows{ display:flex; flex-direction:column; gap:16px; }
+  .vu-row{ display:grid; grid-template-columns:118px 1fr 74px; align-items:center; gap:14px; }
+  .vu-row .vname{ font-size:12.5px; color:var(--text-mid); }
+  .vu-track{
+    height:8px;
+    border-radius:5px;
+    background:var(--hairline);
+    position:relative;
+    overflow:hidden;
+  }
+  .vu-track .fill{
+    position:absolute;
+    inset:0;
+    border-radius:5px;
+    background:linear-gradient(90deg, var(--green-led), var(--amber) 78%, var(--rec-red) 92%);
+  }
+  .vu-track .target{
+    position:absolute;
+    top:-3px; bottom:-3px;
+    width:2px;
+    background:rgba(255,255,255,.5);
+  }
+  .vu-val{
+    font-family:var(--mono);
+    font-size:13px;
+    font-weight:600;
+    text-align:right;
+  }
+  .vu-val.good{ color:var(--green-led); }
+  .vu-val.ok{ color:var(--amber-soft); }
+
+  /* Coach notes = clipboard */
+  .notes-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:12px; }
+  .notes-list li{
+    font-size:13px;
+    line-height:1.55;
+    color:#c9cbd1;
+    padding-left:16px;
+    position:relative;
+  }
+  .notes-list li::before{
+    content:"";
+    position:absolute;
+    left:0; top:7px;
+    width:6px; height:6px;
+    border-radius:1px;
+    background:var(--amber);
+    transform:rotate(45deg);
+  }
+
+  /* Patch bay = trouble words/sounds */
+  .patch-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:16px;
+    margin-bottom:16px;
+  }
+  .jack-list{ display:flex; flex-direction:column; gap:2px; }
+  .jack{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:10px 4px;
+    border-bottom:1px solid var(--hairline-soft);
+  }
+  .jack:last-child{ border-bottom:none; }
+  .jack-word{
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  .jack-word .plug{
+    width:8px;height:8px;
+    border-radius:50%;
+    border:1.5px solid var(--rec-red);
+  }
+  .jack-word span{
+    font-family:var(--serif);
+    font-size:15px;
+    color:var(--text-hi);
+  }
+  .jack-rate{
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--text-mid);
+  }
+  .jack-rate strong{ color:var(--amber-soft); font-weight:600; }
+
+  /* Recent sessions = tape log table */
+  .tape-log{ width:100%; border-collapse:collapse; }
+  .tape-log th{
+    text-align:left;
+    font-family:var(--mono);
+    font-size:10px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--text-low);
+    font-weight:500;
+    padding:0 10px 10px;
+    border-bottom:1px solid var(--hairline);
+  }
+  .tape-log td{
+    padding:11px 10px;
+    font-size:12.5px;
+    border-bottom:1px solid var(--hairline-soft);
+    color:#c9cbd1;
+  }
+  .tape-log td:first-child, .tape-log th:first-child{ padding-left:2px; }
+  .tape-log tr:last-child td{ border-bottom:none; }
+  .tape-log .tl-date{ font-family:var(--mono); color:var(--text-mid); }
+  .tape-log .tl-score{ font-family:var(--mono); font-weight:600; }
+  .tape-log .tl-score.good{ color:var(--green-led); }
+  .tape-log .tl-score.ok{ color:var(--amber-soft); }
+
+  /* Today queue = card deck */
+  .queue-list{ display:flex; flex-direction:column; gap:10px; }
+  .queue-card{
+    display:flex;
+    align-items:center;
+    gap:14px;
+    padding:13px 14px;
+    background:var(--panel-raised);
+    border:1px solid var(--hairline-soft);
+    border-radius:10px;
+  }
+  .queue-card.is-due{ border-color:rgba(255,184,51,.35); }
+  .queue-idx{
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--text-low);
+    width:20px;
+  }
+  .queue-card.is-due .queue-idx{ color:var(--amber); }
+  .queue-copy{ flex:1; min-width:0; }
+  .queue-copy .qtag{
+    display:inline-block;
+    font-family:var(--mono);
+    font-size:9.5px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--amber-soft);
+    background:rgba(255,184,51,.08);
+    border:1px solid rgba(255,184,51,.2);
+    padding:2px 7px;
+    border-radius:100px;
+    margin-bottom:5px;
+  }
+  .queue-copy h4{ margin:0 0 3px; font-size:13.5px; font-weight:600; }
+  .queue-copy p{ margin:0; font-size:11.5px; color:var(--text-mid); }
+  .queue-action{
+    font-family:var(--mono);
+    font-size:11px;
+    text-decoration:none;
+    color:var(--stage-black);
+    background:var(--amber);
+    padding:8px 12px;
+    border-radius:7px;
+    font-weight:600;
+    white-space:nowrap;
+  }
+
+  footer.studio-foot{
+    text-align:center;
+    padding:30px 0 10px;
+    font-family:var(--mono);
+    font-size:10.5px;
+    color:var(--text-low);
+    letter-spacing:.08em;
+  }
+
+  @media (max-width:880px){
+    .studio{ grid-template-columns:1fr; }
+    .desk-grid, .patch-grid{ grid-template-columns:1fr; }
+    .meter-grid{ grid-template-columns:1fr 1fr; }
+    .transport{ flex-wrap:wrap; row-gap:10px; }
+    .transport-nav{ order:3; width:100%; }
+    main{ padding-top:24px; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .rec-dot, .waveform span, .record-btn::before{ animation:none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="transport">
+  <a class="brand" href="#">
+    <span class="brand-mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11v1a7 7 0 0 1-14 0v-1M12 19v3"/></svg>
+    </span>
+    <span>
+      <strong>SpeechPractice</strong>
+      <small>Studio&nbsp;A</small>
+    </span>
+  </a>
+  <nav class="transport-nav" aria-label="Primary">
+    <a href="#" class="is-active"><span class="led"></span>Today</a>
+    <a href="#hero"><span class="led"></span>Practice</a>
+    <a href="#"><span class="led"></span>Cards</a>
+    <a href="#dashboard"><span class="led"></span>Progress</a>
+    <a href="#"><span class="led"></span>Scripts</a>
+    <a href="#"><span class="led"></span>History</a>
+    <a href="#"><span class="led"></span>Account</a>
+  </nav>
+  <div class="transport-user">
+    <span>maren&#8203;.k</span>
+    <button type="button">Sign out</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============ HERO: PRACTICE / RECORD ============ -->
+  <div id="hero">
+    <div class="session-head">
+      <div>
+        <p class="eyebrow">Take 5 &middot; Script mode</p>
+        <h1>“Quarterly Kickoff — Opening”</h1>
+      </div>
+      <div class="session-meta">
+        <span>WORDS <strong class="num">96</strong></span>
+        <span>EST. RUNTIME <strong class="num">0:38</strong></span>
+        <span>PREV. BEST <strong class="num">92</strong></span>
+      </div>
+    </div>
+
+    <div class="studio">
+      <!-- Teleprompter -->
+      <section class="prompter" aria-label="Script teleprompter">
+        <div class="prompter-bar">
+          <span class="tag">&#9679; On air</span>
+          <span class="wc">Line 3 of 7</span>
+        </div>
+        <div class="prompter-glass">
+          <p class="script-text">
+            <span class="said">This quarter, we didn't just hit our targets — we rebuilt how the team plans around them,</span>
+            <span class="current">especially when the rollout hit friction in the rural markets.</span>
+            <span class="next"> That's the part I want to spend the most time on today, particularly the statistics behind week three.</span>
+          </p>
+        </div>
+        <div class="prompter-foot">
+          <span class="num">00:14</span>
+          <div class="prompter-progress"><span></span></div>
+          <span class="num">00:38</span>
+        </div>
+      </section>
+
+      <!-- Channel strip -->
+      <div class="channel">
+        <div class="rack waveform-rack">
+          <div class="rack-top">
+            <span class="rec-label"><span class="rec-dot"></span>Recording</span>
+            <span class="timer num">00:14.2</span>
+          </div>
+          <div class="waveform" aria-hidden="true">
+            <span style="height:30%; animation-delay:-0.1s"></span>
+            <span style="height:55%; animation-delay:-0.9s"></span>
+            <span style="height:80%; animation-delay:-0.4s"></span>
+            <span style="height:40%; animation-delay:-1.3s"></span>
+            <span style="height:95%; animation-delay:-0.2s"></span>
+            <span style="height:60%; animation-delay:-1.0s"></span>
+            <span style="height:35%; animation-delay:-0.6s"></span>
+            <span style="height:70%; animation-delay:-0.3s"></span>
+            <span style="height:50%; animation-delay:-1.1s"></span>
+            <span style="height:85%; animation-delay:-0.5s"></span>
+            <span style="height:45%; animation-delay:-0.8s"></span>
+            <span style="height:65%; animation-delay:-0.15s"></span>
+            <span style="height:90%; animation-delay:-1.2s"></span>
+            <span style="height:38%; animation-delay:-0.7s"></span>
+            <span style="height:58%; animation-delay:-0.35s"></span>
+            <span style="height:78%; animation-delay:-0.95s"></span>
+            <span style="height:42%; animation-delay:-0.55s"></span>
+            <span style="height:68%; animation-delay:-1.25s"></span>
+            <span style="height:52%; animation-delay:-0.25s"></span>
+            <span style="height:88%; animation-delay:-0.75s"></span>
+          </div>
+          <div class="record-dock">
+            <button class="record-btn" type="button" aria-label="Stop recording"><span></span></button>
+            <span class="record-caption">Tap to stop</span>
+          </div>
+        </div>
+
+        <div class="rack take-rack">
+          <div class="rack-top">
+            <h3>Last take &middot; #4</h3>
+            <span>scored 2 min ago</span>
+          </div>
+          <div class="meter-grid">
+            <div class="meter">
+              <div class="meter-top"><span class="meter-label">WER</span><span class="meter-value ok num">6.8%</span></div>
+              <div class="meter-bar"><span class="warn" style="width:68%"></span></div>
+            </div>
+            <div class="meter">
+              <div class="meter-top"><span class="meter-label">CER</span><span class="meter-value good num">2.1%</span></div>
+              <div class="meter-bar"><span style="width:21%"></span></div>
+            </div>
+            <div class="meter">
+              <div class="meter-top"><span class="meter-label">Clarity</span><span class="meter-value good num">93%</span></div>
+              <div class="meter-bar"><span style="width:93%"></span></div>
+            </div>
+            <div class="meter">
+              <div class="meter-top"><span class="meter-label">Confidence</span><span class="meter-value good num">0.86</span></div>
+              <div class="meter-bar"><span style="width:86%"></span></div>
+            </div>
+            <div class="meter">
+              <div class="meter-top"><span class="meter-label">Rate</span><span class="meter-value good num">148<span style="font-size:10px;color:var(--text-mid);font-weight:400;">wpm</span></span></div>
+              <div class="meter-bar"><span style="width:74%"></span></div>
+            </div>
+            <div class="meter">
+              <div class="meter-top"><span class="meter-label">Pause</span><span class="meter-value ok num">18%</span></div>
+              <div class="meter-bar"><span class="warn" style="width:52%"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Session log strip -->
+    <div class="session-log" aria-label="Take history for this script">
+      <span class="tag">Session log</span>
+      <div class="log-take is-best">
+        <div class="lt-mini" aria-hidden="true"><i style="height:40%"></i><i style="height:80%"></i><i style="height:55%"></i><i style="height:95%"></i><i style="height:60%"></i><i style="height:35%"></i></div>
+        <div class="lt-label"><span>Take 3</span><strong class="num">WER 5.1%</strong></div>
+      </div>
+      <div class="log-take">
+        <div class="lt-mini" aria-hidden="true"><i style="height:50%"></i><i style="height:30%"></i><i style="height:70%"></i><i style="height:45%"></i><i style="height:85%"></i><i style="height:40%"></i></div>
+        <div class="lt-label"><span>Take 2</span><strong class="num">WER 9.4%</strong></div>
+      </div>
+      <div class="log-take">
+        <div class="lt-mini" aria-hidden="true"><i style="height:65%"></i><i style="height:40%"></i><i style="height:60%"></i><i style="height:30%"></i><i style="height:75%"></i><i style="height:50%"></i></div>
+        <div class="lt-label"><span>Take 1</span><strong class="num">WER 12.7%</strong></div>
+      </div>
+      <div class="log-take">
+        <div class="lt-mini" aria-hidden="true"><i style="height:35%"></i><i style="height:55%"></i><i style="height:80%"></i><i style="height:60%"></i><i style="height:45%"></i><i style="height:70%"></i></div>
+        <div class="lt-label"><span>Take 4</span><strong class="num">WER 7.5%</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ DASHBOARD ============ -->
+  <div class="console-divider" id="dashboard"><h2>Session overview</h2></div>
+
+  <div class="desk-top">
+    <div>
+      <p class="eyebrow">Mixing desk &middot; Today, Jul 3</p>
+      <h1>Console overview</h1>
+    </div>
+    <div class="streak">7-day streak <strong class="num">&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;</strong></div>
+  </div>
+
+  <div class="desk-grid">
+    <section class="panel" aria-label="Metric levels">
+      <div class="panel-heading">
+        <h3>Levels &middot; last 10 takes</h3>
+        <a class="panel-link" href="#">Full history &rarr;</a>
+      </div>
+      <div class="vu-rows">
+        <div class="vu-row">
+          <span class="vname">Word error rate</span>
+          <div class="vu-track"><span class="fill" style="width:68%"></span><span class="target" style="left:50%"></span></div>
+          <span class="vu-val ok num">6.8%</span>
+        </div>
+        <div class="vu-row">
+          <span class="vname">Character error</span>
+          <div class="vu-track"><span class="fill" style="width:35%"></span><span class="target" style="left:40%"></span></div>
+          <span class="vu-val good num">2.1%</span>
+        </div>
+        <div class="vu-row">
+          <span class="vname">Clarity</span>
+          <div class="vu-track"><span class="fill" style="width:93%"></span><span class="target" style="left:95%"></span></div>
+          <span class="vu-val good num">93%</span>
+        </div>
+        <div class="vu-row">
+          <span class="vname">Avg. confidence</span>
+          <div class="vu-track"><span class="fill" style="width:86%"></span><span class="target" style="left:85%"></span></div>
+          <span class="vu-val good num">0.86</span>
+        </div>
+        <div class="vu-row">
+          <span class="vname">Articulation rate</span>
+          <div class="vu-track"><span class="fill" style="width:74%"></span><span class="target" style="left:80%"></span></div>
+          <span class="vu-val good num">148 wpm</span>
+        </div>
+        <div class="vu-row">
+          <span class="vname">Pause ratio</span>
+          <div class="vu-track"><span class="fill" style="width:52%"></span><span class="target" style="left:35%"></span></div>
+          <span class="vu-val ok num">18%</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Coach notes">
+      <div class="panel-heading">
+        <h3>Coach notes</h3>
+        <span class="panel-link" style="color:var(--text-low)">auto&#8209;generated</span>
+      </div>
+      <ul class="notes-list">
+        <li>Clarity has climbed 4 points over the last five sessions — the extra breath before long clauses is working.</li>
+        <li>Words with "-ar-" clusters (particularly, rural, articulate) are still tripping the aligner. Worth a dedicated drill.</li>
+        <li>Pause ratio spikes right after multi-syllable words. Try marking a soft breath point one word earlier.</li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="patch-grid">
+    <section class="panel" aria-label="Trouble words">
+      <div class="panel-heading">
+        <h3>Trouble words</h3>
+        <span class="panel-link" style="color:var(--text-low)">by error rate</span>
+      </div>
+      <div class="jack-list">
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>particularly</span></div><div class="jack-rate"><strong>41%</strong> error rate</div></div>
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>statistics</span></div><div class="jack-rate"><strong>33%</strong> error rate</div></div>
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>rural</span></div><div class="jack-rate"><strong>29%</strong> error rate</div></div>
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>fiduciary</span></div><div class="jack-rate"><strong>24%</strong> error rate</div></div>
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>quarterly</span></div><div class="jack-rate"><strong>18%</strong> error rate</div></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Sound patterns">
+      <div class="panel-heading">
+        <h3>Sound patterns</h3>
+        <span class="panel-link" style="color:var(--text-low)">phoneme level</span>
+      </div>
+      <div class="jack-list">
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>/ɝ/ &nbsp;“ar” clusters</span></div><div class="jack-rate"><strong>22</strong> / 61 attempts</div></div>
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>/θ/ &nbsp;voiceless th</span></div><div class="jack-rate"><strong>14</strong> / 48 attempts</div></div>
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>/st/ &nbsp;consonant blend</span></div><div class="jack-rate"><strong>11</strong> / 40 attempts</div></div>
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>/ʃ/ &nbsp;sh sound</span></div><div class="jack-rate"><strong>7</strong> / 35 attempts</div></div>
+        <div class="jack"><div class="jack-word"><span class="plug"></span><span>/l/ &nbsp;dark l, word-final</span></div><div class="jack-rate"><strong>6</strong> / 44 attempts</div></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="desk-grid" style="grid-template-columns: 1.3fr 1fr;">
+    <section class="panel" aria-label="Recent sessions">
+      <div class="panel-heading">
+        <h3>Recent sessions &middot; tape log</h3>
+        <a class="panel-link" href="#">View all &rarr;</a>
+      </div>
+      <table class="tape-log">
+        <thead><tr><th>Date</th><th>Script</th><th>Score</th><th>WER</th></tr></thead>
+        <tbody>
+          <tr><td class="tl-date num">Jul 3, 9:12a</td><td>Quarterly Kickoff — Opening</td><td class="tl-score ok num">88</td><td class="num">6.8%</td></tr>
+          <tr><td class="tl-date num">Jul 2, 6:47p</td><td>Rural Outreach — Q&amp;A drill</td><td class="tl-score good num">94</td><td class="num">4.2%</td></tr>
+          <tr><td class="tl-date num">Jul 2, 6:31p</td><td>Rural Outreach — Q&amp;A drill</td><td class="tl-score ok num">81</td><td class="num">10.9%</td></tr>
+          <tr><td class="tl-date num">Jul 1, 8:03a</td><td>Statistics Deep Dive — Intro</td><td class="tl-score good num">91</td><td class="num">5.5%</td></tr>
+          <tr><td class="tl-date num">Jun 30, 7:55p</td><td>Free speak — 2 min</td><td class="tl-score ok num">76</td><td class="num">13.1%</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel" aria-label="Today's card queue">
+      <div class="panel-heading">
+        <h3>Today's queue</h3>
+        <span class="panel-link" style="color:var(--text-low)">4 cards</span>
+      </div>
+      <div class="queue-list">
+        <div class="queue-card is-due">
+          <span class="queue-idx num">01</span>
+          <div class="queue-copy">
+            <span class="qtag">Due now</span>
+            <h4>Word drill: particularly</h4>
+            <p>Mastery 0.42 &middot; 6 reviews</p>
+          </div>
+          <a class="queue-action" href="#">Practice &rarr;</a>
+        </div>
+        <div class="queue-card is-due">
+          <span class="queue-idx num">02</span>
+          <div class="queue-copy">
+            <span class="qtag">Due now</span>
+            <h4>Sound drill: /ɝ/ clusters</h4>
+            <p>Mastery 0.51 &middot; 4 reviews</p>
+          </div>
+          <a class="queue-action" href="#">Practice &rarr;</a>
+        </div>
+        <div class="queue-card">
+          <span class="queue-idx num">03</span>
+          <div class="queue-copy">
+            <span class="qtag" style="color:var(--text-mid); background:transparent; border-color:var(--hairline);">Upcoming</span>
+            <h4>Phrase drill: statistics behind</h4>
+            <p>Mastery 0.67 &middot; 3 reviews</p>
+          </div>
+          <a class="queue-action" href="#">Practice &rarr;</a>
+        </div>
+        <div class="queue-card">
+          <span class="queue-idx num">04</span>
+          <div class="queue-copy">
+            <span class="qtag" style="color:var(--text-mid); background:transparent; border-color:var(--hairline);">Upcoming</span>
+            <h4>Pause pacing ladder, level 2</h4>
+            <p>Mastery 0.58 &middot; 5 reviews</p>
+          </div>
+          <a class="queue-action" href="#">Practice &rarr;</a>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <footer class="studio-foot">SPEECHPRACTICE STUDIO &middot; SESSION REC 04:12:38 &middot; MONITORING LEVELS NOMINAL</footer>
+</main>
+
+</body>
+</html>

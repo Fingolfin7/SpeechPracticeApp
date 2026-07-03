@@ -356,16 +356,14 @@ class PracticeWebTests(TransactionTestCase):
         response = self.client.get(reverse("practice:dashboard"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Next reps")
+        self.assertContains(response, "Today's practice")
         self.assertContains(response, "Sound")
-        self.assertContains(response, "S")
-        self.assertContains(response, "Practice drill")
-        self.assertContains(response, "Do next")
-        # A single queue item is featured in the hero, not repeated in the list.
-        self.assertContains(response, "This card is due now")
-        self.assertContains(response, "Your next rep is featured above")
+        self.assertContains(response, "Due now")
+        # The due card has a generated drill, so the hero offers to start it.
+        self.assertContains(response, "Start today's practice")
+        self.assertContains(response, "Ready when you are")
 
-    def test_dashboard_queue_list_continues_after_hero(self):
+    def test_dashboard_queue_shows_hero_and_card_row(self):
         self._create_legacy_tables()
         now = timezone.now()
         for index in range(3):
@@ -381,10 +379,9 @@ class PracticeWebTests(TransactionTestCase):
         response = self.client.get(reverse("practice:dashboard"))
 
         self.assertEqual(response.status_code, 200)
-        # The hero takes the first card; the list resumes at #2.
-        self.assertContains(response, "Why this is next")
-        self.assertContains(response, '<div class="today-index">2</div>', html=False)
-        self.assertNotContains(response, '<div class="today-index">1</div>', html=False)
+        # The hero features the first card and the queue row lists all of them.
+        self.assertContains(response, 'class="next-card"')
+        self.assertContains(response, 'class="queue-card', count=3)
 
     def test_poetry_foundation_csv_import_shape(self):
         csv_text = (

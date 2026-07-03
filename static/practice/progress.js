@@ -6,9 +6,9 @@
 
   const points = JSON.parse(dataElement.textContent || "[]");
   const metricConfig = {
-    score: { max: 5, decimals: 2, suffix: "", goodDirection: 1, color: "#0f766e" },
-    wer: { max: 1, decimals: 2, suffix: "", goodDirection: -1, color: "#b84421" },
-    clarity: { max: 1, decimals: 2, suffix: "", goodDirection: 1, color: "#285f9f" },
+    score: { max: 5, decimals: 2, suffix: "", goodDirection: 1, color: "#3e7a5c" },
+    wer: { max: 1, decimals: 2, suffix: "", goodDirection: -1, color: "#e8703a" },
+    clarity: { max: 1, decimals: 2, suffix: "", goodDirection: 1, color: "#4c3e9e" },
   };
 
   function metricValue(point, metric) {
@@ -62,8 +62,8 @@
 
     ctx.clearRect(0, 0, cssWidth, cssHeight);
     const gradient = ctx.createLinearGradient(0, 0, cssWidth, cssHeight);
-    gradient.addColorStop(0, "#fffaf0");
-    gradient.addColorStop(1, "#f4eadb");
+    gradient.addColorStop(0, "#fffdf9");
+    gradient.addColorStop(1, "#f5e9d9");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, cssWidth, cssHeight);
 
@@ -72,8 +72,8 @@
       .filter((value) => Number.isFinite(value));
 
     if (!values.length) {
-      ctx.fillStyle = "#6f665b";
-      ctx.font = "15px Candara, Segoe UI, sans-serif";
+      ctx.fillStyle = "#6b5e52";
+      ctx.font = "15px Inter, Segoe UI, sans-serif";
       ctx.fillText("No data for this filter", 18, cssHeight / 2);
       return;
     }
@@ -152,17 +152,17 @@
     usablePoints.forEach((point, index) => {
       const x = xFor(index);
       const y = yFor(Number(point[metric]));
-      ctx.fillStyle = "#fffaf0";
+      ctx.fillStyle = "#fffdf9";
       ctx.beginPath();
       ctx.arc(x, y, 5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = "#b84421";
+      ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.stroke();
     });
 
-    ctx.fillStyle = "#6f665b";
-    ctx.font = "12px Candara, Segoe UI, sans-serif";
+    ctx.fillStyle = "#6b5e52";
+    ctx.font = "12px Inter, Segoe UI, sans-serif";
     ctx.fillText(formatValue(localMax, metric), 12, margin.top + 4);
     ctx.fillText("0", 28, margin.top + plotHeight + 4);
     if (usablePoints[0]) {

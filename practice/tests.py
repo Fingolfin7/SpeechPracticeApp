@@ -373,6 +373,26 @@ class PracticeWebTests(TransactionTestCase):
             ref_local_end=6,
             ref_token_len=6,
         )
+        # A char_replace event exercises the confusion path, which reads
+        # hyp_local_* fields — kept in the fetch's .only() list.
+        SessionError.objects.create(
+            user=self.user,
+            session_id=scored.id,
+            timestamp=timestamp,
+            script_name=scored.script_name,
+            ref_token="keep",
+            hyp_token="creep",
+            op="sub",
+            error_kind="char_replace",
+            ref_start=0,
+            ref_end=4,
+            ref_local_start=0,
+            ref_local_end=1,
+            hyp_local_start=0,
+            hyp_local_end=2,
+            ref_token_len=4,
+            hyp_token_len=5,
+        )
         other_user = get_user_model().objects.create(username="someone-else")
         PracticeSession.objects.create(
             user=other_user,
@@ -385,17 +405,23 @@ class PracticeWebTests(TransactionTestCase):
 
         from .services.analytics import trend_summary_for_range
 
-        summary = trend_summary_for_range(
-            user=self.user,
-            start_dt=(now - timezone.timedelta(days=7)).replace(tzinfo=None),
-            end_dt=now.replace(tzinfo=None),
-        )
+        # One session query + one event query cover all five summaries; a
+        # higher count means deferred-field loads crept back in.
+        with self.assertNumQueries(2):
+            summary = trend_summary_for_range(
+                user=self.user,
+                start_dt=(now - timezone.timedelta(days=7)).replace(tzinfo=None),
+                end_dt=now.replace(tzinfo=None),
+            )
 
         words = {row["word"] for row in summary["words"]["top_trouble_words"]}
         self.assertIn("breath", words)
         self.assertNotIn("your", words)
-        phrases = summary["phrases"]["top_trouble_phrases"]
-        self.assertEqual(phrases[0]["phrase"], "steady breath today")
+        phrases = {row["phrase"] for row in summary["phrases"]["top_trouble_phrases"]}
+        self.assertIn("steady breath today", phrases)
+        confusions = summary["characters"]["top_character_confusions"]
+        self.assertEqual(confusions[0]["from"], "k")
+        self.assertEqual(confusions[0]["to"], "cr")
         self.assertEqual(summary["words"]["recent_session_count"], 1)
 
     def test_build_card_candidates_includes_phrase_focus(self):

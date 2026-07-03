@@ -209,6 +209,8 @@ def _fetch_trend_windows(
                 "ref_end",
                 "ref_local_start",
                 "ref_local_end",
+                "hyp_local_start",
+                "hyp_local_end",
                 "ref_token_len",
             )
         )

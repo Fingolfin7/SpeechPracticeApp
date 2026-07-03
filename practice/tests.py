@@ -161,6 +161,157 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(response.status_code, 302)
         self.assertFalse(PracticeScript.objects.filter(pk=script.pk).exists())
 
+    def test_script_bulk_delete_removes_selected_but_keeps_builtin(self):
+        first = PracticeScript.objects.create(
+            title="Bulk One",
+            body="first bulk script",
+            source=PracticeScript.SOURCE_USER,
+        )
+        second = PracticeScript.objects.create(
+            title="Bulk Two",
+            body="second bulk script",
+            source=PracticeScript.SOURCE_UPLOADED,
+        )
+        builtin = PracticeScript.objects.create(
+            title="Builtin Keeper",
+            body="builtin script",
+            source=PracticeScript.SOURCE_BUILTIN,
+        )
+        kept = PracticeScript.objects.create(
+            title="Not Selected",
+            body="unselected script",
+            source=PracticeScript.SOURCE_USER,
+        )
+
+        response = self.client.post(
+            reverse("practice:script_bulk_delete"),
+            {"selected": [first.pk, second.pk, builtin.pk], "kind": "reading"},
+        )
+
+        self.assertRedirects(response, f"{reverse('practice:scripts')}?kind=reading")
+        self.assertFalse(PracticeScript.objects.filter(pk__in=[first.pk, second.pk]).exists())
+        self.assertTrue(PracticeScript.objects.filter(pk=builtin.pk).exists())
+        self.assertTrue(PracticeScript.objects.filter(pk=kept.pk).exists())
+
+    def test_card_bulk_delete_removes_selected_cards(self):
+        first = ImprovementCard.objects.create(
+            title="Word focus: bulk",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="bulk",
+        )
+        second = ImprovementCard.objects.create(
+            title="Word focus: batch",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="batch",
+        )
+        kept = ImprovementCard.objects.create(
+            title="Word focus: keep",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="keep",
+        )
+
+        response = self.client.post(
+            reverse("practice:card_bulk_delete"),
+            {"selected": [first.pk, second.pk]},
+        )
+
+        self.assertRedirects(response, reverse("practice:cards"))
+        self.assertFalse(ImprovementCard.objects.filter(pk__in=[first.pk, second.pk]).exists())
+        self.assertTrue(ImprovementCard.objects.filter(pk=kept.pk).exists())
+
+    def test_ladder_bulk_delete_skips_builtin_and_removes_generated_scripts(self):
+        generated_script = PracticeScript.objects.create(
+            title="Bulk Ladder Level 1",
+            body="level one line",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+            source_ref="ladder:placeholder:level:1",
+        )
+        generated = PracticeLadder.objects.create(
+            title="Bulk Generated Ladder",
+            source=PracticeLadder.SOURCE_GENERATED,
+        )
+        generated_script.source_ref = f"ladder:{generated.pk}:level:1"
+        generated_script.save(update_fields=["source_ref", "updated_at"])
+        PracticeLadderStep.objects.create(
+            ladder=generated,
+            script=generated_script,
+            level=1,
+            title="Level 1",
+        )
+        builtin = PracticeLadder.objects.create(
+            title="Bulk Builtin Ladder",
+            source=PracticeLadder.SOURCE_BUILTIN,
+        )
+
+        response = self.client.post(
+            reverse("practice:ladder_bulk_delete"),
+            {"selected": [generated.pk, builtin.pk]},
+        )
+
+        self.assertRedirects(response, f"{reverse('practice:scripts')}?kind=drill")
+        self.assertFalse(PracticeLadder.objects.filter(pk=generated.pk).exists())
+        self.assertFalse(PracticeScript.objects.filter(pk=generated_script.pk).exists())
+        self.assertTrue(PracticeLadder.objects.filter(pk=builtin.pk).exists())
+
+    def test_session_bulk_delete_removes_sessions_audio_and_related_rows(self):
+        self._create_legacy_tables()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_audio = Path(temp_dir) / "bulk-one.webm"
+            first_audio.write_bytes(b"audio-one")
+            second_audio = Path(temp_dir) / "bulk-two.webm"
+            second_audio.write_bytes(b"audio-two")
+            first = PracticeSession.objects.create(
+                timestamp="2026-06-14T12:00:00",
+                script_name="Bulk Session One",
+                script_text="clear practice text",
+                audio_path=str(first_audio),
+                transcript="clear practice text",
+            )
+            second = PracticeSession.objects.create(
+                timestamp="2026-06-15T12:00:00",
+                script_name="Bulk Session Two",
+                script_text="clear practice text",
+                audio_path=str(second_audio),
+                transcript="clear practice text",
+            )
+            kept = PracticeSession.objects.create(
+                timestamp="2026-06-16T12:00:00",
+                script_name="Kept Session",
+                script_text="clear practice text",
+                audio_path="",
+                transcript="clear practice text",
+            )
+            SessionError.objects.create(
+                session_id=first.pk,
+                timestamp=first.timestamp,
+                script_name=first.script_name,
+                ref_token="practice",
+                op="del",
+                error_kind="word_missing",
+            )
+            job = ScoringJob.objects.create(
+                script_name=first.script_name,
+                script_text=first.script_text,
+                audio_path=str(first_audio),
+                provider="uploaded_transcript",
+                legacy_session_id=first.pk,
+            )
+
+            response = self.client.post(
+                reverse("practice:session_bulk_delete"),
+                {"selected": [first.pk, second.pk]},
+            )
+
+            self.assertRedirects(response, reverse("practice:sessions"))
+            self.assertFalse(first_audio.exists())
+            self.assertFalse(second_audio.exists())
+            self.assertFalse(PracticeSession.objects.filter(pk__in=[first.pk, second.pk]).exists())
+            self.assertTrue(PracticeSession.objects.filter(pk=kept.pk).exists())
+            self.assertEqual(SessionError.objects.filter(session_id=first.pk).count(), 0)
+            job.refresh_from_db()
+            self.assertIsNone(job.legacy_session_id)
+
     def test_today_queue_pairs_due_card_with_latest_generated_script(self):
         due_card = ImprovementCard.objects.create(
             title="Word focus: ready",

@@ -10,6 +10,7 @@ from django.core.cache import cache
 STATIC_VERSION_FILES = {
     "account_js": "practice/account.js",
     "app": "practice/app.css",
+    "bulk_select_js": "practice/bulk_select.js",
     "favicon": "practice/favicon.svg",
     "history_js": "practice/history.js",
     "job_status_js": "practice/job_status.js",

@@ -557,6 +557,37 @@ def session_report(request, pk: int):
     return response
 
 
+def _selected_pks(request) -> list[int]:
+    pks = []
+    for raw in request.POST.getlist("selected"):
+        try:
+            pks.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return pks
+
+
+@require_POST
+def session_bulk_delete(request):
+    pks = _selected_pks(request)
+    sessions = list(PracticeSession.objects.filter(user=request.user, pk__in=pks))
+    if not sessions:
+        messages.error(request, "No recordings were selected.")
+        return redirect("practice:sessions")
+    audio_deleted = 0
+    for session in sessions:
+        if delete_audio(session.audio_path):
+            audio_deleted += 1
+    session_ids = [session.pk for session in sessions]
+    SessionError.objects.filter(user=request.user, session_id__in=session_ids).delete()
+    PracticeReview.objects.filter(user=request.user, legacy_session_id__in=session_ids).delete()
+    ScoringJob.objects.filter(user=request.user, legacy_session_id__in=session_ids).update(legacy_session_id=None)
+    PracticeSession.objects.filter(user=request.user, pk__in=session_ids).delete()
+    suffix = f" and {audio_deleted} audio file{'s' if audio_deleted != 1 else ''}" if audio_deleted else ""
+    messages.success(request, f"Deleted {len(session_ids)} recording{'s' if len(session_ids) != 1 else ''}{suffix}.")
+    return redirect("practice:sessions")
+
+
 @require_POST
 def session_delete(request, pk: int):
     session = get_object_or_404(PracticeSession, user=request.user, pk=pk)
@@ -849,6 +880,36 @@ def script_edit(request, pk: int):
     )
 
 
+def _script_list_redirect(request):
+    kind = (request.POST.get("kind") or "").strip()
+    valid_kinds = {value for value, _label in PracticeScript.KIND_CHOICES}
+    if kind not in valid_kinds:
+        kind = PracticeScript.KIND_READING
+    source = (request.POST.get("source") or "").strip()
+    valid_sources = {value for value, _label in PracticeScript.SOURCE_CHOICES}
+    url = f"{reverse('practice:scripts')}?kind={kind}"
+    if source in valid_sources:
+        url += f"&source={source}"
+    return redirect(url)
+
+
+@require_POST
+def script_bulk_delete(request):
+    pks = _selected_pks(request)
+    scripts = PracticeScript.objects.filter(
+        models.Q(user=request.user)
+        | (models.Q(user__isnull=True) & ~models.Q(source=PracticeScript.SOURCE_BUILTIN)),
+        pk__in=pks,
+    )
+    deleted = scripts.count()
+    if not deleted:
+        messages.error(request, "No scripts were selected.")
+        return _script_list_redirect(request)
+    scripts.delete()
+    messages.success(request, f"Deleted {deleted} script{'s' if deleted != 1 else ''}.")
+    return _script_list_redirect(request)
+
+
 def script_delete(request, pk: int):
     script = get_object_or_404(
         PracticeScript.objects.filter(
@@ -1046,6 +1107,22 @@ def card_detail(request, pk: int):
 
 
 @require_POST
+def card_bulk_delete(request):
+    pks = _selected_pks(request)
+    cards = ImprovementCard.objects.filter(user=request.user, pk__in=pks)
+    deleted = cards.count()
+    if not deleted:
+        messages.error(request, "No cards were selected.")
+        return redirect("practice:cards")
+    cards.delete()
+    messages.success(
+        request,
+        f"Deleted {deleted} card{'s' if deleted != 1 else ''}. Existing drills and history were kept.",
+    )
+    return redirect("practice:cards")
+
+
+@require_POST
 def card_delete(request, pk: int):
     card = get_object_or_404(ImprovementCard, user=request.user, pk=pk)
     title = card.display_title
@@ -1180,20 +1257,11 @@ def generate_practice_ladder(request):
     )
 
 
-@require_POST
-def delete_practice_ladder(request, pk: int):
-    ladder = get_object_or_404(
-        PracticeLadder.objects.filter(models.Q(user=request.user) | models.Q(user__isnull=True)),
-        pk=pk,
-    )
-    if ladder.source == PracticeLadder.SOURCE_BUILTIN:
-        messages.error(request, "Built-in ladders cannot be deleted.")
-        return redirect(f"{reverse('practice:scripts')}?kind=drill")
+def _delete_ladder_with_scripts(request, ladder) -> int:
+    """Delete a non-builtin ladder plus its generated drill scripts; returns script count."""
     if ladder.user_id is None:
         ladder.user = request.user
         ladder.save(update_fields=["user", "updated_at"])
-
-    title = ladder.title
     script_ids = list(
         ladder.steps.filter(
             script__source=PracticeScript.SOURCE_GENERATED,
@@ -1208,8 +1276,43 @@ def delete_practice_ladder(request, pk: int):
     deleted_scripts = scripts_to_delete.count()
     if deleted_scripts:
         scripts_to_delete.delete()
+    return deleted_scripts
+
+
+@require_POST
+def delete_practice_ladder(request, pk: int):
+    ladder = get_object_or_404(
+        PracticeLadder.objects.filter(models.Q(user=request.user) | models.Q(user__isnull=True)),
+        pk=pk,
+    )
+    if ladder.source == PracticeLadder.SOURCE_BUILTIN:
+        messages.error(request, "Built-in ladders cannot be deleted.")
+        return redirect(f"{reverse('practice:scripts')}?kind=drill")
+
+    title = ladder.title
+    deleted_scripts = _delete_ladder_with_scripts(request, ladder)
     suffix = f" and {deleted_scripts} generated drill scripts" if deleted_scripts else ""
     messages.success(request, f"Deleted ladder: {title}{suffix}.")
+    return redirect(f"{reverse('practice:scripts')}?kind=drill")
+
+
+@require_POST
+def ladder_bulk_delete(request):
+    pks = _selected_pks(request)
+    ladders = list(
+        PracticeLadder.objects.filter(
+            models.Q(user=request.user) | models.Q(user__isnull=True),
+            pk__in=pks,
+        ).exclude(source=PracticeLadder.SOURCE_BUILTIN)
+    )
+    if not ladders:
+        messages.error(request, "No ladders were selected.")
+        return redirect(f"{reverse('practice:scripts')}?kind=drill")
+    deleted_scripts = 0
+    for ladder in ladders:
+        deleted_scripts += _delete_ladder_with_scripts(request, ladder)
+    suffix = f" and {deleted_scripts} generated drill scripts" if deleted_scripts else ""
+    messages.success(request, f"Deleted {len(ladders)} ladder{'s' if len(ladders) != 1 else ''}{suffix}.")
     return redirect(f"{reverse('practice:scripts')}?kind=drill")
 
 

@@ -1,4 +1,5 @@
 {% extends "practice/base.html" %}
+{% load static %}
 {% block title %}Library | SpeechPractice{% endblock %}
 {% block content %}
 <section class="page-title">
@@ -77,9 +78,35 @@
       </article>
 
       <div class="ladder-list">
+        <form
+          id="ladder-bulk-form"
+          class="bulk-actions"
+          method="post"
+          action="{% url 'practice:ladder_bulk_delete' %}"
+          data-bulk-form
+          data-bulk-confirm="Delete {count} selected ladder(s) and their generated drill scripts?"
+        >
+          {% csrf_token %}
+          <label class="bulk-select-all">
+            <input type="checkbox" data-bulk-select-all>
+            <span>Select all</span>
+          </label>
+          <span class="bulk-count" data-bulk-count>0 selected</span>
+          <button class="bulk-delete-button" type="submit" data-bulk-submit disabled>Delete selected</button>
+        </form>
         {% for ladder in practice_ladders %}
-          <article class="ladder-row">
+          <article class="ladder-row" data-bulk-row>
             <div class="ladder-row-head">
+              {% if ladder.source != "builtin" %}
+                <input
+                  class="bulk-check"
+                  type="checkbox"
+                  name="selected"
+                  value="{{ ladder.pk }}"
+                  form="ladder-bulk-form"
+                  aria-label="Select {{ ladder.title }}"
+                >
+              {% endif %}
               <div>
                 <strong>{{ ladder.title }}</strong>
                 <small>
@@ -143,8 +170,28 @@
 </nav>
 
 <section class="script-library">
+  {% if source_groups %}
+    <form
+      id="script-bulk-form"
+      class="bulk-actions"
+      method="post"
+      action="{% url 'practice:script_bulk_delete' %}"
+      data-bulk-form
+      data-bulk-confirm="Delete {count} selected script(s)?"
+    >
+      {% csrf_token %}
+      <input type="hidden" name="kind" value="{{ kind_filter }}">
+      <input type="hidden" name="source" value="{{ source_filter }}">
+      <label class="bulk-select-all">
+        <input type="checkbox" data-bulk-select-all>
+        <span>Select all</span>
+      </label>
+      <span class="bulk-count" data-bulk-count>0 selected</span>
+      <button class="bulk-delete-button" type="submit" data-bulk-submit disabled>Delete selected</button>
+    </form>
+  {% endif %}
   {% for group in source_groups %}
-    <section class="script-source-section" aria-labelledby="source-{{ group.source }}">
+    <section class="script-source-section" aria-labelledby="source-{{ group.source }}" data-bulk-section="script-bulk-form">
       <div class="script-source-heading">
         <div>
           <p class="eyebrow">{{ group.label }}</p>
@@ -164,13 +211,30 @@
             {% endif %}
           </h2>
         </div>
+        <div class="bulk-section-tools" data-bulk-section-tools>
+          <label class="bulk-select-all">
+            <input type="checkbox" data-bulk-section-select>
+            <span>Select section</span>
+          </label>
+          <button class="bulk-section-delete" type="button" data-bulk-section-delete>Delete all in section</button>
+        </div>
         <span>{{ group.scripts|length }}</span>
       </div>
 
       <div class="script-list">
         {% for script in group.scripts %}
-          <article class="script-row source-{{ script.source }}">
+          <article class="script-row source-{{ script.source }}" data-bulk-row>
             <div class="script-row-head">
+              {% if script.user_id or script.source != "builtin" %}
+                <input
+                  class="bulk-check"
+                  type="checkbox"
+                  name="selected"
+                  value="{{ script.pk }}"
+                  form="script-bulk-form"
+                  aria-label="Select {{ script.title }}"
+                >
+              {% endif %}
               <div>
                 <strong>{{ script.title }}</strong>
                 <small>{% if script.author %}{{ script.author }} &middot; {% endif %}{{ script.word_count }} words &middot; Level {{ script.difficulty }}</small>
@@ -216,4 +280,5 @@
     <p class="empty">No {% if kind_filter == "drill" %}drills{% else %}reading scripts{% endif %} match this source yet.</p>
   {% endfor %}
 </section>
+<script src="{% static 'practice/bulk_select.js' %}?v={{ static_version.bulk_select_js }}"></script>
 {% endblock %}

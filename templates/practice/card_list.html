@@ -1,4 +1,5 @@
 {% extends "practice/base.html" %}
+{% load static %}
 {% block title %}Cards | SpeechPractice{% endblock %}
 {% block content %}
 <section class="page-title card-page-title">
@@ -22,9 +23,25 @@
 </section>
 
 {% if grouped_cards %}
+  <form
+    id="card-bulk-form"
+    class="bulk-actions"
+    method="post"
+    action="{% url 'practice:card_bulk_delete' %}"
+    data-bulk-form
+    data-bulk-confirm="Delete {count} selected card(s)? Existing drills and history will be kept."
+  >
+    {% csrf_token %}
+    <label class="bulk-select-all">
+      <input type="checkbox" data-bulk-select-all>
+      <span>Select all</span>
+    </label>
+    <span class="bulk-count" data-bulk-count>0 selected</span>
+    <button class="bulk-delete-button" type="submit" data-bulk-submit disabled>Delete selected</button>
+  </form>
   <section class="card-type-stack" aria-label="Improvement cards grouped by type">
     {% for group in grouped_cards %}
-      <article class="card-type-section card-type-{{ group.kind }}">
+      <article class="card-type-section card-type-{{ group.kind }}" data-bulk-section="card-bulk-form">
         <header class="card-type-header">
           <div>
             <span class="pill">{{ group.label }}</span>
@@ -34,12 +51,27 @@
             <span>{{ group.count }} total</span>
             <span>{{ group.due_count }} due</span>
           </div>
+          <div class="bulk-section-tools" data-bulk-section-tools>
+            <label class="bulk-select-all">
+              <input type="checkbox" data-bulk-section-select>
+              <span>Select section</span>
+            </label>
+            <button class="bulk-section-delete" type="button" data-bulk-section-delete>Delete all {{ group.label|lower }} cards</button>
+          </div>
         </header>
 
         <div class="card-tile-grid">
           {% for card in group.cards %}
-            <article class="managed-card">
+            <article class="managed-card" data-bulk-row>
               <div class="managed-card-topline">
+                <input
+                  class="bulk-check"
+                  type="checkbox"
+                  name="selected"
+                  value="{{ card.pk }}"
+                  form="card-bulk-form"
+                  aria-label="Select {{ card.display_title }}"
+                >
                 <span class="pill">{{ card.get_kind_display }}</span>
                 <form class="managed-card-delete" method="post" action="{% url 'practice:card_delete' card.pk %}">
                   {% csrf_token %}
@@ -95,4 +127,5 @@
     </form>
   </section>
 {% endif %}
+<script src="{% static 'practice/bulk_select.js' %}?v={{ static_version.bulk_select_js }}"></script>
 {% endblock %}

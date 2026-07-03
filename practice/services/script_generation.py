@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 from dataclasses import dataclass
 from typing import Protocol
@@ -9,6 +10,7 @@ from django.conf import settings
 from django.db.utils import OperationalError, ProgrammingError
 
 from practice.models import ImprovementCard, PracticeSession, PracticeSettings
+from practice.services import local_drills
 from practice.services.codex_auth import (
     codex_access_token,
     deserialize_token_bundle,
@@ -73,68 +75,188 @@ class ScriptGenerationProvider(Protocol):
         ...
 
 
+DRILL_SYSTEM_PROMPT = (
+    "You write short scripts that speech learners read aloud into a recorder to "
+    "practice problem words and sounds. You are half drill designer, half writer: "
+    "lines must be effortless to say, dense with the practice target, and vivid "
+    "enough that reading them five times in a row stays fun. Follow the output "
+    "format exactly."
+)
+
+LADDER_SYSTEM_PROMPT = (
+    "You design five-level read-aloud practice ladders for a speech-training app. "
+    "You are half articulation coach, half adventure writer: practice targets stay "
+    "dense and deliberate, but the material has character and momentum. Return "
+    "strict JSON only."
+)
+
+
+def _drill_target_description(card: ImprovementCard) -> str:
+    target = card.target_key
+    if card.kind == ImprovementCard.KIND_WORD:
+        return f'the word "{target}"'
+    if card.kind in (ImprovementCard.KIND_SOUND, ImprovementCard.KIND_CHARACTER):
+        return f'the "{target}" sound'
+    if card.kind == ImprovementCard.KIND_PHRASE:
+        return f'the phrase "{target}"'
+    if card.kind == ImprovementCard.KIND_POSITION:
+        return f"sounds at the {target} of words"
+    if card.kind == ImprovementCard.KIND_FLUENCY:
+        return f"{target} (a pacing and fluency habit)"
+    return f'"{target}"'
+
+
+def _format_card_evidence(card: ImprovementCard) -> str:
+    stats = card.stats or {}
+    if stats.get("source") == "self_review":
+        session_name = stats.get("source_session_name") or "a recent session"
+        return f"the learner flagged this themselves while reviewing {session_name}"
+    try:
+        attempts = int(float(stats.get("attempts", 0)))
+        errors = int(float(stats.get("errors", 0)))
+    except (TypeError, ValueError):
+        attempts = errors = 0
+    try:
+        rate = float(stats.get("error_rate", 0.0))
+    except (TypeError, ValueError):
+        rate = 0.0
+    window = str(stats.get("source_window_label") or "").strip()
+    if attempts > 0:
+        evidence = f"the recognizer missed it in {errors} of {attempts} attempts ({rate:.0%} error rate)"
+    elif rate > 0:
+        evidence = f"recent takes show a {rate:.0%} error rate"
+    else:
+        evidence = "recent takes show recurring trouble with it"
+    if window:
+        evidence += f" over the {window}"
+    return evidence
+
+
+_DRILL_STRUCTURE_DEFAULT = (
+    "- Lines 1-2: short sentences that exercise the target in an easy position.\n"
+    "- Lines 3-5: medium sentences that stress the target in varied positions and "
+    "put trickier material next to it.\n"
+    "- Lines 6-8: longer lines with tighter consonant clusters and longer breath "
+    "groups - harder, but still natural spoken English."
+)
+
+_DRILL_STRUCTURE_HINTS = {
+    ImprovementCard.KIND_WORD: (
+        "- Lines 1-2: short sentences with the target word in an easy, stressed position.\n"
+        "- Lines 3-5: medium sentences that move the target to the start, middle, and end, "
+        "and place trickier sounds next to it.\n"
+        "- Lines 6-8: longer lines with tighter consonant clusters and longer breath "
+        "groups - harder, but still natural spoken English."
+    ),
+    ImprovementCard.KIND_SOUND: (
+        "- Lines 1-2: short sentences with the target sound once or twice in easy positions.\n"
+        "- Lines 3-5: medium sentences that place the sound at word starts, middles, and ends, "
+        "next to its nearest confusable sounds.\n"
+        "- Lines 6-8: longer lines where the sound recurs in clusters and across breath "
+        "groups - harder, but still natural spoken English."
+    ),
+    ImprovementCard.KIND_PHRASE: (
+        "- Lines 1-2: the phrase inside very short sentences.\n"
+        "- Lines 3-5: medium sentences that move the phrase to the start, middle, and end.\n"
+        "- Lines 6-8: longer lines where the phrase must survive changing rhythm and a "
+        "longer breath group."
+    ),
+    ImprovementCard.KIND_POSITION: (
+        "- Lines 1-2: short sentences ending or starting on crisp, simple words.\n"
+        "- Lines 3-5: medium sentences that stack several words with demanding sounds in "
+        "the target position.\n"
+        "- Lines 6-8: longer lines where the target position lands mid-breath and at the "
+        "very end of the line."
+    ),
+    ImprovementCard.KIND_FLUENCY: (
+        "- Lines 1-2: short lines with a natural pause built in.\n"
+        "- Lines 3-5: medium sentences whose punctuation and clause breaks force pacing "
+        "decisions.\n"
+        "- Lines 6-8: longer lines with lists, asides, and turns that reward an even pace "
+        "and controlled breath."
+    ),
+}
+_DRILL_STRUCTURE_HINTS[ImprovementCard.KIND_CHARACTER] = _DRILL_STRUCTURE_HINTS[
+    ImprovementCard.KIND_SOUND
+]
+
+
 def build_generation_prompt(card: ImprovementCard) -> str:
+    target_desc = _drill_target_description(card)
+    structure = _DRILL_STRUCTURE_HINTS.get(card.kind, _DRILL_STRUCTURE_DEFAULT)
+    learner_note = ""
+    if (card.stats or {}).get("source") == "self_review" and card.prompt:
+        learner_note = f"The learner's own note about it: {card.prompt}\n"
     return (
-        "Create a short speech-practice drill for one learner.\n"
-        f"Focus area: {card.display_title}\n"
-        f"Target key: {card.target_key}\n"
-        f"Reason: {card.prompt}\n"
-        f"Recent evidence: {card.stats}\n"
-        "Use the pattern of a leveled tongue-twister ladder: begin with simple, "
-        "clean repetitions, then add denser phrases, then one or two harder control "
-        "lines. Keep every line speakable out loud. Favor clarity over speed. "
-        "Include the target in varied word positions when that makes sense.\n"
-        "Use 8 lines total. Do not include coaching notes, bullets, numbering, or markdown.\n"
-        "Return exactly this format:\n"
-        "TITLE: <short title>\n"
+        "Write an 8-line read-aloud drill.\n\n"
+        f"Practice target: {target_desc}. Recent scoring: {_format_card_evidence(card)}.\n"
+        f"{learner_note}"
+        "\nStructure (do not label the lines):\n"
+        f"{structure}\n"
+        "\nWriting rules:\n"
+        "- Every line is a concrete sentence you can picture: give it people, places, "
+        "objects, small stakes. A drill can be a tiny scene.\n"
+        "- Every line must put the practice target to work; for word, sound, and phrase "
+        "targets that means the target appears in the line, and twice is fine when it flows.\n"
+        "- Never reuse a sentence frame or an opening word across lines.\n"
+        '- Banned: coaching filler ("clear and calm", "steady breath", "I say", "I practice"), '
+        "sentences about speaking or practicing itself, and nonsense tongue-twisters that are "
+        "not real English.\n"
+        "- Mix line lengths so the reader has somewhere to breathe.\n\n"
+        "Return exactly this format and nothing else:\n"
+        "TITLE: <short, evocative title>\n"
         "SCRIPT:\n"
         "<line 1>\n"
         "<line 2>\n"
-        "..."
+        "...\n"
+        "<line 8>"
     )
 
 
 def build_ladder_generation_prompt(cards: list[ImprovementCard], theme: str = "") -> str:
-    card_lines = []
+    target_lines = []
     for card in cards:
-        card_lines.append(
-            "\n".join(
-                [
-                    f"- Title: {card.display_title}",
-                    f"  Type: {card.get_kind_display()}",
-                    f"  Target: {card.target_key}",
-                    f"  Why it matters: {card.prompt}",
-                    f"  Recent evidence: {card.stats}",
-                    f"  Mastery: {card.mastery:.2f}",
-                ]
-            )
-        )
-    theme_line = theme.strip() or "No optional creative theme was provided."
+        desc = _drill_target_description(card)
+        desc = desc[0].upper() + desc[1:]
+        target_lines.append(f"- {desc}: {_format_card_evidence(card)}.")
+    targets_block = (
+        "\n".join(target_lines)
+        if target_lines
+        else "- No specific targets were provided; build a general clarity ladder."
+    )
+    theme_line = theme.strip() or "none - invent a vivid setting yourself and commit to it"
     return (
-        "You are generating a five-step speech practice ladder for SpeechPractice.\n"
-        "SpeechPractice records the learner reading a target text aloud, transcribes the take, "
-        "then scores pronunciation clarity, word errors, character errors, pacing, pauses, and confidence. "
-        "The learner wants targeted repetition that irons out recurring speech issues, but the material "
-        "is allowed to have personality. Do not optimize for bland coaching copy. If a creative theme is "
-        "provided, use it to make the drills more memorable while keeping the target sounds and words central.\n\n"
-        f"Creative theme requested by the user: {theme_line}\n\n"
-        "Current struggle cards:\n"
-        f"{chr(10).join(card_lines) if card_lines else '- No cards were provided; create a general clarity ladder.'}\n\n"
-        "Create exactly five levels. Difficulty should rise steadily:\n"
-        "1. short warm-up phrases with obvious targets\n"
-        "2. short contrast/repetition lines\n"
-        "3. denser sentences with target sounds in varied positions\n"
-        "4. mixed-focus paragraph-like lines with rhythm and breath control\n"
-        "5. performance challenge that is still speakable and scorable\n\n"
+        "Design a five-level read-aloud practice ladder.\n\n"
+        "The learner records themselves reading each level aloud; software scores which "
+        "words and sounds came out unclear. Levels must climb steadily in difficulty and "
+        "keep the practice targets dense the whole way up.\n\n"
+        "Practice targets, from the learner's recent scoring data:\n"
+        f"{targets_block}\n\n"
+        f"Creative theme requested by the learner: {theme_line}\n\n"
+        "Build it like one escalating story, not five disconnected worksheets:\n"
+        "1. Warm-up - short lines, targets in easy stressed positions, set the scene.\n"
+        "2. Contrast pairs - targets against their nearest confusable sounds, still short.\n"
+        "3. Density - full sentences with targets at the start, middle, and end of the line.\n"
+        "4. Flow - paragraph-feel lines with real rhythm and breath turns; the scene should "
+        "be going somewhere.\n"
+        "5. Performance - one climactic passage that is genuinely hard but still natural "
+        "spoken English.\n\n"
+        "Writing rules:\n"
+        "- Every line is concrete and picturable: use the theme's people, objects, and stakes.\n"
+        "- Weave every practice target into every level; do not quarantine one target per level.\n"
+        "- Never reuse a sentence frame across lines or levels.\n"
+        '- Banned: coaching filler ("clear and calm", "steady breath"), lines about speaking '
+        "or practicing itself, and nonsense strings that are not real English.\n"
+        "- Each line must be readable aloud in one or two breaths.\n\n"
         "Return strict JSON only. No markdown, comments, or prose outside JSON. Schema:\n"
         "{\n"
         '  "title": "short ladder title",\n'
-        '  "theme": "one sentence describing the target + creative theme",\n'
+        '  "theme": "one sentence tying the targets to the creative theme",\n'
         '  "levels": [\n'
-        '    {"level": 1, "title": "Warm-up", "focus": ["target"], "lines": ["line 1", "line 2", "..."]}\n'
+        '    {"level": 1, "title": "short level title", "focus": ["target"], "lines": ["line 1", "line 2", "..."]}\n'
         "  ]\n"
         "}\n"
-        "Each level must contain 4 to 8 lines. Keep each line suitable for reading aloud."
+        "Each level must contain 4 to 8 lines."
     )
 
 
@@ -160,6 +282,9 @@ def build_self_review_card_prompt(session: PracticeSession, notes: str) -> str:
         '"title": "short display title", "prompt": "why and how to practice it"}\n'
         "  ]\n"
         "}\n"
+        "In each card's prompt, quote or closely paraphrase the learner's own words and name "
+        "the concrete failure (what happened, and where in the take) - this text later feeds "
+        "drill generation, so specifics beat generic advice.\n"
         "Return 1 to 6 cards. Do not include cards for issues the notes do not mention."
     )
 
@@ -168,46 +293,11 @@ class LocalTemplateScriptProvider:
     name = "local_template"
 
     def generate(self, card: ImprovementCard) -> GeneratedScriptDraft:
-        target = card.target_key
-        title = f"Drill: {card.display_title}"
-        if card.kind == ImprovementCard.KIND_PHRASE:
-            body = "\n".join(
-                [
-                    f"{target}.",
-                    f"{target}, clear and steady.",
-                    f"I say {target} with an even pace.",
-                    f"Slow breath first, then {target}.",
-                    f"The words before {target} stay relaxed.",
-                    f"The words after {target} keep the same rhythm.",
-                    f"I can place {target} inside a longer sentence without rushing.",
-                    f"One clean phrase becomes the next clean phrase.",
-                ]
-            )
-            prompt = build_generation_prompt(card)
-            return GeneratedScriptDraft(
-                title=title,
-                body=body,
-                prompt_snapshot=prompt,
-                provider=self.name,
-                auth_source="local",
-            )
-        body = "\n".join(
-            [
-                f"{target}.",
-                f"{target}, clean and calm.",
-                f"I practice {target} with steady breath.",
-                f"The phrase stays crisp when {target} appears early.",
-                f"The phrase stays crisp when {target} appears late.",
-                f"I slow down, reset, and say {target} again.",
-                f"Short words, long words, and {target} all stay clear.",
-                f"I keep my pace even while the sentence grows around {target}.",
-            ]
-        )
-        prompt = build_generation_prompt(card)
+        body = "\n".join(local_drills.drill_lines(card.kind, card.target_key))
         return GeneratedScriptDraft(
-            title=title,
+            title=f"Drill: {card.display_title}",
             body=body,
-            prompt_snapshot=prompt,
+            prompt_snapshot=build_generation_prompt(card),
             provider=self.name,
             auth_source="local",
         )
@@ -218,43 +308,24 @@ class LocalTemplateScriptProvider:
         theme: str = "",
     ) -> GeneratedLadderDraft:
         prompt = build_ladder_generation_prompt(cards, theme)
-        targets = [card.target_key for card in cards[:4] if card.target_key]
-        if not targets:
-            targets = ["clear endings", "steady breath", "even pace"]
+        pairs = [(card.kind, card.target_key) for card in cards[:4] if card.target_key]
+        focus = tuple(target for _kind, target in pairs) or ("clarity", "pacing")
         theme_title = theme.strip()[:60] or "Clarity"
-        title = f"{theme_title} Ladder"
+        rng = random.Random()
+        pools: dict[int, list[str]] = {}
         levels = []
         for level in range(1, 6):
-            density = [
-                "slow and clean",
-                "repeat and contrast",
-                "shape the sentence",
-                "carry the rhythm",
-                "performance pass",
-            ][level - 1]
-            lines = []
-            for target in targets:
-                if level == 1:
-                    lines.append(f"{target}. {target}, clear and calm.")
-                elif level == 2:
-                    lines.append(f"{target} starts steady; {target} ends clean.")
-                elif level == 3:
-                    lines.append(f"I keep {target} crisp while the sentence grows around it.")
-                elif level == 4:
-                    lines.append(f"With a steady breath, {target} stays clear before, during, and after the turn.")
-                else:
-                    lines.append(f"I carry {target} through a longer line without rushing, clipping, or fading the final sound.")
-            body = "\n".join(lines[:8])
+            lines = local_drills.ladder_level_lines(pairs, level, rng, pools)
             levels.append(
                 LadderLevelDraft(
                     level=level,
-                    title=f"Level {level}: {density.title()}",
-                    body=body,
-                    focus=tuple(targets),
+                    title=f"Level {level}: {local_drills.LEVEL_NAMES[level - 1]}",
+                    body="\n".join(lines[:8]),
+                    focus=focus,
                 )
             )
         return GeneratedLadderDraft(
-            title=title,
+            title=f"{theme_title} Ladder",
             theme=theme.strip() or "Targeted clarity practice",
             levels=tuple(levels),
             prompt_snapshot=prompt,
@@ -281,10 +352,7 @@ class OpenAIScriptProvider:
         text, auth_source = self._generate_text(
             OpenAI,
             model,
-            system=(
-                "You are a precise speech coach. Generate concise, speakable "
-                "practice material. Do not include analysis or markdown."
-            ),
+            system=DRILL_SYSTEM_PROMPT,
             user_prompt=prompt,
             max_output_tokens=700,
         )
@@ -312,10 +380,7 @@ class OpenAIScriptProvider:
         text, auth_source = self._generate_text(
             OpenAI,
             model,
-            system=(
-                "You are a speech coach and drill designer. Return strict JSON only. "
-                "Make the practice useful, targeted, and memorable."
-            ),
+            system=LADDER_SYSTEM_PROMPT,
             user_prompt=prompt,
             max_output_tokens=2200,
         )
@@ -433,10 +498,7 @@ class AnthropicScriptProvider:
         message = client.messages.create(
             model=model,
             max_tokens=700,
-            system=(
-                "You are a precise speech coach. Generate concise, speakable "
-                "practice material. Do not include analysis or markdown."
-            ),
+            system=DRILL_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
         parts = []
@@ -472,7 +534,7 @@ class AnthropicScriptProvider:
         message = client.messages.create(
             model=model,
             max_tokens=2200,
-            system="You are a speech coach and drill designer. Return strict JSON only.",
+            system=LADDER_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
         parts = []

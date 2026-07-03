@@ -451,8 +451,8 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(draft.provider, "local_template")
         self.assertIn("river", draft.body)
-        self.assertIn("Focus area: river", draft.prompt_snapshot)
-        self.assertIn("leveled tongue-twister ladder", draft.prompt_snapshot)
+        self.assertIn('the word "river"', draft.prompt_snapshot)
+        self.assertIn("read-aloud drill", draft.prompt_snapshot)
 
     def test_phrase_script_generation_template_repeats_full_phrase(self):
         card = ImprovementCard.objects.create(
@@ -466,8 +466,7 @@ class PracticeWebTests(TransactionTestCase):
         draft = generate_local_template(card)
 
         self.assertEqual(draft.provider, "local_template")
-        self.assertIn("steady breath today", draft.body)
-        self.assertIn("inside a longer sentence", draft.body)
+        self.assertEqual(draft.body.count("steady breath today"), 8)
 
     def test_phrase_trend_summary_finds_error_context_phrase(self):
         scored = SimpleNamespace(

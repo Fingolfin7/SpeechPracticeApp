@@ -1,0 +1,273 @@
+{% extends "practice/base.html" %}
+{% load static %}
+{% block title %}Practice | SpeechPractice{% endblock %}
+{% block content %}
+<form
+  class="practice-workbench"
+  method="post"
+  enctype="multipart/form-data"
+  data-recorder-form
+  data-script-preview-base="{% url 'practice:script_preview' 0 %}"
+>
+  {% csrf_token %}
+  {{ form.card }}
+
+  <div class="practice-task-tabs" aria-label="Practice steps">
+    <a href="#practice-script">Read</a>
+    <a href="#practice-recorder">Record</a>
+    <a href="#practice-review">Review</a>
+  </div>
+
+  <section class="panel reading-panel practice-script-panel" id="practice-script" data-script-preview-panel>
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">Read aloud</p>
+        <h1 data-script-title>{% if selected_script %}{{ selected_script.title }}{% else %}No active scripts yet{% endif %}</h1>
+      </div>
+      <span data-script-word-count>
+        {% if selected_script %}{{ selected_script.word_count }} words{% else %}No script selected{% endif %}
+      </span>
+    </div>
+
+    <div class="script-control-panel">
+      <div class="mode-picker" data-mode-picker aria-label="Recording mode">
+        <label>
+          <input type="radio" name="mode" value="script" {% if form.mode.value == "script" or not form.mode.value %}checked{% endif %}>
+          <span>Script</span>
+        </label>
+        <label>
+          <input type="radio" name="mode" value="quick" {% if form.mode.value == "quick" %}checked{% endif %}>
+          <span>Quick Practice</span>
+        </label>
+        <label>
+          <input type="radio" name="mode" value="free_speak" {% if form.mode.value == "free_speak" %}checked{% endif %}>
+          <span>Free Speak</span>
+        </label>
+        {% if form.mode.errors %}<div class="form-error">{{ form.mode.errors }}</div>{% endif %}
+      </div>
+
+      <div class="script-picker-tools">
+        <label for="script-search">{% if form.mode.value == "quick" %}Find a drill{% else %}Find a script{% endif %}</label>
+        <div>
+          <input id="script-search" type="search" placeholder="Search title, author, or tag" data-script-search>
+          <button class="secondary-button" type="button" data-random-script>Random</button>
+        </div>
+      </div>
+
+      <div class="field-row script-select-row">
+        {{ form.script.label_tag }}
+        {{ form.script }}
+        {% if form.script.errors %}<div class="form-error">{{ form.script.errors }}</div>{% endif %}
+      </div>
+    </div>
+
+    <section class="quick-practice-panel" data-quick-practice-panel>
+      <div class="quick-panel-heading">
+        <div>
+          <p class="eyebrow">Quick Practice</p>
+          <h2>Run a drill ladder</h2>
+        </div>
+        <a class="quiet-link" href="{% url 'practice:scripts' %}?kind=drill">Manage ladders</a>
+      </div>
+
+      <div class="ladder-panel" aria-label="Practice ladder">
+        <div class="ladder-main">
+          <div>
+            <p class="eyebrow">Drill ladder</p>
+            {% if selected_ladder %}
+              <h3>{{ selected_ladder.title }}</h3>
+              <small>
+                {{ selected_ladder.get_source_display }}
+                {% if selected_ladder.model_provider %}&middot; {{ selected_ladder.model_provider }}{% endif %}
+                {% if selected_ladder.auth_source %}&middot; {{ selected_ladder.auth_source }} auth{% endif %}
+              </small>
+            {% else %}
+              <h3>No ladders yet</h3>
+              <small>Generate one from your priority cards.</small>
+            {% endif %}
+          </div>
+          <label class="sr-label" for="ladder-select">Choose ladder</label>
+          <select id="ladder-select" data-ladder-select {% if not practice_ladders %}disabled{% endif %}>
+            {% for ladder in practice_ladders %}
+              <option value="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ ladder.pk }}" {% if selected_ladder and selected_ladder.pk == ladder.pk %}selected{% endif %}>
+                {{ ladder.title }}
+              </option>
+            {% empty %}
+              <option>No practice ladders available</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        {% if selected_ladder and selected_ladder.theme %}
+          <p class="ladder-theme">{{ selected_ladder.theme }}</p>
+        {% endif %}
+
+        {% if selected_ladder %}
+          <div class="script-tags" aria-label="Ladder focus cards">
+            {% for card in selected_ladder.cards.all %}
+              <span>{{ card.get_kind_display }}: {{ card.display_title }}</span>
+            {% empty %}
+              <span>General ladder</span>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        <div class="ladder-level-links" aria-label="Ladder levels">
+          {% for step in ladder_steps %}
+            <a
+              class="{% if selected_ladder_step and selected_ladder_step.pk == step.pk %}is-active{% endif %}"
+              href="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ selected_ladder.pk }}&amp;level={{ step.level }}&amp;script={{ step.script.pk }}"
+              title="{{ step.title }}"
+            >{{ step.level }}</a>
+          {% empty %}
+            <span class="empty">Run migrations or generate a ladder to load levels.</span>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    {% if selected_script %}
+      <p class="script-meta" data-script-meta>
+        <span>{{ selected_script.get_practice_kind_display }}</span>
+        {% if selected_script.author %}<span>{{ selected_script.author }}</span>{% endif %}
+        <span>{{ selected_script.get_source_display }}</span>
+        <span>Level {{ selected_script.difficulty }}</span>
+        {% if selected_script.tags %}
+          <span>{{ selected_script.tags|join:", " }}</span>
+        {% endif %}
+      </p>
+      <div class="script-reader" data-script-body>{{ selected_script.body|linebreaks }}</div>
+    {% else %}
+      <p class="script-meta" data-script-meta><span>Upload or create a script to begin.</span></p>
+      <div class="script-reader empty" data-script-body>
+        <p>Your practice text will appear here after a script is available.</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <aside class="recorder-panel practice-recorder-panel" id="practice-recorder">
+    <div class="recorder-header">
+      <div>
+        <p class="eyebrow">Record and score</p>
+        <h2>Live take</h2>
+        <div class="recorder-provider">
+          {{ form.provider.label_tag }}
+          {{ form.provider }}
+        </div>
+      </div>
+      <div class="recording-time">
+        <span data-recording-time>00:00</span>
+        <small data-recording-duration>No take yet</small>
+      </div>
+    </div>
+
+    {% if focus_card %}
+      <div class="focus-brief compact">
+        <span class="pill">{{ focus_card.get_kind_display }}</span>
+        <strong>{{ focus_card.display_title }}</strong>
+        <small>Mastery {{ focus_card.mastery|floatformat:2 }} &middot; due {{ focus_card.due_at|date:"M j, H:i" }}</small>
+      </div>
+    {% endif %}
+
+    <div class="waveform-card" data-waveform-card>
+      <canvas data-waveform-canvas aria-label="Live recording waveform"></canvas>
+      <div class="waveform-empty" data-waveform-empty>
+        <strong>Waiting for audio</strong>
+        <span>Record or upload a take to draw the waveform.</span>
+      </div>
+      <div class="waveform-playhead" data-waveform-playhead aria-hidden="true"></div>
+    </div>
+
+    <div class="recorder-controls">
+      <div class="recording-stage" data-recording-stage>
+        <div class="recording-orb" aria-hidden="true"><span></span></div>
+        <div>
+          <strong data-recording-status>Ready to record</strong>
+          <small data-mode-helper>Script mode scores your recording against the selected text.</small>
+        </div>
+      </div>
+
+      <div class="transport-bar">
+        <button class="transport-button record-button" type="button" data-record-start aria-label="Start recording">
+          <span aria-hidden="true"></span>
+        </button>
+        <button class="transport-button stop-button" type="button" data-record-stop disabled aria-label="Stop recording">
+          <span aria-hidden="true"></span>
+        </button>
+        <button class="transport-button play-button" type="button" data-record-play disabled aria-label="Play recording">
+          <span aria-hidden="true"></span>
+        </button>
+        <button class="transport-button delete-button" type="button" data-record-delete disabled aria-label="Delete recording">
+          <span aria-hidden="true"></span>
+        </button>
+        <button class="button-link score-button" type="submit" data-score-button disabled>Score recording</button>
+      </div>
+      <small class="score-reason" data-score-reason>Record or upload a take before scoring.</small>
+      <div class="transport-secondary">
+        <button class="button-link copy-score-button" type="button" data-copy-practice-score disabled>Copy score</button>
+        {% if autumn_timer.configured %}
+          <button
+            class="button-link autumn-button{% if autumn_timer.active %} is-active{% endif %}"
+            type="submit"
+            form="autumn-timer-form"
+            name="{% if autumn_timer.active %}stop_autumn_timer{% else %}start_autumn_timer{% endif %}"
+            value="1"
+            title="{{ autumn_timer.project }}{% if autumn_timer.subprojects %}: {{ autumn_timer.subprojects|join:', ' }}{% endif %}"
+            data-autumn-toggle
+          >
+            {% if autumn_timer.active %}Stop Autumn{% else %}Start Autumn{% endif %}
+          </button>
+        {% else %}
+          <a class="button-link secondary-button autumn-button" href="{% url 'practice:account' %}">Connect Autumn</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="practice-metrics" id="practice-review" aria-live="polite" data-practice-metrics>
+      <strong>Score: -</strong>
+      <span>WER: -</span>
+      <span>CER: -</span>
+      <span>Clarity: -</span>
+      <span>Rate: - wpm</span>
+      <span>Pauses: -</span>
+      <span>Conf: -</span>
+    </div>
+
+    <section class="live-transcript-panel" aria-live="polite">
+      <div class="transcript-heading">
+        <div>
+          <p class="eyebrow">Transcript</p>
+        </div>
+        <small data-transcript-state>Waiting</small>
+      </div>
+      <div class="transcript-legend" aria-label="Transcript highlight legend">
+        <span class="legend-insert">inserted word</span>
+        <span class="legend-char-insert">inserted letters</span>
+        <span class="legend-replace">replaced letters</span>
+        <span class="legend-playhead">playhead</span>
+      </div>
+      <div class="live-transcript-box" data-live-transcript>
+      </div>
+    </section>
+
+    <div class="field-row upload-row">
+      {{ form.audio.label_tag }}
+      {{ form.audio }}
+      {% if form.audio.errors %}<div class="form-error">{{ form.audio.errors }}</div>{% endif %}
+      <small>{{ form.audio.help_text }}</small>
+    </div>
+
+    <audio data-recording-preview hidden></audio>
+  </aside>
+</form>
+
+{% if autumn_timer.configured %}
+  <form id="autumn-timer-form" method="post" action="{% url 'practice:autumn_timer' %}" hidden>
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <input type="hidden" name="autumn_note" value="{{ autumn_timer.note }}">
+  </form>
+{% endif %}
+
+<script src="{% static 'practice/recorder.js' %}?v={{ static_version.recorder_js }}"></script>
+{% endblock %}

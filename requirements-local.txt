@@ -1,0 +1,9 @@
+-r requirements.txt
+
+# Optional local transcription provider. Python 3.12 or lower is recommended
+# when installing a CUDA-enabled torch build.
+openai-whisper>=20231117
+soundfile>=0.12
+pydub>=0.25.1
+
+# Ensure ffmpeg is on PATH for local Whisper and oversized-file chunking.

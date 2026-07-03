@@ -1,0 +1,43 @@
+envVarGroups:
+  - name: speechpractice-shared
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: USE_S3
+        value: "1"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_STORAGE_BUCKET_NAME
+        sync: false
+      - key: AWS_S3_REGION_NAME
+        value: eu-north-1
+
+services:
+  - type: web
+    name: speechpractice-web
+    runtime: python
+    plan: free
+    region: frankfurt
+    buildCommand: bash build.sh
+    startCommand: gunicorn speechpractice_web.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120
+    healthCheckPath: /healthz/
+    envVars:
+      - fromGroup: speechpractice-shared
+      - key: DJANGO_DEBUG
+        value: "0"
+      - key: DJANGO_REQUIRE_LOGIN
+        value: "1"
+      - key: TRANSCRIPTION_PROVIDER
+        value: openai
+      - key: OPENAI_TRANSCRIPTION_MODEL
+        value: whisper-1
+      - key: SCORING_JOBS_MODE
+        value: thread
+      - key: PYTHON_VERSION
+        value: 3.12.10

@@ -1,0 +1,284 @@
+{% extends "practice/base.html" %}
+{% load static %}
+{% block title %}Library | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">Practice library</p>
+    <h1>{% if kind_filter == "drill" %}Ladders / Drills{% else %}Reading scripts{% endif %}</h1>
+  </div>
+  <div class="action-row">
+    <a class="button-link" href="{% url 'practice:script_import' %}">Import corpus</a>
+    <a class="button-link" href="{% url 'practice:script_create' %}">Add script</a>
+  </div>
+</section>
+
+<nav class="kind-tabs" aria-label="Library type filters">
+{% for tab in kind_tabs %}
+    <a class="{% if tab.active %}is-active{% endif %}" href="{% url 'practice:scripts' %}?kind={{ tab.value }}">
+      {{ tab.label }} <span>{{ tab.count }}</span>
+    </a>
+  {% endfor %}
+</nav>
+
+{% if kind_filter == "drill" %}
+  <section class="ladder-library-panel">
+    <div class="script-source-heading">
+      <div>
+        <p class="eyebrow">Practice ladders</p>
+        <h2>Build and choose drill progressions</h2>
+      </div>
+      <a class="quiet-link" href="{% url 'practice:practice' %}?mode=quick">Open Quick Practice</a>
+    </div>
+
+    <div class="ladder-library-grid">
+      <article class="ladder-builder">
+        <div>
+          <p class="eyebrow">Generate ladder</p>
+          <h3>Use selected focus cards</h3>
+          <p>Choose any active cards that should shape the next five-level practice ladder. Priority cards start checked.</p>
+        </div>
+        <form method="post" action="{% url 'practice:generate_ladder' %}">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="scripts">
+          <div class="ladder-card-picker">
+            {% for card in ladder_candidate_cards %}
+              <label>
+                <input type="checkbox" name="cards" value="{{ card.pk }}" {% if card.pk in default_ladder_card_ids %}checked{% endif %}>
+                <span>
+                  <strong>{{ card.display_title }}</strong>
+                  <small>{{ card.get_kind_display }} &middot; {{ card.get_status_display }} &middot; mastery {{ card.mastery|floatformat:2 }}</small>
+                </span>
+              </label>
+            {% empty %}
+              <p class="empty">Refresh cards from practice history before generating a targeted ladder.</p>
+            {% endfor %}
+          </div>
+          <div class="ladder-builder-controls">
+            <div>
+              <label for="script-ladder-theme">Theme</label>
+              <input
+                id="script-ladder-theme"
+                name="theme"
+                maxlength="512"
+                placeholder="courtroom drama, moonbase radio, rainy noir..."
+              >
+            </div>
+            <div>
+              <label for="script-ladder-provider">Generator</label>
+              <select id="script-ladder-provider" name="provider">
+                {% for value, label in generation_provider_choices %}
+                  <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <button type="submit">Generate ladder</button>
+          </div>
+        </form>
+      </article>
+
+      <div class="ladder-list">
+        <form
+          id="ladder-bulk-form"
+          class="bulk-actions"
+          method="post"
+          action="{% url 'practice:ladder_bulk_delete' %}"
+          data-bulk-form
+          data-bulk-confirm="Delete {count} selected ladder(s) and their generated drill scripts?"
+        >
+          {% csrf_token %}
+          <label class="bulk-select-all">
+            <input type="checkbox" data-bulk-select-all>
+            <span>Select all</span>
+          </label>
+          <span class="bulk-count" data-bulk-count>0 selected</span>
+          <button class="bulk-delete-button" type="submit" data-bulk-submit disabled>Delete selected</button>
+        </form>
+        {% for ladder in practice_ladders %}
+          <article class="ladder-row" data-bulk-row>
+            <div class="ladder-row-head">
+              {% if ladder.source != "builtin" %}
+                <input
+                  class="bulk-check"
+                  type="checkbox"
+                  name="selected"
+                  value="{{ ladder.pk }}"
+                  form="ladder-bulk-form"
+                  aria-label="Select {{ ladder.title }}"
+                >
+              {% endif %}
+              <div>
+                <strong>{{ ladder.title }}</strong>
+                <small>
+                  {{ ladder.get_source_display }}
+                  {% if ladder.model_provider %}&middot; {{ ladder.model_provider }}{% endif %}
+                  {% if ladder.auth_source %}&middot; {{ ladder.auth_source }} auth{% endif %}
+                </small>
+              </div>
+              <div class="ladder-row-actions">
+                <a class="quiet-link" href="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ ladder.pk }}">Practice</a>
+                {% if ladder.source != "builtin" %}
+                  <form method="post" action="{% url 'practice:delete_ladder' ladder.pk %}">
+                    {% csrf_token %}
+                    <button
+                      class="script-tool danger-tool"
+                      type="submit"
+                      aria-label="Delete {{ ladder.title }}"
+                      title="Delete ladder"
+                      onclick="return confirm('Delete this ladder and its generated drill scripts?');"
+                    >
+                      <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                        <path d="M5 7h14" />
+                        <path d="M10 11v6" />
+                        <path d="M14 11v6" />
+                        <path d="M8 7l.8 12h6.4L16 7" />
+                        <path d="M9 7V5h6v2" />
+                      </svg>
+                      <span class="sr-only">Delete</span>
+                    </button>
+                  </form>
+                {% endif %}
+              </div>
+            </div>
+            {% if ladder.theme %}<p>{{ ladder.theme }}</p>{% endif %}
+            <div class="script-tags" aria-label="Ladder focus cards">
+              {% for card in ladder.cards.all %}
+                <span>{{ card.get_kind_display }}: {{ card.display_title }}</span>
+              {% empty %}
+                <span>General ladder</span>
+              {% endfor %}
+            </div>
+          </article>
+        {% empty %}
+          <article class="ladder-row">
+            <strong>No ladders yet</strong>
+            <p>Run migrations to load the built-in ladder, or generate one from focus cards.</p>
+          </article>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+{% endif %}
+
+<nav class="source-tabs" aria-label="Script source filters">
+  <a class="{% if not source_filter %}is-active{% endif %}" href="{% url 'practice:scripts' %}?kind={{ kind_filter }}">All <span>{{ total_count }}</span></a>
+  {% for tab in source_tabs %}
+    <a class="{% if tab.active %}is-active{% endif %}" href="{% url 'practice:scripts' %}?kind={{ kind_filter }}&amp;source={{ tab.value }}">
+      {{ tab.label }} <span>{{ tab.count }}</span>
+    </a>
+  {% endfor %}
+</nav>
+
+<section class="script-library">
+  {% if source_groups %}
+    <form
+      id="script-bulk-form"
+      class="bulk-actions"
+      method="post"
+      action="{% url 'practice:script_bulk_delete' %}"
+      data-bulk-form
+      data-bulk-confirm="Delete {count} selected script(s)?"
+    >
+      {% csrf_token %}
+      <input type="hidden" name="kind" value="{{ kind_filter }}">
+      <input type="hidden" name="source" value="{{ source_filter }}">
+      <label class="bulk-select-all">
+        <input type="checkbox" data-bulk-select-all>
+        <span>Select all</span>
+      </label>
+      <span class="bulk-count" data-bulk-count>0 selected</span>
+      <button class="bulk-delete-button" type="submit" data-bulk-submit disabled>Delete selected</button>
+    </form>
+  {% endif %}
+  {% for group in source_groups %}
+    <section class="script-source-section" aria-labelledby="source-{{ group.source }}" data-bulk-section="script-bulk-form">
+      <div class="script-source-heading">
+        <div>
+          <p class="eyebrow">{{ group.label }}</p>
+          <h2 id="source-{{ group.source }}">
+            {% if kind_filter == "drill" %}
+              {% if group.source == "generated" %}AI generated drills
+              {% elif group.source == "builtin" %}Built-in drills
+              {% elif group.source == "uploaded" %}Uploaded drills
+              {% elif group.source == "user" %}Handwritten drills
+              {% else %}Imported drills{% endif %}
+            {% else %}
+              {% if group.source == "uploaded" %}User uploaded readings
+              {% elif group.source == "user" %}Handwritten readings
+              {% elif group.source == "builtin" %}Built-in readings
+              {% elif group.source == "generated" %}AI generated readings
+              {% else %}Imported corpus{% endif %}
+            {% endif %}
+          </h2>
+        </div>
+        <div class="bulk-section-tools" data-bulk-section-tools>
+          <label class="bulk-select-all">
+            <input type="checkbox" data-bulk-section-select>
+            <span>Select section</span>
+          </label>
+          <button class="bulk-section-delete" type="button" data-bulk-section-delete>Delete all in section</button>
+        </div>
+        <span>{{ group.scripts|length }}</span>
+      </div>
+
+      <div class="script-list">
+        {% for script in group.scripts %}
+          <article class="script-row source-{{ script.source }}" data-bulk-row>
+            <div class="script-row-head">
+              {% if script.user_id or script.source != "builtin" %}
+                <input
+                  class="bulk-check"
+                  type="checkbox"
+                  name="selected"
+                  value="{{ script.pk }}"
+                  form="script-bulk-form"
+                  aria-label="Select {{ script.title }}"
+                >
+              {% endif %}
+              <div>
+                <strong>{{ script.title }}</strong>
+                <small>{% if script.author %}{{ script.author }} &middot; {% endif %}{{ script.word_count }} words &middot; Level {{ script.difficulty }}</small>
+              </div>
+              <div class="script-badge-stack">
+                <span class="source-badge source-badge-kind">{{ script.get_practice_kind_display }}</span>
+                <span class="source-badge source-badge-{{ script.source }}">{{ script.get_source_display }}</span>
+              </div>
+            </div>
+            <p>{{ script.body|truncatewords:34 }}</p>
+            {% if script.tags %}
+              <div class="script-tags" aria-label="Script tags">
+                {% for tag in script.tags|slice:":5" %}
+                  <span>{{ tag }}</span>
+                {% endfor %}
+              </div>
+            {% endif %}
+            <div class="script-actions">
+              <a class="quiet-link" href="{% url 'practice:practice' %}?{% if kind_filter == "drill" %}mode=quick&amp;{% endif %}script={{ script.pk }}">Practice this</a>
+              <a class="script-tool" href="{% url 'practice:script_edit' script.pk %}" aria-label="Edit {{ script.title }}" title="Edit script">
+                <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                  <path d="M4 20h4.7L19.2 9.5a2.3 2.3 0 0 0 0-3.3l-1.4-1.4a2.3 2.3 0 0 0-3.3 0L4 15.3V20Z" />
+                  <path d="m13.6 5.8 4.6 4.6" />
+                </svg>
+                <span class="sr-only">Edit</span>
+              </a>
+              <a class="script-tool danger-tool" href="{% url 'practice:script_delete' script.pk %}" aria-label="Delete {{ script.title }}" title="Delete script">
+                <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                  <path d="M5 7h14" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                  <path d="M8 7l.8 12h6.4L16 7" />
+                  <path d="M9 7V5h6v2" />
+                </svg>
+                <span class="sr-only">Delete</span>
+              </a>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  {% empty %}
+    <p class="empty">No {% if kind_filter == "drill" %}drills{% else %}reading scripts{% endif %} match this source yet.</p>
+  {% endfor %}
+</section>
+<script src="{% static 'practice/bulk_select.js' %}?v={{ static_version.bulk_select_js }}"></script>
+{% endblock %}

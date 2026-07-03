@@ -1,0 +1,218 @@
+{% extends "practice/base.html" %}
+{% block title %}Today | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title">
+  <h1>Today</h1>
+</section>
+
+<section class="today-recommendation panel" aria-label="Recommended next action">
+  <div>
+    <p class="eyebrow">Do next</p>
+    {% if active_jobs %}
+      {% for job in active_jobs %}
+        {% if forloop.first %}
+          <h2>Check the {{ job.get_status_display|lower }} scoring job</h2>
+          <p>Finish the feedback loop for {{ job.script_name }} before starting another rep.</p>
+        {% endif %}
+      {% endfor %}
+    {% elif today_queue %}
+      {% for item in today_queue %}
+        {% if forloop.first %}
+          <h2>{% if item.script %}Practice {{ item.card.display_title }}{% else %}Generate {{ item.card.display_title }} drill{% endif %}</h2>
+          <p>
+            {% if item.is_due %}This card is due now{% else %}This card is coming up{% endif %}
+            with mastery {{ item.card.mastery|floatformat:2 }}.
+            {% if summary.feedback %}{{ summary.feedback.0 }}{% endif %}
+          </p>
+        {% endif %}
+      {% endfor %}
+    {% elif summary.phrases.top_trouble_phrases %}
+      {% for row in summary.phrases.top_trouble_phrases %}
+        {% if forloop.first %}
+          <h2>Review {{ row.phrase }}</h2>
+          <p>This phrase is the clearest pattern in recent scoring.</p>
+        {% endif %}
+      {% endfor %}
+    {% else %}
+      <h2>Start with a clean rep</h2>
+      <p>Score a practice take to fill today&apos;s queue with specific follow-up.</p>
+    {% endif %}
+  </div>
+  <div class="today-recommendation-action">
+    {% if active_jobs %}
+      {% for job in active_jobs %}
+        {% if forloop.first %}
+          <a class="button-link" href="{% url 'practice:scoring_job' job.pk %}">Open job</a>
+        {% endif %}
+      {% endfor %}
+    {% elif today_queue %}
+      {% for item in today_queue %}
+        {% if forloop.first %}
+          {% if item.script %}
+            <a class="button-link" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ item.script.pk }}&amp;card={{ item.card.pk }}">Practice drill</a>
+          {% else %}
+            <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="provider" value="local_template">
+              <button type="submit">Generate drill</button>
+            </form>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+    {% else %}
+      <a class="button-link" href="{% url 'practice:practice' %}">Open Practice</a>
+    {% endif %}
+  </div>
+</section>
+
+<section class="today-layout">
+  <article class="panel today-main">
+    <div class="panel-heading">
+      <p class="eyebrow">Next reps</p>
+      <a class="button-link" href="{% url 'practice:cards' %}">Open cards</a>
+    </div>
+
+    {% if queue_rest %}
+      <div class="today-list">
+        {% for item in queue_rest %}
+          <div class="today-item {% if item.is_due %}is-due{% endif %}">
+            <div class="today-index">{{ forloop.counter|add:queue_offset }}</div>
+            <div class="today-copy">
+              <span class="pill">{{ item.card.get_kind_display }}</span>
+              <h2>{{ item.card.display_title }}</h2>
+              <p>{{ item.card.prompt }}</p>
+              <p class="today-why">
+                {% if item.is_due %}Why this is next: due now{% else %}Why this is next: upcoming{% endif %}
+                at mastery {{ item.card.mastery|floatformat:2 }}{% if forloop.first and summary.feedback %}; {{ summary.feedback.0 }}{% endif %}.
+              </p>
+              <small>
+                {% if item.is_due %}Due now{% else %}Upcoming{% endif %}
+                &middot; mastery {{ item.card.mastery|floatformat:2 }}
+                &middot; {{ item.review_count }} reviews
+              </small>
+            </div>
+              <div class="today-actions">
+              {% if item.script %}
+                <a class="button-link" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ item.script.pk }}&amp;card={{ item.card.pk }}">Practice drill</a>
+              {% else %}
+                <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
+                  {% csrf_token %}
+                  <input type="hidden" name="provider" value="local_template">
+                  <button type="submit">Generate drill</button>
+                </form>
+              {% endif %}
+              <a class="quiet-link" href="{% url 'practice:card_detail' item.card.pk %}">Card details</a>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% elif today_queue %}
+      <p class="empty">Your next rep is featured above. Nothing else is queued for today.</p>
+    {% else %}
+      <p class="empty">No cards yet. Refresh cards after scoring a few sessions, or import scripts and start practicing.</p>
+    {% endif %}
+  </article>
+
+  <aside class="today-side">
+    <article class="panel">
+      <p class="eyebrow">Scoring jobs</p>
+      <div class="job-mini-list">
+        {% for job in active_jobs %}
+          <a class="job-mini" href="{% url 'practice:scoring_job' job.pk %}">
+            <strong>{{ job.get_status_display }}</strong>
+            <span>{{ job.script_name }}</span>
+          </a>
+        {% empty %}
+          <p class="empty">No active scoring jobs.</p>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <p class="eyebrow">Coach notes</p>
+      <ul class="plain-list">
+        {% for line in summary.feedback %}
+          <li>{{ line }}</li>
+        {% endfor %}
+      </ul>
+    </article>
+  </aside>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Trouble words</p>
+    <div class="rank-list">
+      {% for row in summary.words.top_trouble_words %}
+        <div><strong>{{ row.word }}</strong><span>{{ row.error_rate|floatformat:0 }} error rate</span></div>
+      {% empty %}
+        <p class="empty">More scored sessions will fill this in.</p>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <p class="eyebrow">Phrase focus</p>
+    <div class="rank-list">
+      {% for row in summary.phrases.top_trouble_phrases %}
+        <div><strong>{{ row.phrase }}</strong><span>{{ row.error_rate|floatformat:0 }} error rate</span></div>
+      {% empty %}
+        <p class="empty">Phrase-level patterns will appear after more scored repetitions.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Sound patterns</p>
+    <div class="rank-list">
+      {% for row in summary.sounds.top_trouble_symbols %}
+        <div><strong>{{ row.symbol }}</strong><span>{{ row.errors|floatformat:0 }} errors / {{ row.attempts|floatformat:0 }} attempts</span></div>
+      {% empty %}
+        <p class="empty">No sound patterns yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Recent scoring jobs</p>
+    </div>
+    <div class="job-mini-list">
+      {% for job in recent_jobs %}
+        <a class="job-mini" href="{% url 'practice:scoring_job' job.pk %}">
+          <strong>{{ job.get_status_display }}</strong>
+          <span>{{ job.script_name }}</span>
+        </a>
+      {% empty %}
+        <p class="empty">No completed jobs yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Recent scoring history</p>
+      <a class="button-link" href="{% url 'practice:sessions' %}">View all</a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Script</th><th>Score</th><th>WER</th></tr></thead>
+        <tbody>
+          {% for session in recent_sessions %}
+            <tr>
+              <td>{{ session.timestamp }}</td>
+              <td>{{ session.script_name }}</td>
+              <td>{{ session.score|floatformat:2 }}</td>
+              <td>{{ session.wer|floatformat:2 }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4">No scored sessions yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+{% endblock %}

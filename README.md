@@ -1,154 +1,146 @@
-# SpeechPracticeApp
+# SpeechPractice
 
-<img width="1107" height="671" alt="image" src="https://github.com/user-attachments/assets/7fad2419-75f6-4fd8-8974-a231070e4312" />
+SpeechPractice is a local Django web app for deliberate speaking practice. It gives you a script, records a take in the browser, transcribes it, scores it, and turns recurring mistakes into the next set of drills.
 
-SpeechPracticeApp is a Python application I built to support my speaking drills—helping me practice speaking clearly and track progress objectively. It records practice sessions, transcribes them with Whisper, and scores the result so I can target what to improve.
+![SpeechPractice walkthrough](docs/assets/speechpractice-tour.gif)
 
-## Why this project?
+## What It Does
 
-I wanted an impartial, repeatable way to judge how clearly I speak. Human judgments are subjective and vary from day to day. By using a fixed “source script,” recording my practice, and transcribing what I actually said, I can compare the two texts and quantify how close my speech was to the target. This provides a consistent baseline for drills.
+- Practice in three modes: scripted read-aloud, quick drills, or free speak.
+- Record in the browser or upload audio for scoring.
+- Transcribe with Local Whisper, OpenAI transcription, or a sidecar transcript for smoke tests.
+- Score takes with WER, CER, clarity, speaking rate, pause ratio, confidence, and filled-pause metrics.
+- Review clickable timestamped transcripts, waveform playback, highlighted errors, report exports, and editable transcripts.
+- Build an adaptive practice loop from history, spaced-repetition cards, generated drills, ladders, and coach notes.
+- Connect model providers, Codex auth, Autumn timer metadata, and local Whisper tuning from the Account page.
 
-## How it works
+## Screenshots
 
-1. Provide scripts (text prompts) as .txt files in the project’s Scripts/ directory (see “Scripts directory” below).
-2. Start a session: the app will randomly select a script from Scripts/ (or you can pick one manually in Settings).
-3. Record yourself speaking or upload an audio file.
-4. The app uses Whisper to transcribe your speech.
-5. It compares the transcription with the target text and reports:
-   - Scores (overall/composite)
-   - WER (Word Error Rate)
-   - Clarity (experimental)
+| Practice workbench | Today queue |
+| --- | --- |
+| ![Practice page](docs/assets/speechpractice-practice-scored-wide.png) | ![Today page](docs/assets/speechpractice-today-wide.png) |
 
-You can tune accuracy/speed via device (GPU vs CPU) and beam search settings in the Settings page.
+| Cards | Progress |
+| --- | --- |
+| ![Improvement cards](docs/assets/speechpractice-cards-wide.png) | ![Progress tracker](docs/assets/speechpractice-progress-wide.png) |
 
-## Scripts directory
+The current branch is the Django rebuild. The old Qt desktop GUI has been removed; use `manage.py` or `run_server.bat` to run the web app.
 
-- Location: a folder named Scripts/ at the project root (case-sensitive on Linux/macOS).
-- Contents: one or more plain-text .txt files; each file is a “script” (one prompt per file).
-- Encoding: UTF-8 recommended.
-- Selection behavior: by default the app randomly chooses a script at session start; you can override and select a specific file in Settings.
+## Requirements
 
-Example structure:
-```
-SpeechPracticeApp/
-├── Scripts/
-│   ├── articulation_drill_1.txt
-│   ├── tongue_twisters.txt
-│   └── reading_passage_short.txt
-└── ...
-```
+- Python 3.10-3.12. This checkout usually uses `.venv312`.
+- `ffmpeg` on `PATH` for Whisper and audio conversion.
+- Optional NVIDIA CUDA-capable GPU plus a matching PyTorch build for faster local Whisper.
 
-## Whisper transcriptions
+## Setup
 
-Whisper is a state-of-the-art speech-to-text model. In this app, Whisper:
-- Transcribes recorded audio to text.
-- Provides timestamps and log-probability signals that can inform clarity-style metrics.
-- Can run on CPU or GPU.
-
-### GPU (CUDA) vs CPU
-
-- GPU (CUDA): Much faster and recommended for interactive practice and longer audio. Requires a CUDA-capable NVIDIA GPU and a PyTorch build with CUDA.
-- CPU: Works on any machine but is slower, especially with larger models.
-
-Important Python version note for CUDA:
-- Use Python <= 3.12 if you want GPU/CUDA acceleration. Python 3.13+ does not yet have CUDA-supported builds for this stack.
-- CPU-only usage can work on newer Python versions, but for maximum compatibility (and to switch to GPU later), prefer Python 3.10–3.12.
-
-## Scores | WER | Clarity
-
-- Scores (overall): A single, user-facing number designed to summarize performance. It can combine multiple signals (e.g., WER, speaking-rate stability, pronunciation confidence) into one score. The exact combination can evolve over time.
-- WER (Word Error Rate): A standard ASR metric computed by aligning the reference (target script) and hypothesis (Whisper transcription).
-  - WER = (Substitutions + Deletions + Insertions) / Number of reference words.
-  - Lower is better. It reflects intelligibility and correctness at the word level.
-- Clarity (experimental): “Clarity” is hard to measure reliably because it blends pronunciation, enunciation, prosody, and noise. In this app, clarity is treated as an evolving metric. Potential ingredients include:
-  - ASR-based signals: per-word confidence/log-probability, insertion/deletion-heavy errors (often correlate with mumbling), and timing stability.
-  - Timing/fluency: articulation rate, pause ratio, filled pauses.
-  - Audio quality proxies: SNR-like features, clipping detection.
-  - Optional character-level error rate (CER) to catch subtle articulation issues missed by WER.
-
-
-## Settings page
-
-<img width="1104" height="673" alt="image" src="https://github.com/user-attachments/assets/71ba7162-f2e9-49a3-a213-ebde9c46bb83" />
-
-
-Use the Settings page to:
-- Select device: CPU or GPU (CUDA).
-- Adjust beam size for decoding.
-- Choose language/translation behavior (if applicable).
-- Pick how the script is chosen: random from Scripts/ or a specific file.
-- Configure audio input preferences.
-
-## Beam settings
-
-Whisper supports beam search decoding:
-- Beam size: Higher values explore more candidate transcriptions, often improving accuracy at the cost of speed and memory.
-- Tips:
-  - CPU: Keep beam size modest (e.g., 1–3) for responsiveness.
-  - GPU: You can raise beam size (e.g., 5–10) for better accuracy if latency is acceptable.
-
-
-These controls help tailor accuracy, speed, and the feedback style to your goals.
-
-## Getting started
-
-Prerequisites:
-- Python 3.10–3.12 recommended (Python <= 3.12 is required for CUDA/GPU acceleration; Python 3.13+ currently lacks CUDA support for this stack).
-- ffmpeg installed and on your PATH.
-- For GPU: NVIDIA drivers + a PyTorch build with CUDA.
-
-Setup (example):
-```bash
-# Create and activate a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# Install project dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# Install PyTorch (pick the command for your CUDA version from pytorch.org)
-# Example (replace cu121 with your CUDA version as needed):
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# (Optional) CPU-only PyTorch:
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```powershell
+python -m venv .venv312
+.\.venv312\Scripts\python.exe -m pip install --upgrade pip
+.\.venv312\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Add your scripts:
-```bash
-mkdir -p Scripts
-# Add one or more UTF-8 .txt files into the Scripts/ folder
-# e.g., Scripts/articulation_drill_1.txt
+For CUDA-enabled local Whisper, install the PyTorch wheel that matches your machine from the official PyTorch selector, then set the Whisper device or preset in Account.
+
+## Run
+
+Double-click:
+
+```text
+run_server.bat
 ```
 
-Run the app:
-```bash
-# Example entry point; adjust to your repo’s actual start command
-python main.py
-# or
-python -m speech_practice_app
+For phone or tablet recording over the local network, use HTTPS. Browsers do not expose the microphone to plain LAN HTTP pages such as `http://192.168.x.x:8000/`.
+
+```text
+run_https_server.bat
 ```
 
-## Interpreting results
+The HTTPS launcher prints a local certificate authority file from `.certs/`. Install and trust that certificate on the phone once, then open the printed `https://<your-computer-ip>:8443/` address.
 
-- Use WER to track intelligibility and correctness against your target script.
-- Watch the clarity score trend over time, but treat it as supplemental and evolving.
-- Inspect insertions/deletions specifically: many deletions can indicate swallowing words; many insertions can reflect unclear boundaries or disfluencies.
+Or run manually:
 
-<img width="1107" height="673" alt="image" src="https://github.com/user-attachments/assets/6184b28e-a204-4404-b8cd-a3b046044163" />
+```powershell
+.\.venv312\Scripts\python.exe manage.py migrate
+.\.venv312\Scripts\python.exe manage.py runserver 0.0.0.0:8000
+```
 
+Then open:
 
-## Troubleshooting
+- Local: `http://127.0.0.1:8000/`
+- LAN: `http://<your-computer-ip>:8000/`
 
-- Torch says “not compiled with CUDA”: Ensure Python <= 3.12, and install a CUDA-enabled Torch wheel that matches your driver/CUDA.
-- Whisper is slow: Use a smaller model, reduce beam size, switch to GPU.
-- Transcripts drift off-script: Increase beam size slightly, set the correct language, reduce background noise, or re-record closer to the mic.
+## Daily Workflow
 
-## Contributing
+1. Open Today and pick the next due card or drill.
+2. Record a take on Practice.
+3. Score it, listen back, and inspect transcript highlights.
+4. Use Cards and Progress to decide what needs another pass.
 
-Issues and pull requests are welcome—especially improvements to clarity scoring, new metrics, or calibration methods.
+## Useful Commands
 
-## License
+```powershell
+.\.venv312\Scripts\python.exe manage.py check
+.\.venv312\Scripts\python.exe manage.py test
+.\.venv312\Scripts\python.exe manage.py refresh_cards
+.\.venv312\Scripts\python.exe manage.py process_scoring_jobs
+```
 
-MIT License (see LICENSE file).
+## Local Data
+
+Development data is intentionally local and ignored by git:
+
+- `sessions.db`
+- `recordings/`
+- `reports/`
+- `settings.json`
+- `script_index.json`
+- `scripts/`
+
+## Design Review
+
+I keep a browser-captured backlog of visual and functional rough edges in [docs/rough_edges_plan.html](docs/rough_edges_plan.html). It is meant to be opened directly in a browser and used as a future implementation checklist, especially for the smaller-screen layouts that need a proper pass.
+
+## Notes
+
+- Local Whisper model instances are cached process-wide and can be cleared from the Account page after tuning changes.
+- The sidecar transcript provider is useful for smoke tests: upload or point at an audio path with a sibling `.txt` transcript.
+- See `SMOKE_TEST_CHECKLIST.md` for manual checks after touching recording, transcription, playback, or export flows.
+
+## Production Deployment
+
+The free Render shape is a single free web service, Neon Postgres, private AWS
+S3 media, and OpenAI `whisper-1` transcription. See
+`DEPLOYMENT_CHECKLIST.md` and `render.yaml` for the complete setup contract.
+Render does not offer free background workers, so the free Blueprint processes
+scoring in a background thread inside the web service. For more durable
+production scoring, add back the worker service and use `SCORING_JOBS_MODE=queue`
+on a paid Render instance.
+
+Before exporting existing SQLite data, copy legacy audio into the configured S3
+bucket and update its stored references:
+
+```powershell
+$env:USE_S3="1"
+$env:AWS_STORAGE_BUCKET_NAME="your-private-bucket"
+$env:AWS_S3_REGION_NAME="eu-north-1"
+.\.venv312\Scripts\python.exe manage.py migrate_audio_storage --dry-run
+.\.venv312\Scripts\python.exe manage.py migrate_audio_storage
+```
+
+Then export application data locally and import it after migrating the fresh
+Neon database:
+
+```powershell
+.\.venv312\Scripts\python.exe manage.py dumpdata practice --exclude practice.PracticeSettings --indent 2 --output deployment-data.json
+python manage.py loaddata deployment-data.json
+```
+
+`PracticeSettings` is intentionally excluded so local encrypted tokens and
+machine-specific Autumn configuration are not moved into production. Configure
+`OPENAI_API_KEY` in Render and create the production account with `python
+manage.py createsuperuser` from the Render shell.
+
+The bucket remains private and audio is proxied through authenticated Django
+views, so S3 CORS or public-read access is not required. A least-privilege IAM
+policy template is available at `deploy/aws-s3-iam-policy.json`.

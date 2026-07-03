@@ -1,0 +1,112 @@
+{% extends "practice/base.html" %}
+{% block title %}{{ card.display_title }} | SpeechPractice{% endblock %}
+{% block content %}
+<section class="detail-header card-type-{{ card.kind }}">
+  <span class="pill">{{ card.get_kind_display }}</span>
+  <h1>{{ card.display_title }}</h1>
+  <p>{{ card.prompt }}</p>
+  <div class="action-row card-detail-actions">
+    <form method="post" action="{% url 'practice:generate_script' card.pk %}">
+      {% csrf_token %}
+      <label class="sr-label" for="generation-provider">Generator</label>
+      <select id="generation-provider" name="provider">
+        {% for value, label in generation_provider_choices %}
+          <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Generate starter script</button>
+    </form>
+    {% if generated_scripts %}
+      <a class="button-link" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ generated_scripts.0.pk }}&amp;card={{ card.pk }}">Practice latest drill</a>
+    {% endif %}
+    <form method="post" action="{% url 'practice:card_delete' card.pk %}">
+      {% csrf_token %}
+      <button
+        class="script-tool danger-tool"
+        type="submit"
+        aria-label="Delete {{ card.display_title }}"
+        title="Delete card"
+        onclick="return confirm('Delete this improvement card? Existing drills and history will be kept.');"
+      >
+        <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+          <path d="M5 7h14" />
+          <path d="M10 11v6" />
+          <path d="M14 11v6" />
+          <path d="M8 7l.8 12h6.4L16 7" />
+          <path d="M9 7V5h6v2" />
+        </svg>
+        <span class="sr-only">Delete</span>
+      </button>
+    </form>
+  </div>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Progress</p>
+    <div class="meter"><span style="width: {% widthratio card.mastery 1 100 %}%"></span></div>
+    <p>Mastery: {{ card.mastery|floatformat:2 }}</p>
+    <p>Status: {{ card.get_status_display }}</p>
+    <p>Due: {{ card.due_at }}</p>
+  </article>
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Evidence</p>
+      <span>{{ evidence_rows|length }}</span>
+    </div>
+    <div class="evidence-list">
+      {% for row in evidence_rows %}
+        <div class="evidence-row">
+          <div class="evidence-meta">
+            <strong>{{ row.script_name }}</strong>
+            <small>{{ row.timestamp }} &middot; {{ row.error_kind }}</small>
+          </div>
+          <p class="evidence-snippet">
+            {{ row.before }} <mark>{{ row.focus }}</mark> {{ row.after }}
+          </p>
+          <small>Expected {{ row.expected }} &middot; heard {{ row.heard }}</small>
+        </div>
+      {% empty %}
+        <p class="empty">No matching mistake snippets found for this card yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Generated drills</p>
+      <span>{{ generated_scripts|length }}</span>
+    </div>
+    <div class="drill-list">
+      {% for script in generated_scripts %}
+        <a class="drill-row" href="{% url 'practice:practice' %}?mode=quick&amp;script={{ script.pk }}&amp;card={{ card.pk }}">
+          <strong>{{ script.title }}</strong>
+          <small>{{ script.word_count }} words &middot; practice now</small>
+        </a>
+      {% empty %}
+        <p class="empty">Generate a starter script to begin card-specific practice.</p>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Review history</p>
+      <span>{{ reviews|length }}</span>
+    </div>
+    <div class="review-list">
+      {% for review in reviews %}
+        <div class="review-row">
+          <strong>{% if review.score %}{{ review.score|floatformat:2 }}{% else %}-{% endif %}</strong>
+          <span>WER {% if review.error_rate is not None %}{{ review.error_rate|floatformat:2 }}{% else %}-{% endif %}</span>
+          <small>{{ review.reviewed_at }}</small>
+        </div>
+      {% empty %}
+        <p class="empty">No card-specific reviews yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}

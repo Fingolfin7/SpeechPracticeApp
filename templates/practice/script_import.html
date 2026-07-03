@@ -1,0 +1,48 @@
+{% extends "practice/base.html" %}
+{% block title %}Import Scripts | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">Corpus intake</p>
+    <h1>Import practice scripts</h1>
+  </div>
+  <a class="button-link" href="{% url 'practice:scripts' %}">Back to library</a>
+</section>
+
+<section class="import-grid">
+  <form class="script-form" method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Import scripts</button>
+  </form>
+
+  <article class="panel import-notes">
+    <p class="eyebrow">Accepted shapes</p>
+    <ul class="plain-list">
+      <li>Plain text or Markdown: filename becomes the title.</li>
+      <li>CSV: supports Poetry Foundation columns like Title, Poem, Poet, Tags.</li>
+      <li>JSON: supports title/body/author fields or title-to-poem mappings.</li>
+      <li>Zip: imports supported files inside the archive.</li>
+    </ul>
+  </article>
+</section>
+
+{% if results %}
+<section class="panel reading-panel">
+  <p class="eyebrow">Import result</p>
+  <div class="metric-strip compact-metrics">
+    <div><strong>{{ results.created }}</strong><span>created</span></div>
+    <div><strong>{{ results.updated }}</strong><span>updated</span></div>
+    <div><strong>{{ results.skipped }}</strong><span>skipped</span></div>
+  </div>
+  <div class="script-list">
+    {% for script in results.items|slice:":12" %}
+      <article class="script-row">
+        <strong>{{ script.title }}</strong>
+        <small>{{ script.author }} &middot; {{ script.word_count }} words</small>
+      </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

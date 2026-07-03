@@ -1,16 +1,16 @@
-PyQt5>=5.15
-sounddevice>=0.4
+Django>=5.0,<6.0
+dj-database-url>=2.2
+django-storages[s3]>=1.14
+gunicorn>=23.0
+psycopg[binary]>=3.2
+whitenoise>=6.8
 numpy>=1.24
-pyqtgraph>=0.13
-openai-whisper>=20231117
+# Cloud generation providers:
+openai>=1.66
+# Optional cloud providers:
+# anthropic>=0.30
 jiwer>=3.0
-SQLAlchemy>=1.4
-soundfile>=0.12
-pydub>=0.25.1
-# Optional: packaging helper
-pyinstaller>=6.0
-# if running python 3.12 or lower, and have an Nvidia GPU you can install CUDA enabled torch to run whisper on:
-# (GPU): pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu12
-
-# Build into executable: pyinstaller -y --windowed --name SpeechPractice --add-data "scripts;scripts" --add-data "script_index.json;." SpeechPractice.py
-# Ensure ffmpeg is on PATH for Whisper
+cryptography>=42.0
+requests>=2.31
+# Local Whisper is optional and lives in requirements-local.txt. Production
+# sends normal browser-recorded WebM files directly to OpenAI.

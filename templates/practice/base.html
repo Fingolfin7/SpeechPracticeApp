@@ -1,0 +1,56 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SpeechPractice{% endblock %}</title>
+  <link rel="icon" href="{% static 'practice/favicon.svg' %}?v={{ static_version.favicon }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{% static 'practice/app.css' %}?v={{ static_version.app }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="{% url 'practice:dashboard' %}">
+      <span class="brand-mark">SP</span>
+      <span>
+        <strong>SpeechPractice</strong>
+        <small>adaptive speaking drills</small>
+      </span>
+    </a>
+    <nav class="site-nav" aria-label="Primary navigation">
+      {% if request.user.is_authenticated %}
+        {% with current=request.resolver_match.url_name %}
+          <a href="{% url 'practice:dashboard' %}" {% if current == "dashboard" %}aria-current="page"{% endif %}>Today</a>
+          <a href="{% url 'practice:practice' %}" {% if current == "practice" %}aria-current="page"{% endif %}>Practice</a>
+          <a href="{% url 'practice:cards' %}" {% if current == "cards" or current == "card_detail" %}aria-current="page"{% endif %}>Cards</a>
+          <a href="{% url 'practice:progress' %}" {% if current == "progress" %}aria-current="page"{% endif %}>Progress</a>
+          <a href="{% url 'practice:scripts' %}" {% if current == "scripts" or current == "script_create" or current == "script_import" or current == "script_edit" or current == "script_delete" %}aria-current="page"{% endif %}>Scripts</a>
+          <a href="{% url 'practice:sessions' %}" {% if current == "sessions" or current == "session_detail" %}aria-current="page"{% endif %}>History</a>
+          <a href="{% url 'practice:account' %}" {% if current == "account" %}aria-current="page"{% endif %}>Account</a>
+        {% endwith %}
+        <form class="nav-logout" method="post" action="{% url 'logout' %}">
+          {% csrf_token %}
+          <button type="submit">{{ request.user.get_username }} - Sign out</button>
+        </form>
+      {% else %}
+        {% with current=request.resolver_match.url_name %}
+          <a href="{% url 'login' %}" {% if current == "login" %}aria-current="page"{% endif %}>Sign in</a>
+          <a href="{% url 'practice:signup' %}" {% if current == "signup" %}aria-current="page"{% endif %}>Create account</a>
+        {% endwith %}
+      {% endif %}
+    </nav>
+  </header>
+
+  {% if messages %}
+    <section class="messages" aria-live="polite">
+      {% for message in messages %}
+        <p class="message{% if message.tags %} message-{{ message.tags }}{% endif %}">{{ message }}</p>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

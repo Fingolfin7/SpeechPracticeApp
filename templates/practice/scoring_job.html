@@ -1,0 +1,68 @@
+{% extends "practice/base.html" %}
+{% load static %}
+{% block title %}Scoring Job | SpeechPractice{% endblock %}
+{% block content %}
+<section class="job-hero {{ job.status }}" data-job-hero>
+  <div>
+    <p class="eyebrow">Scoring job #{{ job.pk }}</p>
+    <h1 data-job-status-label>{{ job.get_status_display }}</h1>
+    <p class="lead">{{ job.script_name }}</p>
+    {% if job.card %}
+      <p><a class="quiet-link" href="{% url 'practice:card_detail' job.card.pk %}">{{ job.card.display_title }}</a></p>
+    {% endif %}
+  </div>
+  <div class="job-stamp">
+    <strong>{{ job.provider }}</strong>
+    <span>provider</span>
+  </div>
+</section>
+
+<section class="dashboard-grid">
+  <article class="panel">
+    <p class="eyebrow">Lifecycle</p>
+    <ol class="timeline">
+      <li class="is-complete"><strong>Queued</strong><span>{{ job.created_at }}</span></li>
+      <li class="{% if job.started_at %}is-complete{% endif %}"><strong>Running</strong><span>{% if job.started_at %}{{ job.started_at }}{% else %}Waiting for worker{% endif %}</span></li>
+      <li class="{% if job.finished_at %}is-complete{% endif %}"><strong>Finished</strong><span>{% if job.finished_at %}{{ job.finished_at }}{% else %}Not yet{% endif %}</span></li>
+    </ol>
+  </article>
+
+  <article class="panel">
+    <p class="eyebrow">Next action</p>
+    <div data-job-next-action>
+    {% if is_pending %}
+      <p>This page refreshes automatically while transcription and scoring run.</p>
+    {% elif is_done and session %}
+      <p>Scoring finished. Your improvement cards were refreshed{% if job.card %}, and this card's review schedule was updated{% endif %}.</p>
+      <a class="button-link" href="{% url 'practice:session_detail' session.pk %}">Open scored session</a>
+    {% elif is_failed %}
+      <p class="form-error">{{ job.error_message }}</p>
+      <form method="post" action="{% url 'practice:retry_scoring_job' job.pk %}">
+        {% csrf_token %}
+        <button type="submit">Retry scoring</button>
+      </form>
+    {% else %}
+      <p>The job finished, but the session record is not available.</p>
+    {% endif %}
+    </div>
+  </article>
+</section>
+
+<section class="panel live-job-panel" data-job-status-url="{% url 'practice:scoring_job_status' job.pk %}">
+  <div class="panel-heading">
+    <p class="eyebrow">Live transcript</p>
+    <span data-job-live-state>{% if is_pending %}Listening for partial updates{% else %}Finished{% endif %}</span>
+  </div>
+  <div class="live-transcript-box job-transcript-box" data-job-partial-transcript>{% if job.partial_transcript %}{{ job.partial_transcript }}{% else %}No transcript text yet.{% endif %}</div>
+</section>
+
+<section class="panel reading-panel">
+  <p class="eyebrow">Practice text</p>
+  {% if job.script_text %}
+    <div class="script-reader compact">{{ job.script_text|linebreaks }}</div>
+  {% else %}
+    <p class="empty">Free Speak sessions do not have a target script.</p>
+  {% endif %}
+</section>
+<script src="{% static 'practice/job_status.js' %}?v={{ static_version.job_status_js }}"></script>
+{% endblock %}

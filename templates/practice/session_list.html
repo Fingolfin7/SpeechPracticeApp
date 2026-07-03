@@ -1,0 +1,61 @@
+{% extends "practice/base.html" %}
+{% load static %}
+{% block title %}History | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title">
+  <div>
+    <p class="eyebrow">Practice history</p>
+    <h1>Recording history</h1>
+  </div>
+</section>
+
+<section class="panel">
+  {% if sessions %}
+    <form
+      id="session-bulk-form"
+      class="bulk-actions"
+      method="post"
+      action="{% url 'practice:session_bulk_delete' %}"
+      data-bulk-form
+      data-bulk-confirm="Delete {count} selected recording(s) and their audio files?"
+    >
+      {% csrf_token %}
+      <label class="bulk-select-all">
+        <input type="checkbox" data-bulk-select-all>
+        <span>Select all</span>
+      </label>
+      <span class="bulk-count" data-bulk-count>0 selected</span>
+      <button class="bulk-delete-button" type="submit" data-bulk-submit disabled>Delete selected</button>
+    </form>
+  {% endif %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr>{% if sessions %}<th class="bulk-cell"><span class="sr-only">Select</span></th>{% endif %}<th>Date</th><th>Script</th><th>Score</th><th>WER</th><th>CER</th><th>Rate</th></tr></thead>
+      <tbody>
+        {% for session in sessions %}
+          <tr data-bulk-row>
+            <td class="bulk-cell">
+              <input
+                type="checkbox"
+                name="selected"
+                value="{{ session.pk }}"
+                form="session-bulk-form"
+                aria-label="Select recording of {{ session.script_name }} from {{ session.timestamp }}"
+              >
+            </td>
+            <td>{{ session.timestamp }}</td>
+            <td><a href="{% url 'practice:session_detail' session.pk %}">{{ session.script_name }}</a></td>
+            <td>{% if session.score %}{{ session.score|floatformat:2 }}{% else %}-{% endif %}</td>
+            <td>{% if session.wer %}{{ session.wer|floatformat:2 }}{% else %}-{% endif %}</td>
+            <td>{% if session.cer %}{{ session.cer|floatformat:2 }}{% else %}-{% endif %}</td>
+            <td>{% if session.artic_rate %}{{ session.artic_rate|floatformat:0 }} wpm{% else %}-{% endif %}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6">No sessions yet. <a href="{% url 'practice:practice' %}">Record your first take</a> to start building history.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+<script src="{% static 'practice/bulk_select.js' %}?v={{ static_version.bulk_select_js }}"></script>
+{% endblock %}

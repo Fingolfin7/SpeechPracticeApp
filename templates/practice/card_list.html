@@ -1,0 +1,131 @@
+{% extends "practice/base.html" %}
+{% load static %}
+{% block title %}Cards | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-title card-page-title">
+  <div>
+    <p class="eyebrow">Adaptive loop</p>
+    <h1>Improvement cards</h1>
+    <p>Keep the useful focus areas, remove stale ones, and let the next drills follow the cards that still matter.</p>
+  </div>
+  <div class="card-page-actions">
+    <span class="card-count">{{ total_count }}</span>
+    <form class="card-refresh-form" method="post" action="{% url 'practice:cards' %}">
+      {% csrf_token %}
+      <input type="hidden" name="refresh" value="1">
+      <label for="card-refresh-start">Start date</label>
+      <input id="card-refresh-start" type="date" name="start" value="{{ refresh_default_start|date:'Y-m-d' }}" required>
+      <label for="card-refresh-end">End date</label>
+      <input id="card-refresh-end" type="date" name="end" value="{{ refresh_default_end|date:'Y-m-d' }}" required>
+      <button type="submit">Refresh cards</button>
+    </form>
+  </div>
+</section>
+
+{% if grouped_cards %}
+  <form
+    id="card-bulk-form"
+    class="bulk-actions"
+    method="post"
+    action="{% url 'practice:card_bulk_delete' %}"
+    data-bulk-form
+    data-bulk-confirm="Delete {count} selected card(s)? Existing drills and history will be kept."
+  >
+    {% csrf_token %}
+    <label class="bulk-select-all">
+      <input type="checkbox" data-bulk-select-all>
+      <span>Select all</span>
+    </label>
+    <span class="bulk-count" data-bulk-count>0 selected</span>
+    <button class="bulk-delete-button" type="submit" data-bulk-submit disabled>Delete selected</button>
+  </form>
+  <section class="card-type-stack" aria-label="Improvement cards grouped by type">
+    {% for group in grouped_cards %}
+      <article class="card-type-section card-type-{{ group.kind }}" data-bulk-section="card-bulk-form">
+        <header class="card-type-header">
+          <div>
+            <span class="pill">{{ group.label }}</span>
+            <h2>{{ group.label }} cards</h2>
+          </div>
+          <div class="card-type-stats">
+            <span>{{ group.count }} total</span>
+            <span>{{ group.due_count }} due</span>
+          </div>
+          <div class="bulk-section-tools" data-bulk-section-tools>
+            <label class="bulk-select-all">
+              <input type="checkbox" data-bulk-section-select>
+              <span>Select section</span>
+            </label>
+            <button class="bulk-section-delete" type="button" data-bulk-section-delete>Delete all {{ group.label|lower }} cards</button>
+          </div>
+        </header>
+
+        <div class="card-tile-grid">
+          {% for card in group.cards %}
+            <article class="managed-card" data-bulk-row>
+              <div class="managed-card-topline">
+                <input
+                  class="bulk-check"
+                  type="checkbox"
+                  name="selected"
+                  value="{{ card.pk }}"
+                  form="card-bulk-form"
+                  aria-label="Select {{ card.display_title }}"
+                >
+                <span class="pill">{{ card.get_kind_display }}</span>
+                <form class="managed-card-delete" method="post" action="{% url 'practice:card_delete' card.pk %}">
+                  {% csrf_token %}
+                  <button
+                    class="script-tool danger-tool"
+                    type="submit"
+                    aria-label="Delete {{ card.display_title }}"
+                    title="Delete card"
+                    onclick="return confirm('Delete this improvement card? Existing drills and history will be kept.');"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+                      <path d="M5 7h14" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
+                      <path d="M8 7l.8 12h6.4L16 7" />
+                      <path d="M9 7V5h6v2" />
+                    </svg>
+                    <span class="sr-only">Delete</span>
+                  </button>
+                </form>
+              </div>
+              <a class="managed-card-title" href="{% url 'practice:card_detail' card.pk %}">{{ card.display_title }}</a>
+              <p>{{ card.prompt }}</p>
+              <div class="card-meta-line">
+                <span>{{ card.get_status_display }}</span>
+                <span>Mastery {{ card.mastery|floatformat:2 }}</span>
+                <span>Due {{ card.due_at|date:"M j, H:i" }}</span>
+                {% if card.stats.source_window_label %}
+                  <span>From {{ card.stats.source_window_label }}</span>
+                {% endif %}
+                {% if card.stats.errors is not None and card.stats.attempts is not None %}
+                  <span>{{ card.stats.errors|floatformat:0 }}/{{ card.stats.attempts|floatformat:0 }} misses</span>
+                {% endif %}
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      </article>
+    {% endfor %}
+  </section>
+{% else %}
+  <section class="empty-card-state">
+    <p class="eyebrow">No cards yet</p>
+    <h2>Refresh from scored sessions to build your first focus set.</h2>
+    <form class="card-refresh-form" method="post" action="{% url 'practice:cards' %}">
+      {% csrf_token %}
+      <input type="hidden" name="refresh" value="1">
+      <label for="empty-card-refresh-start">Start date</label>
+      <input id="empty-card-refresh-start" type="date" name="start" value="{{ refresh_default_start|date:'Y-m-d' }}" required>
+      <label for="empty-card-refresh-end">End date</label>
+      <input id="empty-card-refresh-end" type="date" name="end" value="{{ refresh_default_end|date:'Y-m-d' }}" required>
+      <button type="submit">Refresh cards</button>
+    </form>
+  </section>
+{% endif %}
+<script src="{% static 'practice/bulk_select.js' %}?v={{ static_version.bulk_select_js }}"></script>
+{% endblock %}

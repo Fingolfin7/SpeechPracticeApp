@@ -421,6 +421,16 @@ class OpenAIScriptProvider:
                 if not api_key:
                     raise
         if not api_key:
+            if app_settings and (
+                app_settings.has_secret("codex_token_bundle")
+                or app_settings.has_secret("openai_api_key")
+            ):
+                raise RuntimeError(
+                    "Stored OpenAI/Codex credentials could not be decrypted "
+                    "(DJANGO_SECRET_KEY likely changed since they were saved). "
+                    "Re-enter them on the Account page, or run "
+                    "'manage.py reencrypt_secrets' with the previous key."
+                )
             raise RuntimeError("OpenAI generation requires a Codex login or an OpenAI API key.")
         client = openai_class(api_key=api_key)
         response = client.responses.create(

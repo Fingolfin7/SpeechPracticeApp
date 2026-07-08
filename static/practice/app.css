@@ -4105,3 +4105,139 @@ button.qc-btn {
     flex: 1 1 auto;
   }
 }
+
+/* --- Clarity-gated ladder rungs (extends .ladder-level-links, lines 1791+) --- */
+.ladder-rungs {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* two-class selector (0,2,0) intentionally overrides legacy `.ladder-level-links a` (0,1,1) */
+.ladder-level-links .ladder-rung {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: auto;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-weight: 500;
+  text-decoration: none;
+  place-items: initial;            /* undo legacy grid centering */
+  transition: border-color 0.15s ease, background 0.15s ease,
+              box-shadow 0.15s ease, transform 0.1s ease;
+}
+
+.ladder-rung-num {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--paper-deep);
+  color: var(--muted);
+  font-family: var(--font-num);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.ladder-rung-body {
+  display: grid;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ladder-rung-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ladder-rung-state {
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ladder-rung-tag {
+  flex: none;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-family: var(--font-num);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* passed */
+.ladder-rung.is-passed {
+  border-color: var(--grove);
+  background: var(--grove-tint);
+}
+.ladder-rung.is-passed .ladder-rung-num { background: var(--grove); color: #fff; }
+.ladder-rung.is-passed .ladder-rung-state { color: var(--grove-dark); }
+.ladder-rung-tag.is-passed { background: var(--grove); color: #fff; }
+
+/* open */
+.ladder-rung.is-open .ladder-rung-num { background: var(--clay-tint); color: var(--clay-dark); }
+.ladder-rung-tag.is-open { background: var(--gold-tint); color: var(--gold-ink); }
+
+/* locked (non-interactive div) */
+.ladder-rung.is-locked {
+  border-style: dashed;
+  border-color: var(--locked);
+  background: var(--paper-deep);
+  color: var(--muted);
+  cursor: default;
+}
+.ladder-rung.is-locked .ladder-rung-num {
+  background: transparent;
+  border: 2px dashed var(--locked);
+  color: var(--locked);
+}
+.ladder-rung.is-locked .ladder-rung-title { color: var(--muted); font-weight: 600; }
+.ladder-rung-tag.is-locked { background: transparent; border: 1px solid var(--locked); color: var(--muted); }
+
+/* interactive states — only real links (anchors). Scoped to beat legacy
+   `.ladder-level-links a:hover` (0,2,1) and `a.is-active` (0,1,1). */
+.ladder-level-links a.ladder-rung:hover {
+  border-color: var(--grove);
+  color: var(--ink);                 /* cancel legacy hover recolor to grove-dark */
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+.ladder-level-links a.ladder-rung:focus-visible {
+  outline: 2px solid var(--clay);
+  outline-offset: 2px;
+}
+.ladder-rung[aria-current="step"] {
+  border-color: var(--clay);
+  box-shadow: 0 0 0 3px var(--clay-tint);
+}
+
+/* ladder gate unlock callout (scoring results) */
+.ladder-unlock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 11px 14px;
+  border: 1px solid var(--grove);
+  border-radius: 10px;
+  background: var(--grove-tint);
+  color: var(--grove-dark);
+  font-size: 14px;
+}
+.ladder-unlock strong { font-family: var(--font-display); color: var(--grove-dark); }
+.ladder-unlock-icon { flex: none; font-size: 18px; line-height: 1; }

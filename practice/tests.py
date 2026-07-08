@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import tempfile
 import wave
+from datetime import timedelta
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from error_analytics import phrase_trend_summary
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.db import connection
 from django.db.utils import OperationalError
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -18,6 +21,7 @@ from django.utils import timezone
 from .models import (
     GeneratedPracticeScript,
     ImprovementCard,
+    LadderStepProgress,
     PracticeLadder,
     PracticeLadderStep,
     PracticeReview,
@@ -66,6 +70,29 @@ class PracticeWebTests(TransactionTestCase):
             wav.setsampwidth(2)
             wav.setframerate(sample_rate)
             wav.writeframes(silence)
+
+    def _create_ladder_with_steps(self, *, count: int = 3, min_clarity: float = 0.9):
+        ladder = PracticeLadder.objects.create(user=self.user, title="Gate Ladder")
+        steps = []
+        for level in range(1, count + 1):
+            script = PracticeScript.objects.create(
+                user=self.user,
+                title=f"Gate Level {level}",
+                body=f"gate level {level}",
+                practice_kind=PracticeScript.KIND_DRILL,
+                source=PracticeScript.SOURCE_GENERATED,
+                difficulty=level,
+            )
+            steps.append(
+                PracticeLadderStep.objects.create(
+                    ladder=ladder,
+                    script=script,
+                    level=level,
+                    title=f"Level {level}",
+                    min_clarity=min_clarity,
+                )
+            )
+        return ladder, steps
 
     def test_static_version_uses_app_css_mtime(self):
         version = static_version(None)["static_version"]
@@ -1840,6 +1867,271 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(PracticeReview.objects.filter(card=alpha).count(), 1)
         self.assertEqual(PracticeReview.objects.filter(card=beta).count(), 0)
+
+    def test_ladder_gate_annotation_tracks_open_locked_and_passed(self):
+        from .views import _annotate_gate_states
+
+        _ladder, steps = self._create_ladder_with_steps()
+
+        annotated = _annotate_gate_states(self.user, steps)
+        self.assertEqual([step.gate_state for step in annotated], ["open", "locked", "locked"])
+        self.assertEqual([step.best_clarity for step in annotated], [None, None, None])
+
+        LadderStepProgress.objects.create(
+            user=self.user,
+            step=steps[0],
+            attempts=1,
+            best_clarity=0.92,
+            passed_at=timezone.now(),
+            best_session_id=123,
+        )
+
+        annotated = _annotate_gate_states(self.user, steps)
+        self.assertEqual([step.gate_state for step in annotated], ["passed", "open", "locked"])
+        self.assertEqual(annotated[0].best_clarity, 0.92)
+
+    def test_scoring_job_updates_ladder_step_progress(self):
+        self._create_legacy_tables()
+        _ladder, steps = self._create_ladder_with_steps(count=1, min_clarity=0.85)
+
+        sessions = [
+            PracticeSession.objects.create(
+                user=self.user,
+                timestamp="2026-07-08T12:00:00",
+                script_name=steps[0].script.title,
+                script_text=steps[0].script.body,
+                audio_path="recording.txt",
+                transcript="gate level one",
+                wer=0.2,
+                clarity=0.8,
+                score=4.0,
+            ),
+            PracticeSession.objects.create(
+                user=self.user,
+                timestamp="2026-07-08T12:01:00",
+                script_name=steps[0].script.title,
+                script_text=steps[0].script.body,
+                audio_path="recording.txt",
+                transcript="gate level one",
+                wer=0.09,
+                clarity=0.91,
+                score=4.6,
+            ),
+            PracticeSession.objects.create(
+                user=self.user,
+                timestamp="2026-07-08T12:02:00",
+                script_name=steps[0].script.title,
+                script_text=steps[0].script.body,
+                audio_path="recording.txt",
+                transcript="gate level one",
+                wer=0.14,
+                clarity=0.86,
+                score=4.3,
+            ),
+        ]
+
+        with (
+            patch("practice.services.jobs.materialized_audio") as materialized,
+            patch("practice.services.jobs.transcribe_score_and_store", side_effect=sessions),
+            patch("practice.services.jobs.refresh_improvement_cards"),
+        ):
+            materialized.return_value.__enter__.return_value = "recording.txt"
+            materialized.return_value.__exit__.return_value = None
+            for _session in sessions:
+                job = create_scoring_job(
+                    user=self.user,
+                    script=steps[0].script,
+                    audio_path="recording.txt",
+                    provider="uploaded_transcript",
+                )
+                process_scoring_job(job.pk)
+
+        progress = LadderStepProgress.objects.get(user=self.user, step=steps[0])
+        self.assertEqual(progress.attempts, 3)
+        self.assertEqual(progress.best_clarity, 0.91)
+        self.assertEqual(progress.best_session_id, sessions[1].pk)
+        self.assertIsNotNone(progress.passed_at)
+
+    def test_practice_get_locked_level_falls_back_to_highest_unlocked_step(self):
+        _ladder, steps = self._create_ladder_with_steps()
+        LadderStepProgress.objects.create(
+            user=self.user,
+            step=steps[0],
+            attempts=1,
+            best_clarity=0.95,
+            passed_at=timezone.now(),
+            best_session_id=1,
+        )
+
+        response = self.client.get(
+            reverse("practice:practice"),
+            {
+                "mode": "quick",
+                "ladder": _ladder.pk,
+                "level": 3,
+                "script": steps[2].script.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_ladder_step"].pk, steps[1].pk)
+        self.assertEqual(response.context["selected_script"].pk, steps[1].script.pk)
+
+    def test_practice_post_locked_ladder_script_returns_json_error_without_job(self):
+        _ladder, steps = self._create_ladder_with_steps()
+        upload = SimpleUploadedFile("recording.txt", b"gate level two", content_type="text/plain")
+
+        response = self.client.post(
+            reverse("practice:practice"),
+            {
+                "mode": "quick",
+                "script": steps[1].script.pk,
+                "provider": "uploaded_transcript",
+                "audio": upload,
+            },
+            HTTP_ACCEPT="application/json",
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["ok"])
+        self.assertEqual(response.json()["error"], "This ladder level is locked. Pass the previous level first.")
+        self.assertEqual(ScoringJob.objects.count(), 0)
+
+    def test_scoring_job_detail_exposes_unlocked_level_for_passing_session(self):
+        self._create_legacy_tables()
+        _ladder, steps = self._create_ladder_with_steps(count=2, min_clarity=0.85)
+        session = PracticeSession.objects.create(
+            user=self.user,
+            timestamp="2026-07-08T12:00:00",
+            script_name=steps[0].script.title,
+            script_text=steps[0].script.body,
+            audio_path="recording.txt",
+            transcript=steps[0].script.body,
+            clarity=0.9,
+            score=4.5,
+        )
+        LadderStepProgress.objects.create(
+            user=self.user,
+            step=steps[0],
+            attempts=1,
+            best_clarity=0.9,
+            passed_at=timezone.now(),
+            best_session_id=session.pk,
+        )
+        job = ScoringJob.objects.create(
+            user=self.user,
+            script=steps[0].script,
+            script_name=steps[0].script.title,
+            script_text=steps[0].script.body,
+            audio_path="recording.txt",
+            provider="uploaded_transcript",
+            status=ScoringJob.STATUS_SUCCEEDED,
+            legacy_session_id=session.pk,
+        )
+
+        response = self.client.get(reverse("practice:scoring_job", args=[job.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["unlocked_level"], 2)
+
+        last_session = PracticeSession.objects.create(
+            user=self.user,
+            timestamp="2026-07-08T12:01:00",
+            script_name=steps[1].script.title,
+            script_text=steps[1].script.body,
+            audio_path="recording.txt",
+            transcript=steps[1].script.body,
+            clarity=0.9,
+            score=4.5,
+        )
+        LadderStepProgress.objects.create(
+            user=self.user,
+            step=steps[1],
+            attempts=1,
+            best_clarity=0.9,
+            passed_at=timezone.now(),
+            best_session_id=last_session.pk,
+        )
+        last_job = ScoringJob.objects.create(
+            user=self.user,
+            script=steps[1].script,
+            script_name=steps[1].script.title,
+            script_text=steps[1].script.body,
+            audio_path="recording.txt",
+            provider="uploaded_transcript",
+            status=ScoringJob.STATUS_SUCCEEDED,
+            legacy_session_id=last_session.pk,
+        )
+
+        response = self.client.get(reverse("practice:scoring_job", args=[last_job.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context["unlocked_level"])
+
+    def test_backfill_ladder_progress_rebuilds_historical_jobs(self):
+        self._create_legacy_tables()
+        _ladder, steps = self._create_ladder_with_steps(count=1, min_clarity=0.85)
+        first_session = PracticeSession.objects.create(
+            user=self.user,
+            timestamp="2026-07-08T12:00:00",
+            script_name=steps[0].script.title,
+            script_text=steps[0].script.body,
+            audio_path="recording-1.txt",
+            transcript=steps[0].script.body,
+            clarity=0.8,
+            score=4.0,
+        )
+        second_session = PracticeSession.objects.create(
+            user=self.user,
+            timestamp="2026-07-08T12:01:00",
+            script_name=steps[0].script.title,
+            script_text=steps[0].script.body,
+            audio_path="recording-2.txt",
+            transcript=steps[0].script.body,
+            clarity=0.92,
+            score=4.8,
+        )
+        first_time = timezone.now() - timedelta(minutes=2)
+        second_time = timezone.now() - timedelta(minutes=1)
+        ScoringJob.objects.create(
+            user=self.user,
+            script=steps[0].script,
+            script_name=steps[0].script.title,
+            script_text=steps[0].script.body,
+            audio_path="recording-1.txt",
+            provider="uploaded_transcript",
+            status=ScoringJob.STATUS_SUCCEEDED,
+            legacy_session_id=first_session.pk,
+            finished_at=first_time,
+        )
+        ScoringJob.objects.create(
+            user=self.user,
+            script=steps[0].script,
+            script_name=steps[0].script.title,
+            script_text=steps[0].script.body,
+            audio_path="recording-2.txt",
+            provider="uploaded_transcript",
+            status=ScoringJob.STATUS_SUCCEEDED,
+            legacy_session_id=second_session.pk,
+            finished_at=second_time,
+        )
+        LadderStepProgress.objects.create(
+            user=self.user,
+            step=steps[0],
+            attempts=99,
+            best_clarity=0.1,
+        )
+        out = StringIO()
+
+        call_command("backfill_ladder_progress", "--user", self.user.username, stdout=out)
+
+        progress = LadderStepProgress.objects.get(user=self.user, step=steps[0])
+        self.assertEqual(progress.attempts, 2)
+        self.assertEqual(progress.best_clarity, 0.92)
+        self.assertEqual(progress.best_session_id, second_session.pk)
+        self.assertIsNotNone(progress.passed_at)
+        self.assertIn("rows created 1, passes 1", out.getvalue())
 
     def test_multiple_generated_script_links_all_review_with_evidence(self):
         self._create_legacy_tables()

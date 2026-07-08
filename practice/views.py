@@ -39,6 +39,7 @@ from .forms import (
 from .models import (
     GeneratedPracticeScript,
     ImprovementCard,
+    LadderStepProgress,
     PracticeLadder,
     PracticeLadderStep,
     PracticeReview,
@@ -84,8 +85,17 @@ from .services.script_generation import (
     generate_script_draft,
     script_generation_provider_choices,
 )
+
 from .services.transcription import TranscriptResult
 from .services.transcription import clear_local_whisper_cache, provider_label
+
+LADDER_MIN_CLARITY_BY_LEVEL = {
+    1: 0.85,
+    2: 0.88,
+    3: 0.90,
+    4: 0.92,
+    5: 0.95,
+}
 
 
 @login_not_required
@@ -228,7 +238,25 @@ def practice_run(request):
             audio = form.cleaned_data["audio"]
             provider = form.cleaned_data.get("provider") or None
             provider_name = provider or django_settings.TRANSCRIPTION_PROVIDER
-            if audio is None:
+            locked_ladder_step = (
+                _locked_ladder_step_for_script(request.user, script)
+                if mode == PracticeRunForm.MODE_QUICK and script is not None
+                else None
+            )
+            if locked_ladder_step is not None:
+                error = "This ladder level is locked. Pass the previous level first."
+                form.add_error("script", error)
+                if _wants_json(request):
+                    return JsonResponse(
+                        {
+                            "ok": False,
+                            "error": error,
+                            "errors": form.errors.get_json_data(escape_html=True),
+                        },
+                        status=400,
+                    )
+                messages.error(request, error)
+            elif audio is None:
                 form.add_error("audio", "Record or upload audio before scoring.")
             else:
                 audio_path = save_uploaded_audio(
@@ -320,13 +348,29 @@ def practice_run(request):
                 script=initial_script,
             )
             if selected_ladder is not None:
-                ladder_steps = _ladder_steps(selected_ladder)
+                ladder_steps = _annotate_gate_states(request.user, _ladder_steps(selected_ladder))
                 selected_ladder_step = _select_ladder_step(
                     ladder_steps,
                     requested_level=requested_level,
                     script=initial_script,
                 )
-                if initial_script is None and selected_ladder_step is not None:
+                if selected_ladder_step is not None and selected_ladder_step.gate_state == "locked":
+                    locked_step = selected_ladder_step
+                    selected_ladder_step = _highest_non_locked_step(ladder_steps)
+                    explicitly_requested_locked = requested_level == locked_step.level or (
+                        script_id and str(script_id) == str(locked_step.script_id)
+                    )
+                    if explicitly_requested_locked:
+                        previous_step = _previous_ladder_step(ladder_steps, locked_step)
+                        if previous_step is not None:
+                            messages.info(
+                                request,
+                                (
+                                    f"Level {locked_step.level} is locked - pass level "
+                                    f"{previous_step.level} with {int(previous_step.min_clarity * 100)}% clarity first."
+                                ),
+                            )
+                if selected_ladder_step is not None:
                     initial_script = selected_ladder_step.script
             if initial_script is None and quick_queue:
                 initial_card = quick_queue[0].card
@@ -378,6 +422,12 @@ def practice_run(request):
         selected_ladder = _select_ladder_for_request(practice_ladders, script=selected_script)
         if selected_ladder is not None:
             ladder_steps = _ladder_steps(selected_ladder)
+            selected_ladder_step = _select_ladder_step(ladder_steps, script=selected_script)
+    if mode == PracticeRunForm.MODE_QUICK and selected_ladder is not None:
+        if not ladder_steps:
+            ladder_steps = _ladder_steps(selected_ladder)
+        ladder_steps = _annotate_gate_states(request.user, ladder_steps)
+        if selected_ladder_step is None:
             selected_ladder_step = _select_ladder_step(ladder_steps, script=selected_script)
     context = {
         "form": form,
@@ -632,6 +682,7 @@ def scoring_job_detail(request, pk: int):
     context = {
         "job": job,
         "session": session,
+        "unlocked_level": _unlocked_level_for_job_session(job, session),
         **job_status_context(job),
     }
     return render(request, "practice/scoring_job.html", context)
@@ -1222,6 +1273,7 @@ def generate_practice_ladder(request):
             level=level,
             title=level_draft.title,
             focus=list(level_draft.focus),
+            min_clarity=LADDER_MIN_CLARITY_BY_LEVEL.get(level, 0.95),
         )
         created_steps.append(step)
         for card in cards:
@@ -1505,6 +1557,88 @@ def _ladder_steps(ladder: PracticeLadder) -> list[PracticeLadderStep]:
         .filter(script__active=True)
         .order_by("level")
     )
+
+
+def _annotate_gate_states(user, steps: list[PracticeLadderStep]) -> list[PracticeLadderStep]:
+    progress_by_step = {
+        progress.step_id: progress
+        for progress in LadderStepProgress.objects.filter(
+            user=user,
+            step_id__in=[step.pk for step in steps],
+        )
+    }
+    previous_passed = False
+    for index, step in enumerate(steps):
+        progress = progress_by_step.get(step.pk)
+        passed = bool(progress and progress.passed_at)
+        unlocked = index == 0 or previous_passed
+        step.gate_state = "passed" if passed else ("open" if unlocked else "locked")
+        step.best_clarity = (
+            float(progress.best_clarity)
+            if progress is not None and progress.attempts > 0
+            else None
+        )
+        previous_passed = passed
+    return steps
+
+
+def _highest_non_locked_step(steps: list[PracticeLadderStep]) -> PracticeLadderStep | None:
+    available = [step for step in steps if getattr(step, "gate_state", None) != "locked"]
+    return available[-1] if available else None
+
+
+def _previous_ladder_step(
+    steps: list[PracticeLadderStep],
+    step: PracticeLadderStep,
+) -> PracticeLadderStep | None:
+    for index, candidate in enumerate(steps):
+        if candidate.pk == step.pk:
+            return steps[index - 1] if index > 0 else None
+    return None
+
+
+def _locked_ladder_step_for_script(user, script: PracticeScript) -> PracticeLadderStep | None:
+    ladder_ids = list(
+        PracticeLadderStep.objects.filter(
+            script=script,
+            ladder__active=True,
+        )
+        .filter(models.Q(ladder__user=user) | models.Q(ladder__user__isnull=True))
+        .values_list("ladder_id", flat=True)
+        .distinct()
+    )
+    for ladder in PracticeLadder.objects.filter(pk__in=ladder_ids).order_by("source", "-created_at", "title"):
+        steps = _annotate_gate_states(user, _ladder_steps(ladder))
+        for step in steps:
+            if step.script_id == script.pk and step.gate_state == "locked":
+                return step
+    return None
+
+
+def _unlocked_level_for_job_session(job: ScoringJob, session: PracticeSession | None) -> int | None:
+    if job.status != ScoringJob.STATUS_SUCCEEDED or session is None or job.script_id is None:
+        return None
+    steps = list(
+        job.script.ladder_steps.select_related("ladder")
+        .filter(ladder__active=True)
+        .order_by("ladder_id", "level")
+    )
+    for step in steps:
+        progress = LadderStepProgress.objects.filter(user=job.user, step=step).first()
+        if not progress or not progress.passed_at or progress.best_session_id != session.pk:
+            continue
+        next_step = (
+            PracticeLadderStep.objects.filter(
+                ladder=step.ladder,
+                level=step.level + 1,
+                script__active=True,
+            )
+            .order_by("level")
+            .first()
+        )
+        if next_step is not None:
+            return next_step.level
+    return None
 
 
 def _select_ladder_step(

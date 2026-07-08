@@ -393,6 +393,7 @@ class PracticeLadderStep(models.Model):
     level = models.PositiveSmallIntegerField()
     title = models.CharField(max_length=255)
     focus = models.JSONField(default=list, blank=True)
+    min_clarity = models.FloatField(default=0.90)
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -406,6 +407,36 @@ class PracticeLadderStep(models.Model):
 
     def __str__(self) -> str:
         return f"{self.ladder}: level {self.level}"
+
+
+class LadderStepProgress(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="ladder_step_progress",
+    )
+    step = models.ForeignKey(
+        PracticeLadderStep,
+        on_delete=models.CASCADE,
+        related_name="progress",
+    )
+    best_clarity = models.FloatField(default=0.0)
+    attempts = models.PositiveIntegerField(default=0)
+    passed_at = models.DateTimeField(blank=True, null=True)
+    best_session_id = models.IntegerField(blank=True, null=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "step"], name="unique_user_ladder_step_progress"),
+        ]
+        indexes = [
+            models.Index(fields=["user", "step"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user}: {self.step}"
 
 
 _FERNET = None

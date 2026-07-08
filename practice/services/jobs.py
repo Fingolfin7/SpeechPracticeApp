@@ -13,7 +13,10 @@ from django.utils import timezone
 from practice.models import (
     GeneratedPracticeScript,
     ImprovementCard,
+    LadderStepProgress,
+    PracticeSession,
     PracticeScript,
+    PracticeLadderStep,
     ScoringJob,
     SessionError,
     default_practice_user_pk,
@@ -142,6 +145,8 @@ def process_scoring_job(job_id: int) -> ScoringJob:
                         continue
                     update_card_from_session(card, session, quality=quality, evidence=evidence)
                 refresh_improvement_cards(user=job.user, days=settings.CARD_REFRESH_WINDOW_DAYS)
+                if job.script_id is not None:
+                    record_ladder_progress_for_session(user=job.user, script=job.script, session=session)
     except Exception as exc:
         job = ScoringJob.objects.get(pk=job_id)
         job.status = ScoringJob.STATUS_FAILED
@@ -178,6 +183,57 @@ def recover_stale_scoring_jobs(*, stale_after_minutes: int = 30) -> int:
         error_message="Recovered after the scoring worker stopped unexpectedly.",
         updated_at=timezone.now(),
     )
+
+
+def record_ladder_progress_for_session(
+    *,
+    user,
+    script: PracticeScript,
+    session: PracticeSession,
+    event_time=None,
+) -> tuple[int, int]:
+    created_count = 0
+    pass_count = 0
+    steps = script.ladder_steps.select_related("ladder").all()
+    for step in steps:
+        _progress, created, passed = upsert_ladder_step_progress(
+            user=user,
+            step=step,
+            session=session,
+            event_time=event_time,
+        )
+        created_count += int(created)
+        pass_count += int(passed)
+    return created_count, pass_count
+
+
+def upsert_ladder_step_progress(
+    *,
+    user,
+    step: PracticeLadderStep,
+    session: PracticeSession,
+    event_time=None,
+) -> tuple[LadderStepProgress, bool, bool]:
+    timestamp = event_time or timezone.now()
+    progress, created = LadderStepProgress.objects.get_or_create(
+        user=user,
+        step=step,
+        defaults={"created_at": timestamp},
+    )
+    was_passed = progress.passed_at is not None
+    progress.attempts = (progress.attempts or 0) + 1
+    if session.clarity is not None:
+        clarity = float(session.clarity)
+        if clarity > progress.best_clarity:
+            progress.best_clarity = clarity
+            progress.best_session_id = session.pk
+    if progress.passed_at is None and progress.best_clarity >= step.min_clarity:
+        progress.passed_at = timestamp
+    progress.save(update_fields=["attempts", "best_clarity", "best_session_id", "passed_at", "updated_at"])
+    if event_time is not None:
+        LadderStepProgress.objects.filter(pk=progress.pk).update(updated_at=timestamp)
+        progress.updated_at = timestamp
+    return progress, created, not was_passed and progress.passed_at is not None
 
 
 def _card_for_script(script: PracticeScript) -> ImprovementCard | None:

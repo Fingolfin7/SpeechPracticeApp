@@ -1,0 +1,573 @@
+<meta charset="utf-8">
+<title>SpeechPractice — Core Loop &amp; Implementation Plan</title>
+<style>
+  :root {
+    color-scheme: light;
+    --paper: #ffffff;
+    --ink: #1a242c;
+    --muted: #4e5e69;
+    --faint: #7c8a93;
+    --line: #dde4e7;
+    --panel: #f1f5f5;
+    --accent: #0b6f61;
+    --accent-soft: #e0eeeb;
+    --gate: #8f6210;
+    --gate-soft: #f5ecd9;
+    --pass: #27713c;
+    --code-bg: #eef2f2;
+    --serif: Charter, "Bitstream Charter", "Iowan Old Style", Georgia, serif;
+    --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --paper: #10171c;
+      --ink: #eaf0f2;
+      --muted: #aab8c0;
+      --faint: #78878f;
+      --line: #2c3840;
+      --panel: #1a242b;
+      --accent: #47c2ad;
+      --accent-soft: #163530;
+      --gate: #e0b055;
+      --gate-soft: #362d18;
+      --pass: #6cc281;
+      --code-bg: #1d2830;
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --paper: #ffffff; --ink: #1a242c; --muted: #4e5e69; --faint: #7c8a93;
+    --line: #dde4e7; --panel: #f1f5f5; --accent: #0b6f61; --accent-soft: #e0eeeb;
+    --gate: #8f6210; --gate-soft: #f5ecd9; --pass: #27713c; --code-bg: #eef2f2;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: #10171c; --ink: #eaf0f2; --muted: #aab8c0; --faint: #78878f;
+    --line: #2c3840; --panel: #1a242b; --accent: #47c2ad; --accent-soft: #163530;
+    --gate: #e0b055; --gate-soft: #362d18; --pass: #6cc281; --code-bg: #1d2830;
+  }
+
+  html, body {
+    background: var(--paper);
+    color: var(--ink);
+  }
+  body {
+    font-family: var(--sans);
+    line-height: 1.6;
+    font-size: 16px;
+    margin: 0;
+  }
+  .page {
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+  }
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+
+  header.doc { margin-bottom: 56px; }
+  .eyebrow {
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-size: 40px;
+    line-height: 1.15;
+    font-weight: 700;
+    margin: 0 0 16px;
+    text-wrap: balance;
+  }
+  .thesis {
+    font-family: var(--serif);
+    font-size: 19px;
+    color: var(--muted);
+    max-width: 40em;
+    margin: 0;
+  }
+  .thesis strong { color: var(--ink); font-weight: 600; }
+
+  h2 {
+    font-family: var(--serif);
+    font-size: 26px;
+    font-weight: 700;
+    margin: 64px 0 6px;
+    text-wrap: balance;
+  }
+  h2 .sec {
+    color: var(--faint);
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 400;
+    margin-right: 10px;
+  }
+  h3 {
+    font-size: 16.5px;
+    font-weight: 650;
+    margin: 32px 0 8px;
+  }
+  .lede { color: var(--muted); margin: 0 0 20px; max-width: 44em; }
+  p { max-width: 44em; }
+  ul { padding-left: 22px; max-width: 44em; }
+  li { margin: 6px 0; }
+  li::marker { color: var(--accent); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 18px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; }
+
+  /* ── Loop diagram ── */
+  .loop-wrap { overflow-x: auto; margin: 28px 0 8px; }
+  .loop {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    min-width: 640px;
+  }
+  .stage {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+    position: relative;
+  }
+  .stage + .arrow {
+    align-self: center;
+    color: var(--faint);
+    padding: 0 6px;
+    font-size: 15px;
+    flex: 0 0 auto;
+  }
+  .stage b {
+    display: block;
+    font-size: 14px;
+    color: var(--accent);
+    margin-bottom: 3px;
+  }
+  .stage span { font-size: 12.5px; color: var(--muted); display: block; line-height: 1.45; }
+  .loop-return {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 10px 0 0;
+    padding-left: 4px;
+  }
+  .loop-return code { font-size: 12px; }
+
+  /* ── Rules ── */
+  .rule {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 8px 8px 0;
+    padding: 14px 18px;
+    margin: 18px 0;
+    max-width: 44em;
+  }
+  .rule b { display: block; margin-bottom: 4px; }
+  .rule p { margin: 0; color: var(--muted); font-size: 15px; }
+  .rule p strong { color: var(--ink); }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; margin: 20px 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14.5px;
+    min-width: 560px;
+  }
+  th {
+    text-align: left;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--faint);
+    font-weight: 600;
+    padding: 8px 14px 8px 0;
+    border-bottom: 2px solid var(--line);
+  }
+  td {
+    padding: 10px 14px 10px 0;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    font-variant-numeric: tabular-nums;
+  }
+  td.k { white-space: nowrap; font-weight: 600; }
+  td .dim { color: var(--muted); }
+
+  .drop { color: var(--faint); text-decoration: line-through; }
+  .tag {
+    display: inline-block;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    border-radius: 20px;
+    padding: 2px 10px;
+    vertical-align: 1px;
+  }
+  .tag.cut { background: var(--gate-soft); color: var(--gate); }
+  .tag.keep { background: var(--accent-soft); color: var(--accent); }
+
+  /* ── Phases ── */
+  .phase {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    margin: 22px 0;
+    overflow: hidden;
+  }
+  .phase-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 14px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .phase-num {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 600;
+    flex: 0 0 auto;
+  }
+  .phase-head h3 { margin: 0; font-size: 16.5px; flex: 1 1 auto; }
+  .phase-size {
+    font-size: 12px;
+    color: var(--faint);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .phase-body { padding: 6px 20px 18px; }
+  .phase-body ul { margin: 10px 0; }
+  .files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 14px;
+  }
+  .files code {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    padding: 2px 8px;
+    border-radius: 20px;
+  }
+  .verify-note {
+    font-size: 13.5px;
+    color: var(--muted);
+    border-top: 1px dashed var(--line);
+    margin-top: 14px;
+    padding-top: 10px;
+  }
+  .verify-note b { color: var(--pass); font-weight: 600; }
+
+  /* ── Ladder gate illustration ── */
+  .rungs { display: flex; gap: 8px; margin: 22px 0 6px; flex-wrap: wrap; }
+  .rung {
+    flex: 1 1 110px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .rung b { display: block; font-size: 13px; }
+  .rung .st { display: block; font-weight: 600; }
+  .rung.passed { background: var(--accent-soft); border-color: transparent; }
+  .rung.passed .st { color: var(--pass); }
+  .rung.open .st { color: var(--accent); }
+  .rung.locked { background: var(--panel); color: var(--faint); }
+  .rung.locked b { color: var(--faint); }
+  .rung.locked .st { color: var(--gate); }
+  .rung .req { color: var(--faint); font-variant-numeric: tabular-nums; }
+  figcaption { font-size: 13px; color: var(--faint); margin-top: 6px; }
+  figure { margin: 0; }
+
+  /* ── Decisions ledger ── */
+  .ledger { border-top: 2px solid var(--line); margin-top: 16px; }
+  .ledger-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 200px) 1fr;
+    gap: 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 14.5px;
+  }
+  .ledger-row dt { font-weight: 600; margin: 0; }
+  .ledger-row dd { margin: 0; color: var(--muted); }
+  .ledger-row dd strong { color: var(--ink); }
+  @media (max-width: 540px) {
+    .ledger-row { grid-template-columns: 1fr; gap: 2px; }
+    h1 { font-size: 32px; }
+  }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--faint);
+  }
+</style>
+
+<div class="page">
+  <header class="doc">
+    <p class="eyebrow">SpeechPractice · planning doc · July 8, 2026</p>
+    <h1>The core loop</h1>
+    <p class="thesis">SpeechPractice is <strong>an objective, closed-loop trainer for scripted-speech clarity</strong>: it measures how intelligibly you read, finds your specific weak spots, writes you material dense in exactly those targets, and proves — with the same deterministic ruler — that you fixed them.</p>
+  </header>
+
+  <!-- ============================================================ -->
+  <h2><span class="sec">1</span>What it is, what it isn't</h2>
+  <p class="lede">The gen-1 core (read → transcribe → align → score → highlight) is a <em>measurement instrument</em>. Everything we're adding is a <em>coaching loop wrapped around that instrument</em> — and every new feature must be justifiable as a step in that loop.</p>
+  <ul>
+    <li><strong>The ruler is machine intelligibility.</strong> Clarity = 1 − flexible WER against Whisper. That's a proxy for human intelligibility — imperfect, but objective and comparable across months. The self-review flow is the human override for when the proxy mishears.</li>
+    <li><strong>Not</strong> a phoneme-level pronunciation tutor (ASR can't see formants), <strong>not</strong> a content or delivery coach. Free Speak stays a fluency dipstick — pace, pauses, fillers — with no accuracy pretense.</li>
+  </ul>
+
+  <!-- ============================================================ -->
+  <h2><span class="sec">2</span>The loop</h2>
+  <p class="lede">Five stages, each with exactly one job. The looseness in the current app is that stages 3→4→5 don't connect: practicing a drill doesn't reliably credit its card, and nothing ever proves a card fixed.</p>
+
+  <div class="loop-wrap">
+    <div class="loop">
+      <div class="stage"><b>Measure</b><span>Reading sessions produce immutable evidence: scores + per-token error events.</span></div>
+      <div class="arrow">→</div>
+      <div class="stage"><b>Diagnose</b><span>Analytics <em>proposes</em> cards; self-review confirms or adds. A card = a hypothesis with evidence.</span></div>
+      <div class="arrow">→</div>
+      <div class="stage"><b>Treat</b><span>AI writes drills &amp; ladders dense in the card's targets. Ladders are the canonical treatment.</span></div>
+      <div class="arrow">→</div>
+      <div class="stage"><b>Verify</b><span>Re-measure on treatment material. Each card graded on <em>its own target's</em> performance.</span></div>
+      <div class="arrow">→</div>
+      <div class="stage"><b>Retire &amp; watch</b><span>Mastered cards leave the queue; analytics keeps sentinel duty on the target.</span></div>
+    </div>
+  </div>
+  <p class="loop-return">↩ <strong>Lapse path:</strong> a retired target that re-errors in ordinary reading sessions re-enters at Diagnose — the card comes back with fresh evidence, not from scratch.</p>
+
+  <h3>The two rules that keep it coherent</h3>
+  <div class="rule">
+    <b>Rule A — Cards are entities, not views.</b>
+    <p>Analytics <strong>proposes new cards and refreshes evidence</strong> (stats, prompt, title). Reviews <strong>progress</strong> them (mastery, status, due date). Analytics never writes SRS state on an existing card. Today <code>refresh_improvement_cards</code> clobbers mastery after every session — this is the first thing we fix.</p>
+  </div>
+  <div class="rule">
+    <b>Rule B — AI generates, deterministic code grades.</b>
+    <p>LLMs write drill text and translate self-review notes into cards. Scoring, per-target grading, mastery, and rung gates stay pure alignment math, so <strong>a 92% clarity in March means the same as a 92% in July</strong>. No model ever assigns mastery or passes a rung.</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2><span class="sec">3</span>Verify: per-target grading is the core, not phase 2</h2>
+  <p class="lede">Today every linked card gets the same session-global quality (65% score + 35% WER). That smears one number across all cards and makes mastery mean "you read well lately," not "you fixed this." Instead, each card kind gets an <strong>evidence extractor</strong> that answers, for one session: how many chances did this target get, and how many did it miss?</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Card kind</th><th>Opportunities (per session)</th><th>Misses</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k">word</td>
+          <td>Occurrences of the target word in the cleaned script text</td>
+          <td><code>SessionError</code> rows with <code>ref_token == target</code>, op <code>sub</code>/<code>del</code></td>
+          <td class="dim">already stored</td>
+        </tr>
+        <tr>
+          <td class="k">sound</td>
+          <td>Symbol count via <code>_word_to_phoneme_symbols</code> over script words</td>
+          <td>Confusion pairs from sub/del events, keyed by ref symbol</td>
+          <td class="dim"><code>_phoneme_stats</code>, run per-session</td>
+        </tr>
+        <tr>
+          <td class="k">character</td>
+          <td>Occurrences of the character in cleaned script</td>
+          <td><code>char_replace</code> / char-kind error events matching target</td>
+          <td class="dim">already stored</td>
+        </tr>
+        <tr>
+          <td class="k">position</td>
+          <td>Tokens contributing to the bucket (start / middle / end)</td>
+          <td>Error events whose local position maps to the bucket</td>
+          <td class="dim">position trend logic, per-session</td>
+        </tr>
+        <tr>
+          <td class="k">fluency</td>
+          <td colspan="2">Always has evidence: graded from <code>artic_rate</code>, <code>pause_ratio</code>, <code>filled_pauses</code> against the metric-target bands</td>
+          <td class="dim">session metrics</td>
+        </tr>
+        <tr>
+          <td class="k drop">phrase</td>
+          <td colspan="3"><span class="tag cut">removed</span> <span class="dim">— mostly one-off n-grams, no reusable training value; see §4</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The quality formula</h3>
+  <p>Target evidence is blended with session quality using a shrinkage weight, so two occurrences of a word don't swing mastery as hard as ten:</p>
+  <pre><code>target_quality  = 1 − (misses / opportunities)
+w               = opportunities / (opportunities + 3)     # trust grows with evidence
+quality         = w · target_quality + (1 − w) · session_quality
+
+# session_quality stays the existing blend: 65% scaled score + 35% (1 − WER)
+# opportunities == 0  →  no review for that card (no evidence, no credit)
+# fluency cards       →  always graded, from the session's fluency metrics</code></pre>
+  <p>The "no evidence, no credit" rule matters: a ladder level that happens to omit a target simply doesn't touch that card, instead of granting it free mastery. Generated ladders weave every target into every level, so in practice all ladder cards get graded on every rung.</p>
+
+  <h3>Which cards a session updates (fan-out)</h3>
+  <p>When a scoring job succeeds, the set of candidate cards is the union of:</p>
+  <ul>
+    <li>the <strong>explicit card</strong> on the job (quick-practice form selection),</li>
+    <li>if the script is a ladder step: <strong>all cards on the ladder's</strong> <code>cards</code> <strong>M2M</strong> (focus lists are effectively ladder-wide by design — every level weaves every target),</li>
+    <li><strong>all</strong> <code>GeneratedPracticeScript</code> links for the script — not the current arbitrary <code>.first()</code>.</li>
+  </ul>
+  <p>Dedupe, then run one evidence-graded review per card. <code>PracticeReview</code> records the per-card quality plus its evidence (opportunities, misses) so the card's history is auditable.</p>
+
+  <!-- ============================================================ -->
+  <h2><span class="sec">4</span>Card cleanup: drop phrase cards</h2>
+  <p class="lede">Phrase cards are one-off n-grams from a single bad take — they don't name a reusable skill, they bloat the queue, and there's no honest per-session evidence extractor for them (the exact phrase rarely reappears in new material).</p>
+  <ul>
+    <li>Remove the phrase block from <code>build_card_candidates</code> — trends stop proposing them.</li>
+    <li>Remove <code>phrase</code> from the self-review card prompt's kind list (a phrase-shaped complaint becomes a <code>word</code>, <code>sound</code>, or <code>fluency</code> card instead).</li>
+    <li>Data migration pauses existing phrase cards rather than deleting — history and reviews stay intact, they just leave the queue and ladder-generation pickers.</li>
+    <li>The model choice constant stays (old rows reference it); it's just no longer produced.</li>
+  </ul>
+
+  <!-- ============================================================ -->
+  <h2><span class="sec">5</span>Ladder gates: mastery in context</h2>
+  <p class="lede">"Mastered" shouldn't mean your average went up — it means the target survived progressively harder contexts. The five ladder levels are exactly that difficulty gradient, so gating rungs on clarity is what makes Verify real.</p>
+
+  <figure>
+    <div class="rungs">
+      <div class="rung passed"><b>1 · Warm-up</b><span class="st">Passed · 94%</span><span class="req">needs ≥ 85%</span></div>
+      <div class="rung passed"><b>2 · Contrast</b><span class="st">Passed · 91%</span><span class="req">needs ≥ 88%</span></div>
+      <div class="rung open"><b>3 · Density</b><span class="st">Open · best 87%</span><span class="req">needs ≥ 90%</span></div>
+      <div class="rung locked"><b>4 · Flow</b><span class="st">Locked</span><span class="req">pass level 3 first</span></div>
+      <div class="rung locked"><b>5 · Performance</b><span class="st">Locked</span><span class="req">pass level 4 first</span></div>
+    </div>
+    <figcaption>How the ladder panel reads after this ships: pass state, best clarity, and the bar to clear are all visible per rung.</figcaption>
+  </figure>
+
+  <ul>
+    <li><strong>Rule:</strong> rung N+1 unlocks when rung N has a session with clarity ≥ its <code>min_clarity</code>. Level 1 is always open. (Clarity is 1 − flexible WER, so this is equivalently a WER ceiling.)</li>
+    <li><strong>Threshold:</strong> new <code>min_clarity</code> field on <code>PracticeLadderStep</code>. Generated ladders ramp <strong>85 → 88 → 90 → 92 → 95</strong> to match the warm-up → performance level design; plain default is 90 (the "good" clarity band).</li>
+    <li><strong>State:</strong> new <code>LadderStepProgress</code> model — <code>(user, step)</code> unique, with <code>best_clarity</code>, <code>attempts</code>, <code>passed_at</code>, <code>best_session_id</code>. Upserted when a scoring job for a ladder-step script succeeds.</li>
+    <li><strong>Enforcement in three places:</strong> GET for a locked level redirects to the highest unlocked rung with a message; POST rejects a locked rung's script (no URL-crafting around the gate); the template renders locked rungs disabled with the requirement stated.</li>
+    <li><strong>Backfill:</strong> management command walks succeeded <code>ScoringJob</code>s for ladder-step scripts → <code>legacy_session_id</code> → session clarity, and builds progress rows — existing users keep their earned unlocks.</li>
+    <li><strong>Unlock moment:</strong> the job-status payload (already polled) carries a "Level 4 unlocked" event for the results page.</li>
+  </ul>
+
+  <!-- ============================================================ -->
+  <h2><span class="sec">6</span>Implementation plan</h2>
+  <p class="lede">Ordered so each phase is independently shippable and each one strictly tightens the loop. Nothing here blocks on new schema until phase 2.</p>
+
+  <div class="phase">
+    <div class="phase-head">
+      <span class="phase-num">Phase 0</span>
+      <h3>Stop the clobber · retire phrase cards</h3>
+      <span class="phase-size">small</span>
+    </div>
+    <div class="phase-body">
+      <ul>
+        <li><code>refresh_improvement_cards</code>: on <em>existing</em> cards, update only <code>stats</code>/<code>title</code>/<code>prompt</code>; write <code>mastery</code>/<code>status</code>/<code>due_at</code> only on create. Guard: if <code>last_reviewed_at</code> is set, SRS fields are untouchable by analytics. <em>(Rule A, and the prerequisite for everything below — reviews currently get erased seconds after they happen.)</em></li>
+        <li>Remove phrase candidates from trends and the self-review prompt; migration pauses existing phrase cards.</li>
+      </ul>
+      <div class="files"><code>practice/services/analytics.py</code><code>practice/services/script_generation.py</code><code>practice/migrations/</code></div>
+      <p class="verify-note"><b>Proof:</b> test — review a card, run refresh, mastery/status/due unchanged; new trend card still created with seeded mastery; no phrase candidates emitted.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head">
+      <span class="phase-num">Phase 1</span>
+      <h3>Evidence-graded fan-out</h3>
+      <span class="phase-size">medium-large</span>
+    </div>
+    <div class="phase-body">
+      <ul>
+        <li>New <code>practice/services/evidence.py</code>: per-kind extractors returning <code>(opportunities, misses)</code> for one session, reusing the alignment/phoneme logic already in <code>error_analytics.py</code>; the shrinkage quality blend lives here.</li>
+        <li><code>spaced_repetition.py</code>: <code>update_card_from_session</code> takes the per-card quality; review notes + <code>card.stats.last_review</code> record the evidence.</li>
+        <li><code>jobs.py</code>: card resolver = explicit job card ∪ ladder M2M (via <code>script.ladder_steps</code>) ∪ <em>all</em> <code>GeneratedPracticeScript</code> links, deduped; one review per card with evidence.</li>
+      </ul>
+      <div class="files"><code>practice/services/evidence.py</code> <code>practice/services/spaced_repetition.py</code><code>practice/services/jobs.py</code></div>
+      <p class="verify-note"><b>Proof:</b> tests — word card credited only when its word appears; a missed target lowers that card but not siblings; ladder session reviews every ladder card; the arbitrary-<code>.first()</code> behavior is gone. Then one real ladder take end-to-end.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head">
+      <span class="phase-num">Phase 2</span>
+      <h3>Gated rungs + backfill</h3>
+      <span class="phase-size">medium</span>
+    </div>
+    <div class="phase-body">
+      <ul>
+        <li>Migration: <code>PracticeLadderStep.min_clarity</code> (default 0.90; generation writes the 85→95 ramp) + <code>LadderStepProgress</code>.</li>
+        <li><code>jobs.py</code>: upsert progress on success; surface newly-passed in the job payload.</li>
+        <li><code>views.py</code>: unlocked-level computation, GET redirect, POST guard; template lock/pass states per the mock in §5.</li>
+        <li><code>backfill_ladder_progress</code> management command.</li>
+      </ul>
+      <div class="files"><code>practice/models.py</code><code>practice/services/jobs.py</code><code>practice/views.py</code><code>templates/practice/practice_run.html</code><code>practice/management/commands/</code></div>
+      <p class="verify-note"><b>Proof:</b> tests — locked GET redirects, locked POST rejected, pass unlocks next rung, backfill reproduces unlocks from historical jobs; then run the backfill on the real local DB and eyeball the ladder panel.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-head">
+      <span class="phase-num">Phase 3</span>
+      <h3>Card story page (make the loop felt)</h3>
+      <span class="phase-size">later</span>
+    </div>
+    <div class="phase-body">
+      <ul>
+        <li>A card detail view that narrates the flywheel: <em>spotted in these sessions → drilled in these ladders → target error rate fell 40% → 8% → mastered June 30</em>. All the data exists after phases 0–2; this is the UI that stops the app feeling like disconnected features.</li>
+        <li>Mastery curve from <code>PracticeReview</code> rows; evidence timeline from the recorded per-session opportunities/misses.</li>
+      </ul>
+      <div class="files"><code>practice/views.py</code><code>templates/practice/</code><code>static/practice/</code></div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2><span class="sec">7</span>Decisions ledger</h2>
+  <p class="lede">What we've settled in discussion, so the build doesn't relitigate it.</p>
+  <dl class="ledger">
+    <div class="ledger-row"><dt>Ladder fan-out</dt><dd>All cards on the ladder's M2M — focus lists are ladder-wide in practice (every level weaves every target by design), so no focus-matching.</dd></div>
+    <div class="ledger-row"><dt>Gate metric</dt><dd>Clarity only (= 1 − flexible WER). No separate WER ceiling — it's the same number.</dd></div>
+    <div class="ledger-row"><dt>Per-target grading</dt><dd><strong>In the core loop from the start</strong> (phase 1), not deferred. No evidence → no credit.</dd></div>
+    <div class="ledger-row"><dt>Phrase cards</dt><dd>Removed from generation; existing ones paused, history kept.</dd></div>
+    <div class="ledger-row"><dt>Backfill</dt><dd>Yes — historical sessions count toward rung unlocks.</dd></div>
+    <div class="ledger-row"><dt>Clobber fix</dt><dd>Prerequisite, ships first (phase 0).</dd></div>
+    <div class="ledger-row"><dt>AI's role</dt><dd>Generates material and translates self-review notes. Never grades, never assigns mastery, never passes a rung.</dd></div>
+  </dl>
+
+  <h3>Still open (small)</h3>
+  <ul>
+    <li>Builtin/imported ladders with no linked cards: gates work (progress is per-step), card updates are simply a no-op. Acceptable, or should imported ladders get a card-linking step?</li>
+    <li>Shrinkage constant (k = 3) and the 85→95 ramp are starting values — tune after a week of real use.</li>
+    <li>Does a <em>failed</em> gate attempt still schedule the card (quality &lt; 0.5 → due tomorrow)? Current SRS says yes; feels right, flagging it as intended behavior.</li>
+  </ul>
+
+  <footer>SpeechPractice · core loop &amp; implementation plan · drafted with Claude Code, July 8, 2026</footer>
+</div>

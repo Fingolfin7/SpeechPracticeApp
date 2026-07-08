@@ -29,6 +29,7 @@ from .models import (
 )
 from .context_processors import static_version
 from .services.jobs import create_scoring_job, process_scoring_job
+from .services.evidence import quality_for_card, session_quality
 from .services.scoring import score_transcript
 from .services.script_import import import_script_items, parse_csv_text, parse_json_text
 from .services.script_generation import (
@@ -1722,6 +1723,235 @@ class PracticeWebTests(TransactionTestCase):
         self.assertGreater(card.mastery, 0.2)
         self.assertIsNotNone(card.last_reviewed_at)
         self.assertGreater(card.due_at, timezone.now())
+
+    def test_word_card_review_uses_target_evidence_quality(self):
+        self._create_legacy_tables()
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word focus: clear",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="clear",
+            prompt="Practice clear.",
+            mastery=0.2,
+        )
+        script = PracticeScript.objects.create(
+            user=self.user,
+            title="Clear Reps",
+            body="clear clear clear clear",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+        )
+        GeneratedPracticeScript.objects.create(user=self.user, card=card, script=script)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "recording.txt"
+            path.write_text("clear clear clear", encoding="utf-8")
+            job = create_scoring_job(
+                user=self.user,
+                script=script,
+                audio_path=str(path),
+                provider="uploaded_transcript",
+            )
+            with patch("practice.services.jobs.refresh_improvement_cards"):
+                process_scoring_job(job.pk)
+
+        session = PracticeSession.objects.get()
+        card.refresh_from_db()
+        expected = round((4 / 7) * 0.75 + (3 / 7) * session_quality(session), 3)
+        review = PracticeReview.objects.get(card=card)
+        self.assertAlmostEqual(card.stats["last_review"]["quality"], expected, places=3)
+        self.assertEqual(card.stats["last_review"]["evidence"], {"opportunities": 4, "misses": 1})
+        self.assertAlmostEqual(review.error_rate, 0.25)
+        self.assertNotEqual(card.mastery, 0.2)
+
+    def test_word_card_without_target_evidence_gets_no_review(self):
+        self._create_legacy_tables()
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word focus: clear",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="clear",
+            prompt="Practice clear.",
+            mastery=0.2,
+        )
+        script = PracticeScript.objects.create(
+            user=self.user,
+            title="Other Drill",
+            body="steady practice text",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "recording.txt"
+            path.write_text("steady practice text", encoding="utf-8")
+            job = create_scoring_job(
+                user=self.user,
+                script=script,
+                audio_path=str(path),
+                provider="uploaded_transcript",
+                card=card,
+            )
+            with patch("practice.services.jobs.refresh_improvement_cards"):
+                process_scoring_job(job.pk)
+
+        card.refresh_from_db()
+        self.assertEqual(PracticeReview.objects.filter(card=card).count(), 0)
+        self.assertEqual(card.mastery, 0.2)
+
+    def test_ladder_step_script_reviews_only_ladder_cards_with_evidence(self):
+        self._create_legacy_tables()
+        alpha = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word focus: alpha",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="alpha",
+            mastery=0.2,
+        )
+        beta = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word focus: beta",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="beta",
+            mastery=0.2,
+        )
+        script = PracticeScript.objects.create(
+            user=self.user,
+            title="Alpha Ladder",
+            body="alpha alpha alpha",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+        )
+        ladder = PracticeLadder.objects.create(user=self.user, title="Alpha Ladder")
+        ladder.cards.add(alpha, beta)
+        PracticeLadderStep.objects.create(ladder=ladder, script=script, level=1, title="Step 1")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "recording.txt"
+            path.write_text("alpha alpha alpha", encoding="utf-8")
+            job = create_scoring_job(
+                user=self.user,
+                script=script,
+                audio_path=str(path),
+                provider="uploaded_transcript",
+            )
+            with patch("practice.services.jobs.refresh_improvement_cards"):
+                process_scoring_job(job.pk)
+
+        self.assertEqual(PracticeReview.objects.filter(card=alpha).count(), 1)
+        self.assertEqual(PracticeReview.objects.filter(card=beta).count(), 0)
+
+    def test_multiple_generated_script_links_all_review_with_evidence(self):
+        self._create_legacy_tables()
+        alpha = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word focus: alpha",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="alpha",
+            mastery=0.2,
+        )
+        beta = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word focus: beta",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="beta",
+            mastery=0.2,
+        )
+        script = PracticeScript.objects.create(
+            user=self.user,
+            title="Linked Drill",
+            body="alpha beta alpha beta",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+        )
+        GeneratedPracticeScript.objects.create(user=self.user, card=alpha, script=script)
+        GeneratedPracticeScript.objects.create(user=self.user, card=beta, script=script)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "recording.txt"
+            path.write_text("alpha beta alpha beta", encoding="utf-8")
+            job = create_scoring_job(
+                user=self.user,
+                script=script,
+                audio_path=str(path),
+                provider="uploaded_transcript",
+            )
+            with patch("practice.services.jobs.refresh_improvement_cards"):
+                process_scoring_job(job.pk)
+
+        self.assertEqual(PracticeReview.objects.filter(card=alpha).count(), 1)
+        self.assertEqual(PracticeReview.objects.filter(card=beta).count(), 1)
+
+    def test_fluency_card_always_reviews_from_fluency_bands(self):
+        self._create_legacy_tables()
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Fluency focus",
+            kind=ImprovementCard.KIND_FLUENCY,
+            target_key="pacing",
+            mastery=0.2,
+        )
+        script = PracticeScript.objects.create(
+            user=self.user,
+            title="Fluency Drill",
+            body="steady pacing text",
+            practice_kind=PracticeScript.KIND_DRILL,
+            source=PracticeScript.SOURCE_GENERATED,
+        )
+        session = PracticeSession.objects.create(
+            user=self.user,
+            timestamp="2026-07-08T12:00:00",
+            script_name=script.title,
+            script_text=script.body,
+            audio_path="recording.txt",
+            transcript=script.body,
+            wer=0.0,
+            score=5.0,
+            artic_rate=140.0,
+            pause_ratio=0.15,
+            filled_pauses=0.0,
+        )
+        job = create_scoring_job(
+            user=self.user,
+            script=script,
+            audio_path="recording.txt",
+            provider="uploaded_transcript",
+            card=card,
+        )
+        with (
+            patch("practice.services.jobs.transcribe_score_and_store", return_value=session),
+            patch("practice.services.jobs.materialized_audio") as materialized,
+            patch("practice.services.jobs.refresh_improvement_cards"),
+        ):
+            materialized.return_value.__enter__.return_value = "recording.txt"
+            materialized.return_value.__exit__.return_value = None
+            process_scoring_job(job.pk)
+
+        card.refresh_from_db()
+        self.assertEqual(PracticeReview.objects.filter(card=card).count(), 1)
+        self.assertEqual(card.stats["last_review"]["quality"], 1.0)
+        self.assertIsNone(card.stats["last_review"]["evidence"])
+
+    def test_quality_for_card_returns_none_for_phrase_card(self):
+        self._create_legacy_tables()
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Phrase focus",
+            kind=ImprovementCard.KIND_PHRASE,
+            target_key="steady pacing",
+        )
+        session = PracticeSession.objects.create(
+            user=self.user,
+            timestamp="2026-07-08T12:00:00",
+            script_name="Phrase Drill",
+            script_text="steady pacing",
+            audio_path="recording.txt",
+            transcript="steady pacing",
+            wer=0.0,
+            score=5.0,
+        )
+
+        self.assertIsNone(quality_for_card(card, session, []))
 
     def test_practice_post_queues_scoring_job(self):
         script = PracticeScript.objects.create(

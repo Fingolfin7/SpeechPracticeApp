@@ -531,25 +531,6 @@ def build_card_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
-    for row in summary.get("phrases", {}).get("top_trouble_phrases", [])[:5]:
-        phrase = row.get("phrase")
-        if not phrase:
-            continue
-        rate = float(row.get("error_rate", 0.0))
-        candidates.append(
-            {
-                "kind": ImprovementCard.KIND_PHRASE,
-                "target_key": str(phrase),
-                "title": str(phrase),
-                "prompt": (
-                    "Practice this phrase in isolation, then inside short surrounding "
-                    "sentences while keeping pace and articulation steady."
-                ),
-                "stats": row,
-                "mastery": _mastery_from_error_rate(rate),
-            }
-        )
-
     for row in summary.get("positions", {}).get("top_position_buckets", [])[:4]:
         bucket = row.get("bucket")
         if not bucket:
@@ -603,19 +584,26 @@ def refresh_improvement_cards(
         stats = dict(candidate["stats"])
         stats.update(source_window)
         stats["source_window_refreshed_at"] = refreshed_at.isoformat()
-        _card, created = ImprovementCard.objects.update_or_create(
+        defaults = {
+            "title": candidate["title"],
+            "prompt": candidate["prompt"],
+            "stats": stats,
+            "mastery": mastery,
+            "status": status,
+            "due_at": _due_date_for_mastery(mastery),
+        }
+        card, created = ImprovementCard.objects.get_or_create(
             user=user,
             kind=candidate["kind"],
             target_key=candidate["target_key"],
-            defaults={
-                "title": candidate["title"],
-                "prompt": candidate["prompt"],
-                "stats": stats,
-                "mastery": mastery,
-                "status": status,
-                "due_at": _due_date_for_mastery(mastery),
-            },
+            defaults=defaults,
         )
+        if not created:
+            ImprovementCard.objects.filter(user=user, pk=card.pk).update(
+                title=candidate["title"],
+                prompt=candidate["prompt"],
+                stats=stats,
+            )
         count += 1 if created else 0
     return count
 

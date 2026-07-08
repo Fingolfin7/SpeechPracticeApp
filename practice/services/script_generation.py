@@ -269,7 +269,6 @@ def build_self_review_card_prompt(session: PracticeSession, notes: str) -> str:
         "Available card kinds:\n"
         "- word: a specific word to practice\n"
         "- sound: an articulation or sound pattern, including final consonants or swallowed endings\n"
-        "- phrase: a phrase the learner clipped, blurred, or rushed\n"
         "- position: a word-position issue such as final sounds or phrase endings\n"
         "- fluency: pace, pausing, rushing, breath, filler, or rhythm issues\n\n"
         f"Session: {session.script_name} at {session.timestamp}\n"
@@ -278,7 +277,7 @@ def build_self_review_card_prompt(session: PracticeSession, notes: str) -> str:
         "Return strict JSON only. Schema:\n"
         "{\n"
         '  "cards": [\n'
-        '    {"kind": "word|sound|phrase|position|fluency", "target": "short target key", '
+        '    {"kind": "word|sound|position|fluency", "target": "short target key", '
         '"title": "short display title", "prompt": "why and how to practice it"}\n'
         "  ]\n"
         "}\n"
@@ -789,7 +788,7 @@ def parse_self_review_cards(
             continue
         kind = _normalize_card_kind(row.get("kind"))
         target = _clean_target(row.get("target") or row.get("target_key") or row.get("focus"))
-        if not kind or not target:
+        if not kind or kind == ImprovementCard.KIND_PHRASE or not target:
             continue
         key = (kind, target.lower())
         if key in seen:
@@ -859,6 +858,8 @@ def _local_cards_from_self_review(
         if not chunk:
             continue
         kind = _kind_from_note(chunk)
+        if kind == ImprovementCard.KIND_PHRASE:
+            continue
         target = _target_from_note(chunk, kind)
         key = (kind, target.lower())
         if key in seen:

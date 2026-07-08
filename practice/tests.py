@@ -34,6 +34,7 @@ from .services.script_import import import_script_items, parse_csv_text, parse_j
 from .services.script_generation import (
     _stream_response_text,
     generate_local_template,
+    parse_self_review_cards,
     parse_generated_ladder,
     parse_generated_script,
     script_generation_provider_choices,
@@ -571,7 +572,7 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(confusions[0]["to"], "cr")
         self.assertEqual(summary["words"]["recent_session_count"], 1)
 
-    def test_build_card_candidates_includes_phrase_focus(self):
+    def test_build_card_candidates_does_not_emit_phrase_focus(self):
         candidates = build_card_candidates(
             {
                 "words": {},
@@ -590,9 +591,78 @@ class PracticeWebTests(TransactionTestCase):
             }
         )
 
-        self.assertEqual(candidates[0]["kind"], ImprovementCard.KIND_PHRASE)
-        self.assertEqual(candidates[0]["target_key"], "steady breath today")
-        self.assertEqual(candidates[0]["mastery"], 0.5)
+        self.assertEqual(candidates, [])
+
+    def test_refresh_improvement_cards_preserves_existing_srs_state(self):
+        reviewed_at = timezone.now() - timezone.timedelta(days=2)
+        due_at = timezone.now() + timezone.timedelta(days=11)
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Old word focus",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="steady",
+            prompt="Old prompt",
+            stats={"old": True},
+            mastery=0.91,
+            status=ImprovementCard.STATUS_MASTERED,
+            due_at=due_at,
+            last_reviewed_at=reviewed_at,
+        )
+        summary = {
+            "words": {
+                "top_trouble_words": [
+                    {
+                        "word": "steady",
+                        "error_rate": 0.8,
+                        "errors": 4,
+                        "attempts": 5,
+                    }
+                ]
+            },
+            "sounds": {},
+            "phrases": {},
+            "positions": {},
+        }
+
+        with patch("practice.services.analytics.trend_summary", return_value=summary):
+            created = refresh_improvement_cards(user=self.user, days=30)
+
+        self.assertEqual(created, 0)
+        card.refresh_from_db()
+        self.assertEqual(card.mastery, 0.91)
+        self.assertEqual(card.status, ImprovementCard.STATUS_MASTERED)
+        self.assertEqual(card.due_at, due_at)
+        self.assertEqual(card.last_reviewed_at, reviewed_at)
+        self.assertEqual(card.title, "steady")
+        self.assertEqual(card.prompt, "Practice short phrases that place 'steady' at the beginning, middle, and end of a sentence.")
+        self.assertEqual(card.stats["errors"], 4)
+        self.assertEqual(card.stats["source_window_days"], 30)
+
+    def test_refresh_improvement_cards_creates_new_cards_with_seeded_mastery(self):
+        summary = {
+            "words": {
+                "top_trouble_words": [
+                    {
+                        "word": "steady",
+                        "error_rate": 0.25,
+                        "errors": 1,
+                        "attempts": 4,
+                    }
+                ]
+            },
+            "sounds": {},
+            "phrases": {},
+            "positions": {},
+        }
+
+        with patch("practice.services.analytics.trend_summary", return_value=summary):
+            created = refresh_improvement_cards(user=self.user, days=30)
+
+        self.assertEqual(created, 1)
+        card = ImprovementCard.objects.get(user=self.user, target_key="steady")
+        self.assertEqual(card.mastery, 0.75)
+        self.assertEqual(card.status, ImprovementCard.STATUS_REVIEW)
+        self.assertGreater(card.due_at, timezone.now())
 
     def test_refresh_improvement_cards_records_exact_source_range(self):
         summary = {
@@ -621,6 +691,32 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(card.stats["source_window_start"], "2026-06-01")
         self.assertEqual(card.stats["source_window_end"], "2026-06-19")
         self.assertEqual(card.stats["source_window_label"], "2026-06-01 to 2026-06-19")
+
+    def test_self_review_card_parser_skips_phrase_rows(self):
+        session = PracticeSession.objects.create(
+            user=self.user,
+            timestamp="2026-06-14T12:00:00",
+            script_name="Free Speak",
+            script_text="",
+            audio_path="recording.txt",
+            transcript="I clipped the phrase but practiced clarity.",
+        )
+
+        cards = parse_self_review_cards(
+            """
+            {
+              "cards": [
+                {"kind": "phrase", "target": "steady breath today", "title": "Phrase", "prompt": "Practice the phrase."},
+                {"kind": "word", "target": "steady", "title": "Steady", "prompt": "Practice steady."}
+              ]
+            }
+            """,
+            session=session,
+        )
+
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].kind, ImprovementCard.KIND_WORD)
+        self.assertEqual(cards[0].target_key, "steady")
 
     def test_generated_script_parser_handles_structured_output(self):
         title, body = parse_generated_script(

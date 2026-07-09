@@ -41,17 +41,101 @@
   </div>
 </section>
 
+{# ---------- Story headline strip ---------- #}
+<section class="story-headline card-type-{{ card.kind }}">
+  <p class="eyebrow">The story so far</p>
+  <p class="story-lede">
+    {% if review_stats.latest_error_rate is not None %}
+      {% if review_stats.first_error_rate is not None and review_stats.count > 1 %}
+        Target error rate
+        {% if review_stats.latest_error_rate < review_stats.first_error_rate %}fell{% elif review_stats.latest_error_rate > review_stats.first_error_rate %}rose{% else %}held{% endif %}
+        from <b>{% widthratio review_stats.first_error_rate 1 100 %}%</b>
+        to <b>{% widthratio review_stats.latest_error_rate 1 100 %}%</b>
+        across {{ review_stats.count }} graded review{{ review_stats.count|pluralize }}.
+      {% else %}
+        First graded read landed at <b>{% widthratio review_stats.latest_error_rate 1 100 %}%</b> target error rate &mdash; the baseline to beat.
+      {% endif %}
+    {% else %}
+      This card is <b>spotted</b> and waiting for its first graded practice. Drill it to start the story.
+    {% endif %}
+  </p>
+  <ul class="story-facts">
+    <li><span>Mastery</span><strong>{% widthratio card.mastery 1 100 %}%</strong></li>
+    <li><span>Status</span><strong>{{ card.get_status_display }}</strong></li>
+    <li><span>Reviews</span><strong>{{ review_stats.count }}</strong></li>
+    <li><span>Evidence</span><strong>{{ review_stats.evidence_count }}</strong></li>
+    {% if card.due_at %}<li><span>Due</span><strong>{{ card.due_at|date:"M j" }}</strong></li>{% endif %}
+  </ul>
+</section>
+
+{# ---------- Mastery curve ---------- #}
+<section>
+  <article class="panel mastery-panel card-type-{{ card.kind }}">
+    <div class="panel-heading">
+      <p class="eyebrow">Mastery over time</p>
+      <span class="mastery-now">{% widthratio card.mastery 1 100 %}%</span>
+    </div>
+    {% if mastery_curve %}
+      <div class="curve-frame">
+        <svg class="mastery-curve" viewBox="{{ mastery_curve.viewbox }}" role="img"
+             aria-label="Mastery trend from {{ mastery_curve.start_label }} to {{ mastery_curve.end_label }}, now {% widthratio mastery_curve.current_mastery 1 100 %} percent">
+          <polyline class="curve-line" points="{{ mastery_curve.points }}" vector-effect="non-scaling-stroke" />
+          <circle class="curve-dot-halo" cx="{{ mastery_curve.last_x }}" cy="{{ mastery_curve.last_y }}" r="11" />
+          <circle class="curve-dot" cx="{{ mastery_curve.last_x }}" cy="{{ mastery_curve.last_y }}" r="5" />
+        </svg>
+      </div>
+      <div class="curve-axis">
+        <small>{{ mastery_curve.start_label }}</small>
+        <small>{{ mastery_curve.end_label }}</small>
+      </div>
+    {% else %}
+      <div class="meter"><span style="width: {% widthratio card.mastery 1 100 %}%"></span></div>
+      <p class="empty">Not enough graded reviews yet to chart a mastery curve. Practice a drill to plot the first point.</p>
+    {% endif %}
+  </article>
+</section>
+
+{# ---------- Narrated loop: spotted -> drilled -> improved -> mastered ---------- #}
+<section>
+  <article class="panel card-type-{{ card.kind }}">
+    <div class="panel-heading">
+      <p class="eyebrow">How this card was earned</p>
+      <span>{{ story_events|length }} moment{{ story_events|length|pluralize }}</span>
+    </div>
+    <ol class="story-timeline">
+      {% for event in story_events %}
+        <li class="story-event is-{{ event.kind }}">
+          <span class="story-node" aria-hidden="true"></span>
+          <div class="story-body">
+            <div class="story-event-head">
+              {% if event.url %}
+                <a class="story-event-title" href="{{ event.url }}">{{ event.title }}</a>
+              {% else %}
+                <strong class="story-event-title">{{ event.title }}</strong>
+              {% endif %}
+              <small class="story-when">{{ event.at|date:"M j, Y" }}</small>
+            </div>
+            {% if event.detail %}<p class="story-event-detail">{{ event.detail }}</p>{% endif %}
+          </div>
+        </li>
+      {% empty %}
+        <li class="story-event is-created">
+          <span class="story-node" aria-hidden="true"></span>
+          <div class="story-body">
+            <strong class="story-event-title">Spotted, ready to drill</strong>
+            <p class="story-event-detail">Generate a starter script or practice a drill and this timeline fills in: spotted, drilled, improved, mastered.</p>
+          </div>
+        </li>
+      {% endfor %}
+    </ol>
+  </article>
+</section>
+
+{# ---------- Evidence + generated drills ---------- #}
 <section class="dashboard-grid">
   <article class="panel">
-    <p class="eyebrow">Progress</p>
-    <div class="meter"><span style="width: {% widthratio card.mastery 1 100 %}%"></span></div>
-    <p>Mastery: {{ card.mastery|floatformat:2 }}</p>
-    <p>Status: {{ card.get_status_display }}</p>
-    <p>Due: {{ card.due_at }}</p>
-  </article>
-  <article class="panel">
     <div class="panel-heading">
-      <p class="eyebrow">Evidence</p>
+      <p class="eyebrow">Why it was spotted</p>
       <span>{{ evidence_rows|length }}</span>
     </div>
     <div class="evidence-list">
@@ -71,9 +155,7 @@
       {% endfor %}
     </div>
   </article>
-</section>
 
-<section class="dashboard-grid">
   <article class="panel">
     <div class="panel-heading">
       <p class="eyebrow">Generated drills</p>
@@ -87,24 +169,6 @@
         </a>
       {% empty %}
         <p class="empty">Generate a starter script to begin card-specific practice.</p>
-      {% endfor %}
-    </div>
-  </article>
-
-  <article class="panel">
-    <div class="panel-heading">
-      <p class="eyebrow">Review history</p>
-      <span>{{ reviews|length }}</span>
-    </div>
-    <div class="review-list">
-      {% for review in reviews %}
-        <div class="review-row">
-          <strong>{% if review.score %}{{ review.score|floatformat:2 }}{% else %}-{% endif %}</strong>
-          <span>WER {% if review.error_rate is not None %}{{ review.error_rate|floatformat:2 }}{% else %}-{% endif %}</span>
-          <small>{{ review.reviewed_at }}</small>
-        </div>
-      {% empty %}
-        <p class="empty">No card-specific reviews yet.</p>
       {% endfor %}
     </div>
   </article>

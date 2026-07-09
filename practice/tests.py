@@ -14,7 +14,7 @@ from django.core.management import call_command
 from django.db import connection
 from django.db.utils import OperationalError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TransactionTestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -34,7 +34,9 @@ from .models import (
 from .context_processors import static_version
 from .services.jobs import create_scoring_job, process_scoring_job
 from .services.evidence import quality_for_card, session_quality
+from .services.review_notes import parse_legacy_review_notes
 from .services.scoring import score_transcript
+from .services.spaced_repetition import update_card_from_session
 from .services.script_import import import_script_items, parse_csv_text, parse_json_text
 from .services.script_generation import (
     _stream_response_text,
@@ -47,6 +49,127 @@ from .services.script_generation import (
 from .services.codex_auth import serialize_token_bundle
 from .services.analytics import build_card_candidates, refresh_improvement_cards, today_queue
 from .services.transcription import OpenAITranscriptionProvider, TranscriptResult, UploadedTranscriptProvider
+from .views import _card_story
+
+
+class CardStoryTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="story-owner",
+            password="test-pass-story",
+        )
+        self.client.force_login(self.user)
+
+    def test_legacy_review_notes_parser_extracts_story_fields(self):
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word focus: clear",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="clear",
+        )
+        review = PracticeReview.objects.create(
+            user=self.user,
+            card=card,
+            notes="Auto review from scored session. Quality 0.82; mastery 0.10 -> 0.35.",
+        )
+
+        parsed = parse_legacy_review_notes(review.notes)
+
+        self.assertEqual(parsed, (0.82, 0.35))
+
+    def test_update_card_from_session_populates_review_story_fields(self):
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word focus: clear",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="clear",
+            mastery=0.1,
+        )
+        session = PracticeSession.objects.create(
+            user=self.user,
+            timestamp="2026-07-09T10:00:00",
+            script_name="Clear Drill",
+            script_text="clear clear clear clear",
+            audio_path="",
+            transcript="clear clear clear",
+            score=4.0,
+            wer=0.15,
+        )
+
+        review = update_card_from_session(
+            card,
+            session,
+            quality=0.82,
+            evidence={"opportunities": 4, "misses": 1},
+        )
+
+        card.refresh_from_db()
+        self.assertIsNotNone(review)
+        self.assertEqual(review.quality, 0.82)
+        self.assertEqual(review.mastery_after, card.mastery)
+        self.assertEqual(review.evidence, {"opportunities": 4, "misses": 1})
+
+    def test_card_story_builds_mastery_curve_and_ordered_events(self):
+        base = timezone.now() - timedelta(days=4)
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word focus: steady",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="steady",
+            mastery=0.8,
+            created_at=base,
+        )
+        for offset, mastery in enumerate((0.2, 0.5, 0.8), start=1):
+            PracticeReview.objects.create(
+                user=self.user,
+                card=card,
+                quality=0.8,
+                error_rate=0.1,
+                mastery_after=mastery,
+                reviewed_at=base + timedelta(days=offset),
+            )
+
+        story = _card_story(card)
+
+        points = story["mastery_curve"]["points"].split()
+        first_y = float(points[0].split(",")[1])
+        last_y = float(points[-1].split(",")[1])
+        self.assertEqual(len(points), 3)
+        self.assertEqual(first_y, 116.0)
+        self.assertEqual(last_y, 44.0)
+        self.assertLess(last_y, first_y)
+        self.assertEqual(story["story_events"][0]["kind"], "created")
+        self.assertEqual([event["at"] for event in story["story_events"]], sorted(event["at"] for event in story["story_events"]))
+        self.assertIn("review", {event["kind"] for event in story["story_events"]})
+
+    def test_card_story_without_reviews_has_created_event_and_no_curve(self):
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Sound pattern: R",
+            kind=ImprovementCard.KIND_SOUND,
+            target_key="R",
+        )
+
+        story = _card_story(card)
+
+        self.assertIsNone(story["mastery_curve"])
+        self.assertEqual(story["review_stats"]["count"], 0)
+        self.assertEqual([event["kind"] for event in story["story_events"]], ["created"])
+
+    def test_card_detail_context_includes_story_data(self):
+        card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Phrase focus: slow down",
+            kind=ImprovementCard.KIND_PHRASE,
+            target_key="slow down",
+        )
+
+        response = self.client.get(reverse("practice:card_detail", args=[card.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("story_events", response.context)
+        self.assertIn("mastery_curve", response.context)
+        self.assertIn("review_stats", response.context)
 
 
 class PracticeWebTests(TransactionTestCase):
@@ -2404,7 +2527,8 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Drill: TH")
-        self.assertContains(response, "Review history")
+        self.assertContains(response, "How this card was earned")
+        self.assertContains(response, "Reviewed")
         self.assertContains(response, "Local template")
 
     def test_card_detail_shows_matching_mistake_snippets(self):

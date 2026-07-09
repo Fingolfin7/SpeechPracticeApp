@@ -58,6 +58,9 @@ def update_card_from_session(
         legacy_session_id=session.pk,
         score=session.score,
         error_rate=_error_rate(session, evidence),
+        quality=quality,
+        mastery_after=new_mastery,
+        evidence=evidence or None,
         notes=(
             f"Auto review from scored session. Quality {quality:.2f}; "
             f"mastery {previous_mastery:.2f} -> {new_mastery:.2f}."

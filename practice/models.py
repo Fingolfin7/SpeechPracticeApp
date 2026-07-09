@@ -235,6 +235,9 @@ class PracticeReview(models.Model):
     legacy_session_id = models.IntegerField(blank=True, null=True)
     score = models.FloatField(blank=True, null=True)
     error_rate = models.FloatField(blank=True, null=True)
+    quality = models.FloatField(blank=True, null=True)
+    mastery_after = models.FloatField(blank=True, null=True)
+    evidence = models.JSONField(blank=True, null=True)
     notes = models.TextField(blank=True)
     reviewed_at = models.DateTimeField(default=timezone.now)
 

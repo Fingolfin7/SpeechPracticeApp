@@ -1138,6 +1138,7 @@ def card_detail(request, pk: int):
         practice_kind=PracticeScript.KIND_DRILL,
     ).distinct()[:8]
     evidence_rows = _card_evidence_rows(card)
+    story_context = _card_story(card)
     return render(
         request,
         "practice/card_detail.html",
@@ -1147,8 +1148,198 @@ def card_detail(request, pk: int):
             "generated_scripts": generated_scripts,
             "evidence_rows": evidence_rows,
             "generation_provider_choices": script_generation_provider_choices(request.user),
+            **story_context,
         },
     )
+
+
+def _card_story(card: ImprovementCard) -> dict:
+    reviews = list(PracticeReview.objects.filter(user=card.user, card=card).order_by("reviewed_at", "pk"))
+    generations = list(
+        GeneratedPracticeScript.objects.filter(
+            user=card.user,
+            card=card,
+            script__isnull=False,
+        )
+        .select_related("script")
+        .order_by("created_at", "pk")
+    )
+    ladders = list(
+        PracticeLadder.objects.filter(
+            models.Q(user=card.user) | models.Q(user__isnull=True),
+            active=True,
+            cards=card,
+        )
+        .distinct()
+        .order_by("created_at", "pk")
+    )
+
+    source_label = str((card.stats or {}).get("source_window_label") or "").strip()
+    events = [
+        {
+            "kind": "created",
+            "at": card.created_at,
+            "title": "Spotted",
+            "detail": f"Flagged from {source_label}" if source_label else "Flagged for practice",
+            "url": None,
+        }
+    ]
+
+    practice_url = reverse("practice:practice")
+    events.extend(_card_story_drill_events(generations, practice_url, card.pk))
+    events.extend(
+        {
+            "kind": "ladder",
+            "at": ladder.created_at,
+            "title": "Added to ladder",
+            "detail": ladder.title,
+            "url": f"{practice_url}?mode=quick&ladder={ladder.pk}",
+        }
+        for ladder in ladders
+    )
+    events.extend(_card_story_review_events(reviews))
+
+    if card.status == ImprovementCard.STATUS_MASTERED:
+        events.append(
+            {
+                "kind": "mastered",
+                "at": card.last_reviewed_at or card.updated_at,
+                "title": "Mastered",
+                "detail": f"Mastery {float(card.mastery or 0.0):.2f}",
+                "url": None,
+            }
+        )
+
+    events.sort(key=lambda event: (event["at"], event["kind"], event["title"]))
+    return {
+        "story_events": events,
+        "mastery_curve": _card_mastery_curve(card, reviews),
+        "review_stats": _card_review_stats(reviews),
+    }
+
+
+def _card_story_drill_events(generations: list[GeneratedPracticeScript], practice_url: str, card_pk: int) -> list[dict]:
+    if len(generations) > 6:
+        skipped_count = len(generations) - 5
+        visible = [
+            *generations[:2],
+            {
+                "synthetic": True,
+                "at": generations[2].created_at,
+                "count": skipped_count,
+            },
+            *generations[-3:],
+        ]
+    else:
+        visible = generations
+
+    events = []
+    for generation in visible:
+        if isinstance(generation, dict):
+            events.append(
+                {
+                    "kind": "drill",
+                    "at": generation["at"],
+                    "title": "More drills",
+                    "detail": f"{generation['count']} more drills generated",
+                    "url": None,
+                }
+            )
+            continue
+        events.append(
+            {
+                "kind": "drill",
+                "at": generation.created_at,
+                "title": "Drill generated",
+                "detail": generation.script.title,
+                "url": f"{practice_url}?mode=quick&script={generation.script_id}&card={card_pk}",
+            }
+        )
+    return events
+
+
+def _card_story_review_events(reviews: list[PracticeReview]) -> list[dict]:
+    if len(reviews) > 8:
+        skipped_count = len(reviews) - 6
+        visible = [
+            *reviews[:2],
+            {
+                "synthetic": True,
+                "at": reviews[2].reviewed_at,
+                "count": skipped_count,
+            },
+            *reviews[-4:],
+        ]
+    else:
+        visible = reviews
+
+    events = []
+    for review in visible:
+        if isinstance(review, dict):
+            events.append(
+                {
+                    "kind": "review",
+                    "at": review["at"],
+                    "title": "More reviews",
+                    "detail": f"{review['count']} more reviews",
+                    "url": None,
+                }
+            )
+            continue
+        parts = []
+        if review.quality is not None:
+            parts.append(f"Quality {review.quality:.2f}")
+        if review.error_rate is not None:
+            parts.append(f"target error rate {int(round(review.error_rate * 100))}%")
+        events.append(
+            {
+                "kind": "review",
+                "at": review.reviewed_at,
+                "title": "Reviewed",
+                "detail": " - ".join(parts) if parts else "Review logged",
+                "url": None,
+            }
+        )
+    return events
+
+
+def _card_mastery_curve(card: ImprovementCard, reviews: list[PracticeReview]) -> dict | None:
+    points = [review for review in reviews if review.mastery_after is not None]
+    if len(points) < 2:
+        return None
+
+    span = len(points) - 1
+    coords = []
+    for index, review in enumerate(points):
+        mastery = max(0.0, min(1.0, float(review.mastery_after or 0.0)))
+        x = round(20 + (560 * index / span), 1)
+        y = round(140 - (120 * mastery), 1)
+        coords.append((x, y))
+
+    crosses_year = points[0].reviewed_at.year != points[-1].reviewed_at.year
+    date_format = "%b %d, %Y" if crosses_year else "%b %d"
+    return {
+        "viewbox": "0 0 600 160",
+        "points": " ".join(f"{x:.1f},{y:.1f}" for x, y in coords),
+        "last_x": coords[-1][0],
+        "last_y": coords[-1][1],
+        "start_label": points[0].reviewed_at.strftime(date_format),
+        "end_label": points[-1].reviewed_at.strftime(date_format),
+        "current_mastery": float(card.mastery or 0.0),
+    }
+
+
+def _card_review_stats(reviews: list[PracticeReview]) -> dict:
+    evidence_reviews = [review for review in reviews if review.evidence is not None]
+    evidence_error_rates = [review.error_rate for review in evidence_reviews if review.error_rate is not None]
+    return {
+        "count": len(reviews),
+        "evidence_count": len(evidence_reviews),
+        "first_at": reviews[0].reviewed_at if reviews else None,
+        "last_at": reviews[-1].reviewed_at if reviews else None,
+        "first_error_rate": evidence_error_rates[0] if evidence_error_rates else None,
+        "latest_error_rate": evidence_error_rates[-1] if evidence_error_rates else None,
+    }
 
 
 @require_POST

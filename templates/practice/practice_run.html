@@ -112,13 +112,52 @@
           </div>
         {% endif %}
 
-        <div class="ladder-level-links" aria-label="Ladder levels">
+        <div class="ladder-level-links ladder-rungs" role="list" aria-label="Ladder levels">
           {% for step in ladder_steps %}
-            <a
-              class="{% if selected_ladder_step and selected_ladder_step.pk == step.pk %}is-active{% endif %}"
-              href="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ selected_ladder.pk }}&amp;level={{ step.level }}&amp;script={{ step.script.pk }}"
-              title="{{ step.title }}"
-            >{{ step.level }}</a>
+            {% if step.gate_state == "locked" %}
+              <div class="ladder-rung is-locked" role="listitem"
+                   data-gate-state="locked" aria-disabled="true" title="{{ step.title }}">
+                <span class="ladder-rung-num" aria-hidden="true">{{ step.level }}</span>
+                <span class="ladder-rung-body">
+                  <span class="ladder-rung-title">{{ step.title }}</span>
+                  <span class="ladder-rung-state">
+                    <span class="sr-only">Level {{ step.level }} locked. </span>
+                    Pass level {{ step.level|add:"-1" }} to unlock
+                  </span>
+                </span>
+                <span class="ladder-rung-tag is-locked" aria-hidden="true">Locked</span>
+              </div>
+            {% else %}
+              <a class="ladder-rung is-{{ step.gate_state }}" role="listitem"
+                 data-gate-state="{{ step.gate_state }}"
+                 href="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ selected_ladder.pk }}&amp;level={{ step.level }}&amp;script={{ step.script.pk }}"
+                 {% if selected_ladder_step and selected_ladder_step.pk == step.pk %}aria-current="step"{% endif %}
+                 title="{{ step.title }}">
+                <span class="ladder-rung-num" aria-hidden="true">{{ step.level }}</span>
+                <span class="ladder-rung-body">
+                  <span class="ladder-rung-title">{{ step.title }}</span>
+                  <span class="ladder-rung-state">
+                    {% if step.gate_state == "passed" %}
+                      <span class="sr-only">Level {{ step.level }} passed, best clarity </span>
+                      Passed &middot; {% widthratio step.best_clarity 1 100 %}%
+                    {% else %}
+                      {% if step.best_clarity %}
+                        <span class="sr-only">Level {{ step.level }} open, best attempt </span>
+                        Best {% widthratio step.best_clarity 1 100 %}% &middot;
+                      {% else %}
+                        <span class="sr-only">Level {{ step.level }} open. </span>
+                      {% endif %}
+                      needs {% widthratio step.min_clarity 1 100 %}%
+                    {% endif %}
+                  </span>
+                </span>
+                {% if step.gate_state == "passed" %}
+                  <span class="ladder-rung-tag is-passed" aria-hidden="true">{% widthratio step.best_clarity 1 100 %}%</span>
+                {% else %}
+                  <span class="ladder-rung-tag is-open" aria-hidden="true">Open</span>
+                {% endif %}
+              </a>
+            {% endif %}
           {% empty %}
             <span class="empty">Run migrations or generate a ladder to load levels.</span>
           {% endfor %}

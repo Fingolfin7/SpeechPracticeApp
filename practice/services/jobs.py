@@ -10,9 +10,20 @@ from django.contrib.auth import get_user_model
 from django.db import close_old_connections, transaction
 from django.utils import timezone
 
-from practice.models import GeneratedPracticeScript, ImprovementCard, PracticeScript, ScoringJob, default_practice_user_pk
+from practice.models import (
+    GeneratedPracticeScript,
+    ImprovementCard,
+    LadderStepProgress,
+    PracticeSession,
+    PracticeScript,
+    PracticeLadderStep,
+    ScoringJob,
+    SessionError,
+    default_practice_user_pk,
+)
 from practice.services.audio_storage import materialized_audio
 from practice.services.analytics import refresh_improvement_cards
+from practice.services.evidence import quality_and_evidence_for_card
 from practice.services.scoring import transcribe_free_and_store, transcribe_score_and_store
 from practice.services.spaced_repetition import update_card_from_session
 
@@ -127,8 +138,15 @@ def process_scoring_job(job_id: int) -> ScoringJob:
                     provider_name=job.provider,
                     partial_callback=on_partial,
                 )
-                update_card_from_session(job.card, session)
+                events = list(SessionError.objects.filter(user=job.user, session_id=session.pk))
+                for card in _candidate_cards_for_job(job):
+                    quality, evidence = quality_and_evidence_for_card(card, session, events)
+                    if quality is None:
+                        continue
+                    update_card_from_session(card, session, quality=quality, evidence=evidence)
                 refresh_improvement_cards(user=job.user, days=settings.CARD_REFRESH_WINDOW_DAYS)
+                if job.script_id is not None:
+                    record_ladder_progress_for_session(user=job.user, script=job.script, session=session)
     except Exception as exc:
         job = ScoringJob.objects.get(pk=job_id)
         job.status = ScoringJob.STATUS_FAILED
@@ -167,6 +185,57 @@ def recover_stale_scoring_jobs(*, stale_after_minutes: int = 30) -> int:
     )
 
 
+def record_ladder_progress_for_session(
+    *,
+    user,
+    script: PracticeScript,
+    session: PracticeSession,
+    event_time=None,
+) -> tuple[int, int]:
+    created_count = 0
+    pass_count = 0
+    steps = script.ladder_steps.select_related("ladder").all()
+    for step in steps:
+        _progress, created, passed = upsert_ladder_step_progress(
+            user=user,
+            step=step,
+            session=session,
+            event_time=event_time,
+        )
+        created_count += int(created)
+        pass_count += int(passed)
+    return created_count, pass_count
+
+
+def upsert_ladder_step_progress(
+    *,
+    user,
+    step: PracticeLadderStep,
+    session: PracticeSession,
+    event_time=None,
+) -> tuple[LadderStepProgress, bool, bool]:
+    timestamp = event_time or timezone.now()
+    progress, created = LadderStepProgress.objects.get_or_create(
+        user=user,
+        step=step,
+        defaults={"created_at": timestamp},
+    )
+    was_passed = progress.passed_at is not None
+    progress.attempts = (progress.attempts or 0) + 1
+    if session.clarity is not None:
+        clarity = float(session.clarity)
+        if clarity > progress.best_clarity:
+            progress.best_clarity = clarity
+            progress.best_session_id = session.pk
+    if progress.passed_at is None and progress.best_clarity >= step.min_clarity:
+        progress.passed_at = timestamp
+    progress.save(update_fields=["attempts", "best_clarity", "best_session_id", "passed_at", "updated_at"])
+    if event_time is not None:
+        LadderStepProgress.objects.filter(pk=progress.pk).update(updated_at=timestamp)
+        progress.updated_at = timestamp
+    return progress, created, not was_passed and progress.passed_at is not None
+
+
 def _card_for_script(script: PracticeScript) -> ImprovementCard | None:
     generated_query = GeneratedPracticeScript.objects.select_related("card").filter(
         script=script,
@@ -186,6 +255,38 @@ def _card_for_script(script: PracticeScript) -> ImprovementCard | None:
         except (ImprovementCard.DoesNotExist, ValueError):
             return None
     return None
+
+
+def _candidate_cards_for_job(job: ScoringJob) -> list[ImprovementCard]:
+    cards_by_id: dict[int, ImprovementCard] = {}
+
+    def add(card: ImprovementCard | None) -> None:
+        if card is None or card.pk is None:
+            return
+        if card.user_id != job.user_id:
+            return
+        if card.status == ImprovementCard.STATUS_PAUSED:
+            return
+        cards_by_id.setdefault(card.pk, card)
+
+    add(job.card)
+
+    if job.script_id is not None:
+        generated_records = GeneratedPracticeScript.objects.select_related("card").filter(
+            user=job.user,
+            script=job.script,
+            card__isnull=False,
+            card__user=job.user,
+        )
+        for generated in generated_records:
+            add(generated.card)
+
+        ladder_steps = job.script.ladder_steps.select_related("ladder").prefetch_related("ladder__cards")
+        for step in ladder_steps:
+            for card in step.ladder.cards.all():
+                add(card)
+
+    return list(cards_by_id.values())
 
 
 def job_status_context(job: ScoringJob) -> dict[str, Any]:

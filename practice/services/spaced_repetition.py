@@ -5,24 +5,25 @@ from datetime import timedelta
 from django.utils import timezone
 
 from practice.models import ImprovementCard, PracticeReview, PracticeSession
+from practice.services.evidence import session_quality
 
 
 def quality_from_session(session: PracticeSession) -> float:
-    score = float(session.score or 0.0)
-    wer = float(session.wer or 1.0)
-    score_quality = max(0.0, min(1.0, (score - 1.0) / 4.0))
-    wer_quality = max(0.0, min(1.0, 1.0 - wer))
-    return round((score_quality * 0.65) + (wer_quality * 0.35), 3)
+    return session_quality(session)
 
 
 def update_card_from_session(
     card: ImprovementCard | None,
     session: PracticeSession,
+    *,
+    quality: float | None = None,
+    evidence: dict | None = None,
 ) -> PracticeReview | None:
     if card is None:
         return None
 
-    quality = quality_from_session(session)
+    if quality is None:
+        quality = quality_from_session(session)
     previous_mastery = float(card.mastery or 0.0)
     new_mastery = _next_mastery(previous_mastery, quality)
     card.mastery = new_mastery
@@ -36,6 +37,7 @@ def update_card_from_session(
             "score": float(session.score or 0.0),
             "wer": float(session.wer or 0.0),
             "quality": quality,
+            "evidence": evidence,
             "previous_mastery": previous_mastery,
             "mastery": new_mastery,
         },
@@ -55,12 +57,23 @@ def update_card_from_session(
         card=card,
         legacy_session_id=session.pk,
         score=session.score,
-        error_rate=session.wer,
+        error_rate=_error_rate(session, evidence),
+        quality=quality,
+        mastery_after=new_mastery,
+        evidence=evidence or None,
         notes=(
             f"Auto review from scored session. Quality {quality:.2f}; "
             f"mastery {previous_mastery:.2f} -> {new_mastery:.2f}."
         ),
     )
+
+
+def _error_rate(session: PracticeSession, evidence: dict | None) -> float | None:
+    if evidence:
+        opportunities = int(evidence.get("opportunities", 0) or 0)
+        if opportunities > 0:
+            return float(evidence.get("misses", 0) or 0) / float(opportunities)
+    return session.wer
 
 
 def _next_mastery(previous: float, quality: float) -> float:

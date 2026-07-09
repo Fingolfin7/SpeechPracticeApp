@@ -2256,6 +2256,15 @@ class PracticeWebTests(TransactionTestCase):
         self.assertIsNotNone(progress.passed_at)
         self.assertIn("rows created 1, passes 1", out.getvalue())
 
+        # --if-empty must no-op now that progress rows exist.
+        progress.attempts = 42
+        progress.save(update_fields=["attempts"])
+        out = StringIO()
+        call_command("backfill_ladder_progress", "--if-empty", stdout=out)
+        progress.refresh_from_db()
+        self.assertEqual(progress.attempts, 42)
+        self.assertIn("skipping backfill", out.getvalue())
+
     def test_multiple_generated_script_links_all_review_with_evidence(self):
         self._create_legacy_tables()
         alpha = ImprovementCard.objects.create(

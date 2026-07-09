@@ -234,3 +234,11 @@ CODEX_CHATGPT_BASE_URL = os.getenv(
     "CODEX_CHATGPT_BASE_URL",
     "https://chatgpt.com/backend-api/codex",
 )
+
+# Test runs: swap the deliberately-slow PBKDF2 hasher for MD5. User creation and
+# client.login() happen in nearly every test; with PBKDF2 that fixed cost was
+# ~1s per test (~100s suite). Never affects real servers.
+import sys  # noqa: E402
+
+if len(sys.argv) > 1 and sys.argv[1] == "test":
+    PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]

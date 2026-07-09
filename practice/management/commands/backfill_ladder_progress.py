@@ -13,8 +13,17 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--user", dest="username", help="Only backfill jobs for this username.")
+        parser.add_argument(
+            "--if-empty",
+            action="store_true",
+            dest="if_empty",
+            help="No-op when any LadderStepProgress rows already exist (safe to run on every deploy).",
+        )
 
     def handle(self, *args, **options):
+        if options.get("if_empty") and LadderStepProgress.objects.exists():
+            self.stdout.write("Ladder progress already populated; skipping backfill.")
+            return
         username = options.get("username")
         jobs = (
             ScoringJob.objects.select_related("user", "script")

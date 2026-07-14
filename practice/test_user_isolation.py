@@ -88,13 +88,11 @@ class UserIsolationTests(TestCase):
         alice_settings = PracticeSettings.load(self.alice)
         bob_settings = PracticeSettings.load(self.bob)
 
-        alice_settings.autumn_project = "Alice project"
         alice_settings.set_secret("openai_api_key", "alice-key")
         alice_settings.set_secret("codex_token_bundle", '{"access_token":"alice-codex"}')
         alice_settings.save()
 
         bob_settings.refresh_from_db()
-        self.assertEqual(bob_settings.autumn_project, "")
         self.assertIsNone(bob_settings.get_secret("openai_api_key"))
         self.assertIsNone(bob_settings.get_secret("codex_token_bundle"))
 
@@ -159,7 +157,7 @@ class UserIsolationTests(TestCase):
             title="Legacy ladder",
             source=PracticeLadder.SOURCE_GENERATED,
         )
-        settings_obj = PracticeSettings.objects.create(user=owner, autumn_project="Legacy")
+        settings_obj = PracticeSettings.objects.create(user=owner)
 
         dry_run = StringIO()
         call_command("claim_existing_data", "--username", target.username, stdout=dry_run)

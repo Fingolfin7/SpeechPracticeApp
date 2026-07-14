@@ -17,10 +17,8 @@ from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
-from autumn_client import AutumnClient, AutumnError, normalize_base_url
 from error_analytics import (
     _position_bucket,
     _word_to_phoneme_symbols,
@@ -439,10 +437,6 @@ def practice_run(request):
         "ladder_steps": ladder_steps,
         "selected_ladder_step": selected_ladder_step,
         "generation_provider_choices": script_generation_provider_choices(request.user),
-        "autumn_timer": _autumn_timer_context(
-            PracticeSettings.load(request.user),
-            selected_script=selected_script,
-        ),
     }
     return render(request, "practice/practice_run.html", context)
 
@@ -1556,17 +1550,6 @@ def ladder_bulk_delete(request):
 def account_settings(request):
     settings_obj = PracticeSettings.load(request.user)
     if request.method == "POST":
-        if "connect_autumn" in request.POST:
-            _connect_autumn(request, settings_obj)
-            return redirect("practice:account")
-
-        if "disconnect_autumn" in request.POST:
-            settings_obj.set_secret("autumn_token", None)
-            settings_obj.autumn_active_session_id = None
-            settings_obj.save()
-            messages.success(request, "Autumn disconnected.")
-            return redirect("practice:account")
-
         if "start_codex_login" in request.POST:
             try:
                 device_code = start_device_code_login()
@@ -1607,23 +1590,8 @@ def account_settings(request):
             messages.success(request, "Local Whisper model cache cleared.")
             return redirect("practice:account")
 
-        if "start_autumn_timer" in request.POST:
-            _start_autumn_timer(request, settings_obj, request.POST.get("autumn_note"))
-            return redirect("practice:account")
-
-        if "stop_autumn_timer" in request.POST:
-            _stop_autumn_timer(request, settings_obj, request.POST.get("autumn_note"))
-            return redirect("practice:account")
-
         old_whisper = _whisper_settings_snapshot(settings_obj)
-        form = AccountSettingsForm(
-            request.POST,
-            instance=settings_obj,
-            **_autumn_form_options(
-                settings_obj,
-                project=request.POST.get("autumn_project"),
-            ),
-        )
+        form = AccountSettingsForm(request.POST, instance=settings_obj)
         if form.is_valid():
             form.save()
             if old_whisper != _whisper_settings_snapshot(settings_obj):
@@ -1631,7 +1599,7 @@ def account_settings(request):
             messages.success(request, "Account settings saved.")
             return redirect("practice:account")
     else:
-        form = AccountSettingsForm(instance=settings_obj, **_autumn_form_options(settings_obj))
+        form = AccountSettingsForm(instance=settings_obj)
 
     bundle = deserialize_token_bundle(settings_obj.get_secret("codex_token_bundle"))
     context = {
@@ -1640,61 +1608,12 @@ def account_settings(request):
         "have_keys": {
             "openai": settings_obj.has_secret("openai_api_key"),
             "anthropic": settings_obj.has_secret("anthropic_api_key"),
-            "autumn": settings_obj.has_secret("autumn_token"),
             "codex": settings_obj.has_secret("codex_token_bundle"),
         },
         "codex_device_code": request.session.get("codex_device_code"),
         "codex_summary": token_bundle_summary(bundle),
-        "autumn_configured": settings_obj.has_secret("autumn_token") and bool(settings_obj.autumn_project),
-        "autumn_active": bool(settings_obj.autumn_active_session_id),
-        "autumn_note": _latest_autumn_note(request.user),
     }
     return render(request, "practice/account.html", context)
-
-
-def autumn_subprojects(request):
-    settings_obj = PracticeSettings.load(request.user)
-    project = (request.GET.get("project") or settings_obj.autumn_project or "").strip()
-    if not project:
-        return JsonResponse({"ok": False, "error": "Choose an Autumn project first."}, status=400)
-    try:
-        client = _autumn_token_client(settings_obj)
-        subprojects = client.list_subprojects(project)
-    except AutumnError as exc:
-        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
-    return JsonResponse({"ok": True, "subprojects": subprojects})
-
-
-@require_POST
-def autumn_timer(request):
-    settings_obj = PracticeSettings.load(request.user)
-    next_url = _safe_next_url(request, request.POST.get("next")) or reverse("practice:practice")
-    if "stop_autumn_timer" in request.POST:
-        result = _stop_autumn_timer(
-            request,
-            settings_obj,
-            request.POST.get("autumn_note"),
-            notify=not _wants_json(request),
-        )
-    elif "start_autumn_timer" in request.POST:
-        result = _start_autumn_timer(
-            request,
-            settings_obj,
-            request.POST.get("autumn_note"),
-            notify=not _wants_json(request),
-        )
-    else:
-        result = {
-            "ok": False,
-            "active": bool(settings_obj.autumn_active_session_id),
-            "message": "Choose whether to start or stop Autumn.",
-        }
-        if not _wants_json(request):
-            messages.error(request, result["message"])
-    if _wants_json(request):
-        status = 200 if result["ok"] else 400
-        return JsonResponse(result, status=status)
-    return redirect(next_url)
 
 
 def _latest_script_for_card(card: ImprovementCard) -> PracticeScript | None:
@@ -2025,241 +1944,24 @@ def _format_metric(value: float | None, suffix: str = "") -> str:
     return f"{value:.3g}{suffix}"
 
 
-def _connect_autumn(request, settings_obj: PracticeSettings) -> None:
-    base_url = normalize_base_url(
-        request.POST.get("autumn_base_url")
-        or settings_obj.autumn_base_url
-        or django_settings.DEFAULT_AUTUMN_BASE_URL
-    )
-    username = (request.POST.get("autumn_username") or "").strip()
-    password = request.POST.get("autumn_password") or ""
-    if not username or not password:
-        messages.error(request, "Enter your Autumn username and password.")
-        return
-
-    try:
-        client = AutumnClient(base_url)
-        token = client.authenticate(username, password)
-    except AutumnError as exc:
-        messages.error(request, f"Autumn login failed: {exc}")
-        return
-
-    settings_obj.autumn_base_url = client.base_url
-    settings_obj.set_secret("autumn_token", token)
-    refresh_message = _refresh_autumn_project_choices(client, settings_obj)
-    settings_obj.save()
-    messages.success(request, f"Autumn connected.{refresh_message}")
 
 
-def _autumn_form_options(
-    settings_obj: PracticeSettings,
-    project: str | None = None,
-) -> dict[str, list[str]]:
-    token = settings_obj.get_secret("autumn_token") or ""
-    selected_project = (project or settings_obj.autumn_project or "").strip()
-    if not token:
-        return {
-            "autumn_projects": [selected_project] if selected_project else [],
-            "autumn_subproject_options": list(settings_obj.autumn_subprojects or []),
-        }
-
-    try:
-        client = _autumn_token_client(settings_obj)
-        projects = client.list_projects()
-    except AutumnError:
-        projects = []
-
-    if not selected_project and projects:
-        selected_project = projects[0]
-    if selected_project and selected_project not in projects:
-        projects = [selected_project, *projects]
-
-    subprojects = []
-    if selected_project:
-        try:
-            subprojects = _autumn_token_client(settings_obj).list_subprojects(selected_project)
-        except AutumnError:
-            subprojects = []
-    if not subprojects:
-        subprojects = list(settings_obj.autumn_subprojects or [])
-
-    return {
-        "autumn_projects": projects,
-        "autumn_subproject_options": subprojects,
-    }
 
 
-def _refresh_autumn_project_choices(client: AutumnClient, settings_obj: PracticeSettings) -> str:
-    try:
-        projects = client.list_projects()
-    except AutumnError as exc:
-        return f" Project refresh failed: {exc}"
-    if not projects:
-        return " No Autumn projects were returned."
-
-    if not settings_obj.autumn_project or settings_obj.autumn_project not in projects:
-        settings_obj.autumn_project = projects[0]
-
-    try:
-        available_subprojects = client.list_subprojects(settings_obj.autumn_project)
-    except AutumnError:
-        available_subprojects = []
-    if available_subprojects and settings_obj.autumn_subprojects:
-        available = set(available_subprojects)
-        settings_obj.autumn_subprojects = [
-            item for item in settings_obj.autumn_subprojects if item in available
-        ]
-    return f" Project: {settings_obj.autumn_project}."
 
 
-def _autumn_token_client(settings_obj: PracticeSettings) -> AutumnClient:
-    token = settings_obj.get_secret("autumn_token") or ""
-    if not token:
-        raise AutumnError("Store an Autumn token first.")
-    return AutumnClient(settings_obj.autumn_base_url, token)
 
 
-def _start_autumn_timer(
-    request,
-    settings_obj: PracticeSettings,
-    note: str | None = None,
-    notify: bool = True,
-) -> dict[str, object]:
-    try:
-        payload = _autumn_client(settings_obj).start_timer(
-            settings_obj.autumn_project,
-            settings_obj.autumn_subprojects or [],
-            note=note or "SpeechPractice practice",
-        )
-        session = payload.get("session") or {}
-        session_id = session.get("id")
-        if not session_id:
-            raise AutumnError("Autumn did not return a timer id")
-        settings_obj.autumn_active_session_id = int(session_id)
-        settings_obj.save(update_fields=["autumn_active_session_id", "updated_at"])
-        message = f"Autumn timer started for {settings_obj.autumn_project}."
-        if notify:
-            messages.success(request, message)
-        return {
-            "ok": True,
-            "active": True,
-            "message": message,
-            "button_label": "Stop Autumn",
-            "button_name": "stop_autumn_timer",
-        }
-    except (AutumnError, ValueError, TypeError) as exc:
-        message = f"Autumn start failed: {exc}"
-        if notify:
-            messages.error(request, message)
-        return {
-            "ok": False,
-            "active": bool(settings_obj.autumn_active_session_id),
-            "message": message,
-        }
 
 
-def _stop_autumn_timer(
-    request,
-    settings_obj: PracticeSettings,
-    note: str | None = None,
-    notify: bool = True,
-) -> dict[str, object]:
-    try:
-        payload = _autumn_client(settings_obj).stop_timer(
-            session_id=settings_obj.autumn_active_session_id,
-            project=settings_obj.autumn_project,
-            note=note or _latest_autumn_note(),
-        )
-        settings_obj.autumn_active_session_id = None
-        settings_obj.save(update_fields=["autumn_active_session_id", "updated_at"])
-        duration = payload.get("duration")
-        if duration is not None:
-            message = f"Autumn timer stopped after {float(duration):.1f} minutes."
-        else:
-            message = "Autumn timer stopped."
-        if notify:
-            messages.success(request, message)
-        return {
-            "ok": True,
-            "active": False,
-            "message": message,
-            "button_label": "Start Autumn",
-            "button_name": "start_autumn_timer",
-        }
-    except (AutumnError, ValueError, TypeError) as exc:
-        message = f"Autumn stop failed: {exc}"
-        if notify:
-            messages.error(request, message)
-        return {
-            "ok": False,
-            "active": bool(settings_obj.autumn_active_session_id),
-            "message": message,
-        }
 
 
-def _autumn_timer_context(
-    settings_obj: PracticeSettings,
-    selected_script: PracticeScript | None = None,
-) -> dict[str, object]:
-    has_token = settings_obj.has_secret("autumn_token")
-    configured = has_token and bool(settings_obj.autumn_project)
-    active = configured and bool(settings_obj.autumn_active_session_id)
-    note = "SpeechPractice practice"
-    if selected_script is not None:
-        note = f"SpeechPractice: {selected_script.title}"
-    return {
-        "configured": configured,
-        "connected": has_token,
-        "active": active,
-        "project": settings_obj.autumn_project,
-        "subprojects": settings_obj.autumn_subprojects or [],
-        "note": note,
-    }
 
 
-def _safe_next_url(request, raw_url: str | None) -> str:
-    if raw_url and url_has_allowed_host_and_scheme(
-        raw_url,
-        allowed_hosts={request.get_host()},
-        require_https=request.is_secure(),
-    ):
-        return raw_url
-    return ""
 
 
-def _autumn_client(settings_obj: PracticeSettings) -> AutumnClient:
-    token = settings_obj.get_secret("autumn_token") or ""
-    if not token:
-        raise AutumnError("Store an Autumn token first.")
-    if not settings_obj.autumn_project:
-        raise AutumnError("Choose an Autumn project first.")
-    return AutumnClient(settings_obj.autumn_base_url, token)
 
 
-def _latest_autumn_note(user) -> str:
-    try:
-        session = (
-            PracticeSession.objects.filter(user=user)
-            .exclude(timestamp="")
-            .order_by("-timestamp", "-id")
-            .first()
-        )
-    except (OperationalError, ProgrammingError):
-        session = None
-    if session is None:
-        return "SpeechPractice practice"
-    parts = [f"SpeechPractice: {session.script_name}"]
-    if session.score is not None:
-        parts.append(f"Score {session.score:.2f}/5")
-    if session.wer is not None:
-        parts.append(f"WER {session.wer:.1%}")
-    if session.cer is not None:
-        parts.append(f"CER {session.cer:.1%}")
-    if session.clarity is not None:
-        parts.append(f"Clarity {session.clarity:.1%}")
-    if session.artic_rate is not None:
-        parts.append(f"Rate {session.artic_rate:.0f} wpm")
-    return " | ".join(parts)
 
 
 def _whisper_settings_snapshot(settings_obj: PracticeSettings) -> tuple:

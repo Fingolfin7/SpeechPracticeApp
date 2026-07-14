@@ -1964,17 +1964,6 @@ select {
   box-shadow: none;
 }
 
-.autumn-button {
-  min-width: 128px;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.autumn-button.is-active {
-  background: var(--ember);
-  border-color: #7f2410;
-}
-
 .field-row label {
   color: var(--ember);
   font-size: 12px;
@@ -2869,72 +2858,6 @@ select {
 
 .advanced-settings[open] summary {
   margin-bottom: 12px;
-}
-
-.autumn-login-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
-  gap: 10px;
-  align-items: end;
-}
-
-.autumn-login-grid p {
-  min-width: 0;
-}
-
-.autumn-subprojects-box {
-  display: grid;
-  gap: 10px;
-}
-
-.subproject-heading {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--ember);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.subproject-heading small {
-  color: var(--muted);
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.autumn-subprojects-box #id_autumn_subprojects {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 8px;
-  min-height: 48px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--panel);
-}
-
-.autumn-subprojects-box label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 7px 9px;
-  border: 1px solid rgba(36, 31, 26, 0.12);
-  border-radius: 10px;
-  background: var(--panel);
-  font-weight: 700;
-}
-
-.autumn-subprojects-box input {
-  width: auto;
-}
-
-.autumn-subprojects-box.is-loading {
-  opacity: 0.65;
 }
 
 .check-row {
@@ -3875,7 +3798,6 @@ button.qc-btn {
   .practice-shell,
   .settings-grid,
   .settings-subgrid,
-  .autumn-login-grid,
   .api-keys-grid,
   .compare-grid,
   .metric-strip,

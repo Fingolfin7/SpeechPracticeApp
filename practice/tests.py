@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from error_analytics import phrase_trend_summary
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
@@ -221,7 +222,6 @@ class PracticeWebTests(TransactionTestCase):
         version = static_version(None)["static_version"]
 
         expected_keys = {
-            "account_js",
             "app",
             "favicon",
             "history_js",
@@ -2677,8 +2677,8 @@ class PracticeWebTests(TransactionTestCase):
                 {
                     "transcription_provider": "openai",
                     "script_generation_provider": "anthropic",
-                    "openai_script_model": "gpt-5.4-mini",
-                    "anthropic_script_model": "claude-sonnet-4-6",
+                    "openai_script_model": "gpt-5.6-terra",
+                    "anthropic_script_model": "claude-sonnet-5",
                     "openai_transcription_model": "whisper-1",
                     "whisper_model_name": "small.en",
                     "whisper_device": "cpu",
@@ -2690,12 +2690,8 @@ class PracticeWebTests(TransactionTestCase):
                     "whisper_no_speech_threshold": 0.25,
                     "whisper_condition_on_previous_text": "on",
                     "whisper_chunk_seconds": 90,
-                    "autumn_base_url": "https://autumn.example.test",
-                    "autumn_project": "Speech Practice",
-                    "autumn_subprojects_text": "Drills, Review",
                     "openai_api_key": "sk-test",
                     "anthropic_api_key": "ak-test",
-                    "autumn_token": "autumn-test",
                 },
             )
 
@@ -2703,139 +2699,63 @@ class PracticeWebTests(TransactionTestCase):
         clear_cache.assert_called_once()
         settings_obj = PracticeSettings.load()
         self.assertEqual(settings_obj.transcription_provider, "openai")
-        self.assertEqual(settings_obj.openai_script_model, "gpt-5.4-mini")
-        self.assertEqual(settings_obj.anthropic_script_model, "claude-sonnet-4-6")
+        self.assertEqual(settings_obj.openai_script_model, "gpt-5.6-terra")
+        self.assertEqual(settings_obj.anthropic_script_model, "claude-sonnet-5")
         self.assertEqual(settings_obj.whisper_model_name, "small.en")
         self.assertEqual(settings_obj.whisper_preset, "fast_cpu")
         self.assertEqual(settings_obj.whisper_chunk_seconds, 90)
-        self.assertEqual(settings_obj.autumn_project, "Speech Practice")
-        self.assertEqual(settings_obj.autumn_subprojects, ["Drills", "Review"])
         self.assertEqual(settings_obj.get_secret("openai_api_key"), "sk-test")
         self.assertEqual(settings_obj.get_secret("anthropic_api_key"), "ak-test")
-        self.assertEqual(settings_obj.get_secret("autumn_token"), "autumn-test")
 
     def test_account_page_renders_current_model_choices(self):
         response = self.client.get(reverse("practice:account"))
 
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "GPT-5.6 Sol")
+        self.assertContains(response, "GPT-5.6 Terra")
+        self.assertContains(response, "GPT-5.6 Luna")
         self.assertContains(response, "GPT-5.5")
-        self.assertContains(response, "Claude Sonnet 4.6")
+        self.assertNotContains(response, "GPT-5.4")
+        self.assertContains(response, "Claude Sonnet 5")
+        self.assertContains(response, "Claude Opus 4.8")
+        self.assertContains(response, "Claude Fable 5")
+        self.assertContains(response, "Claude Haiku 4.5")
+        self.assertNotContains(response, "Claude Sonnet 4.6")
         self.assertContains(response, "Local Whisper tuning")
         self.assertContains(response, "Settings sections")
         self.assertContains(response, "Advanced Whisper parameters")
         self.assertContains(response, "Connection status summary")
-        self.assertContains(response, "Autumn timer")
-        self.assertContains(response, "Autumn username")
+        self.assertNotContains(response, "Autumn")
 
-    def test_account_page_connects_autumn_with_username_and_password(self):
-        fake_client = Mock()
-        fake_client.base_url = "https://autumn.example.test"
-        fake_client.authenticate.return_value = "autumn-login-token"
-        fake_client.list_projects.return_value = ["Speech", "Writing"]
-        fake_client.list_subprojects.return_value = ["drills", "reading"]
-
-        with patch("practice.views.AutumnClient", return_value=fake_client) as client_cls:
-            response = self.client.post(
-                reverse("practice:account"),
-                {
-                    "connect_autumn": "1",
-                    "autumn_base_url": "https://autumn.example.test/",
-                    "autumn_username": "reader",
-                    "autumn_password": "secret",
-                },
-            )
-
-        self.assertEqual(response.status_code, 302)
-        client_cls.assert_called_once_with("https://autumn.example.test")
-        fake_client.authenticate.assert_called_once_with("reader", "secret")
-        fake_client.list_projects.assert_called_once()
-        fake_client.list_subprojects.assert_called_once_with("Speech")
-        settings_obj = PracticeSettings.load()
-        self.assertEqual(settings_obj.autumn_base_url, "https://autumn.example.test")
-        self.assertEqual(settings_obj.autumn_project, "Speech")
-        self.assertEqual(settings_obj.get_secret("autumn_token"), "autumn-login-token")
-
-    def test_account_page_renders_autumn_project_and_subproject_selectors(self):
-        settings_obj = PracticeSettings.load()
-        settings_obj.autumn_base_url = "https://autumn.example.test"
-        settings_obj.autumn_project = "Speech"
-        settings_obj.autumn_subprojects = ["drills"]
-        settings_obj.set_secret("autumn_token", "autumn-test")
-        settings_obj.save()
-        fake_client = Mock()
-        fake_client.list_projects.return_value = ["Speech", "Writing"]
-        fake_client.list_subprojects.return_value = ["drills", "misc", "reading"]
-
-        with patch("practice.views._autumn_token_client", return_value=fake_client):
-            response = self.client.get(reverse("practice:account"))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '<select name="autumn_project"', html=False)
-        self.assertContains(response, '<option value="Speech" selected>Speech</option>', html=True)
-        self.assertContains(response, 'name="autumn_subprojects"', count=3)
-        self.assertContains(response, 'value="drills"', html=False)
-        self.assertContains(response, 'id="id_autumn_subprojects_0" checked', html=False)
-        fake_client.list_projects.assert_called_once()
-        fake_client.list_subprojects.assert_called_once_with("Speech")
-
-    def test_account_page_saves_selected_autumn_subprojects(self):
-        settings_obj = PracticeSettings.load()
-        settings_obj.autumn_base_url = "https://autumn.example.test"
-        settings_obj.autumn_project = "Speech"
-        settings_obj.set_secret("autumn_token", "autumn-test")
-        settings_obj.save()
-        fake_client = Mock()
-        fake_client.list_projects.return_value = ["Speech", "Writing"]
-        fake_client.list_subprojects.return_value = ["drills", "misc", "reading"]
-
-        with patch("practice.views._autumn_token_client", return_value=fake_client):
-            response = self.client.post(
-                reverse("practice:account"),
-                {
-                    "transcription_provider": settings_obj.transcription_provider,
-                    "script_generation_provider": settings_obj.script_generation_provider,
-                    "openai_script_model": settings_obj.openai_script_model,
-                    "anthropic_script_model": settings_obj.anthropic_script_model,
-                    "openai_transcription_model": settings_obj.openai_transcription_model,
-                    "whisper_model_name": settings_obj.whisper_model_name,
-                    "whisper_device": settings_obj.whisper_device,
-                    "whisper_preset": settings_obj.whisper_preset,
-                    "whisper_language": settings_obj.whisper_language,
-                    "whisper_timestamps": "on",
-                    "whisper_beam_size": settings_obj.whisper_beam_size,
-                    "whisper_temperature": settings_obj.whisper_temperature,
-                    "whisper_no_speech_threshold": settings_obj.whisper_no_speech_threshold,
-                    "whisper_condition_on_previous_text": "on",
-                    "whisper_chunk_seconds": settings_obj.whisper_chunk_seconds,
-                    "autumn_base_url": settings_obj.autumn_base_url,
-                    "autumn_project": "Writing",
-                    "autumn_subprojects": ["misc", "reading"],
-                },
-            )
-
-        self.assertEqual(response.status_code, 302)
-        settings_obj.refresh_from_db()
-        self.assertEqual(settings_obj.autumn_project, "Writing")
-        self.assertEqual(settings_obj.autumn_subprojects, ["misc", "reading"])
-
-    def test_autumn_subprojects_endpoint_returns_project_choices(self):
-        settings_obj = PracticeSettings.load()
-        settings_obj.autumn_base_url = "https://autumn.example.test"
-        settings_obj.autumn_project = "Speech"
-        settings_obj.set_secret("autumn_token", "autumn-test")
-        settings_obj.save()
-        fake_client = Mock()
-        fake_client.list_subprojects.return_value = ["drills", "reading"]
-
-        with patch("practice.views._autumn_token_client", return_value=fake_client):
-            response = self.client.get(
-                reverse("practice:autumn_subprojects"),
-                {"project": "Speech"},
-            )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "subprojects": ["drills", "reading"]})
-        fake_client.list_subprojects.assert_called_once_with("Speech")
+    def test_script_model_defaults_and_choices_match_current_catalog(self):
+        self.assertEqual(settings.OPENAI_SCRIPT_MODEL, "gpt-5.6-luna")
+        self.assertEqual(
+            settings.OPENAI_SCRIPT_MODEL_CHOICES,
+            [
+                ("gpt-5.6-sol", "GPT-5.6 Sol"),
+                ("gpt-5.6-terra", "GPT-5.6 Terra"),
+                ("gpt-5.6-luna", "GPT-5.6 Luna"),
+                ("gpt-5.5", "GPT-5.5"),
+            ],
+        )
+        self.assertEqual(settings.ANTHROPIC_SCRIPT_MODEL, "claude-sonnet-5")
+        self.assertEqual(
+            settings.ANTHROPIC_SCRIPT_MODEL_CHOICES,
+            [
+                ("claude-sonnet-5", "Claude Sonnet 5"),
+                ("claude-opus-4-8", "Claude Opus 4.8"),
+                ("claude-fable-5", "Claude Fable 5"),
+                ("claude-haiku-4-5", "Claude Haiku 4.5"),
+            ],
+        )
+        self.assertEqual(
+            PracticeSettings._meta.get_field("openai_script_model").default,
+            "gpt-5.6-luna",
+        )
+        self.assertEqual(
+            PracticeSettings._meta.get_field("anthropic_script_model").default,
+            "claude-sonnet-5",
+        )
 
     def test_account_page_clears_whisper_cache_on_request(self):
         with patch("practice.views.clear_local_whisper_cache") as clear_cache:
@@ -2846,119 +2766,6 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(response.status_code, 302)
         clear_cache.assert_called_once()
-
-    def test_account_page_starts_and_stops_autumn_timer(self):
-        settings_obj = PracticeSettings.load()
-        settings_obj.autumn_base_url = "https://autumn.example.test"
-        settings_obj.autumn_project = "Speech Practice"
-        settings_obj.autumn_subprojects = ["Drills"]
-        settings_obj.set_secret("autumn_token", "autumn-test")
-        settings_obj.save()
-        fake_client = patch("practice.views._autumn_client").start()
-        self.addCleanup(patch.stopall)
-        fake_client.return_value.start_timer.return_value = {"session": {"id": 42}}
-        fake_client.return_value.stop_timer.return_value = {"duration": 12.5}
-
-        response = self.client.post(
-            reverse("practice:account"),
-            {"start_autumn_timer": "1", "autumn_note": "Starting practice"},
-        )
-
-        self.assertEqual(response.status_code, 302)
-        settings_obj.refresh_from_db()
-        self.assertEqual(settings_obj.autumn_active_session_id, 42)
-        fake_client.return_value.start_timer.assert_called_once_with(
-            "Speech Practice",
-            ["Drills"],
-            note="Starting practice",
-        )
-
-        response = self.client.post(
-            reverse("practice:account"),
-            {"stop_autumn_timer": "1", "autumn_note": "Finished practice"},
-        )
-
-        self.assertEqual(response.status_code, 302)
-        settings_obj.refresh_from_db()
-        self.assertIsNone(settings_obj.autumn_active_session_id)
-        fake_client.return_value.stop_timer.assert_called_once_with(
-            session_id=42,
-            project="Speech Practice",
-            note="Finished practice",
-        )
-
-    def test_practice_page_starts_autumn_timer_from_transport_controls(self):
-        PracticeScript.objects.create(
-            title="Autumn Reading",
-            body="Start the timer before the practice take.",
-            practice_kind=PracticeScript.KIND_READING,
-            source=PracticeScript.SOURCE_USER,
-        )
-        settings_obj = PracticeSettings.load()
-        settings_obj.autumn_base_url = "https://autumn.example.test"
-        settings_obj.autumn_project = "Speech Practice"
-        settings_obj.autumn_subprojects = ["Drills"]
-        settings_obj.set_secret("autumn_token", "autumn-test")
-        settings_obj.save()
-
-        response = self.client.get(reverse("practice:practice"))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Start Autumn")
-        self.assertContains(response, "autumn-timer-form")
-        self.assertContains(response, "data-autumn-toggle")
-
-        with patch("practice.views._autumn_client") as fake_client:
-            fake_client.return_value.start_timer.return_value = {"session": {"id": 84}}
-            response = self.client.post(
-                reverse("practice:autumn_timer"),
-                {
-                    "start_autumn_timer": "1",
-                    "autumn_note": "SpeechPractice: Autumn Reading",
-                    "next": reverse("practice:practice"),
-                },
-            )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], reverse("practice:practice"))
-        settings_obj.refresh_from_db()
-        self.assertEqual(settings_obj.autumn_active_session_id, 84)
-        fake_client.return_value.start_timer.assert_called_once_with(
-            "Speech Practice",
-            ["Drills"],
-            note="SpeechPractice: Autumn Reading",
-        )
-
-    def test_practice_autumn_timer_endpoint_returns_json_without_redirect(self):
-        settings_obj = PracticeSettings.load()
-        settings_obj.autumn_base_url = "https://autumn.example.test"
-        settings_obj.autumn_project = "Speech Practice"
-        settings_obj.autumn_subprojects = ["Drills"]
-        settings_obj.set_secret("autumn_token", "autumn-test")
-        settings_obj.save()
-
-        with patch("practice.views._autumn_client") as fake_client:
-            fake_client.return_value.start_timer.return_value = {"session": {"id": 84}}
-            response = self.client.post(
-                reverse("practice:autumn_timer"),
-                {
-                    "start_autumn_timer": "1",
-                    "autumn_note": "SpeechPractice: Autumn Reading",
-                    "next": reverse("practice:practice"),
-                },
-                HTTP_ACCEPT="application/json",
-                HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-            )
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertTrue(payload["ok"])
-        self.assertTrue(payload["active"])
-        self.assertEqual(payload["button_label"], "Stop Autumn")
-        self.assertEqual(payload["button_name"], "stop_autumn_timer")
-        self.assertNotIn("Location", response.headers)
-        settings_obj.refresh_from_db()
-        self.assertEqual(settings_obj.autumn_active_session_id, 84)
 
     def test_progress_page_renders_filters_and_chart_data(self):
         self._create_legacy_tables()

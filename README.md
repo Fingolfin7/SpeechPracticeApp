@@ -12,7 +12,7 @@ SpeechPractice is a local Django web app for deliberate speaking practice. It gi
 - Score takes with WER, CER, clarity, speaking rate, pause ratio, confidence, and filled-pause metrics.
 - Review clickable timestamped transcripts, waveform playback, highlighted errors, report exports, and editable transcripts.
 - Build an adaptive practice loop from history, spaced-repetition cards, generated drills, ladders, and coach notes.
-- Connect model providers, Codex auth, Autumn timer metadata, and local Whisper tuning from the Account page.
+- Configure model providers, Codex auth, encrypted API keys, and local Whisper tuning from the Account page.
 
 ## Screenshots
 
@@ -136,8 +136,8 @@ Neon database:
 python manage.py loaddata deployment-data.json
 ```
 
-`PracticeSettings` is intentionally excluded so local encrypted tokens and
-machine-specific Autumn configuration are not moved into production. Configure
+`PracticeSettings` is intentionally excluded so local encrypted tokens and machine-specific settings are not moved into
+production. Configure
 `OPENAI_API_KEY` in Render and create the production account with `python
 manage.py createsuperuser` from the Render shell.
 

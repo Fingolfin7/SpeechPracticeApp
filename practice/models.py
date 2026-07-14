@@ -483,8 +483,8 @@ class PracticeSettings(models.Model):
         default=TRANSCRIPTION_OPENAI,
         choices=TRANSCRIPTION_CHOICES,
     )
-    openai_script_model = models.CharField(max_length=96, default="gpt-5.5")
-    anthropic_script_model = models.CharField(max_length=96, default="claude-sonnet-4-6")
+    openai_script_model = models.CharField(max_length=96, default="gpt-5.6-luna")
+    anthropic_script_model = models.CharField(max_length=96, default="claude-sonnet-5")
     openai_transcription_model = models.CharField(max_length=96, default="whisper-1")
     whisper_model_name = models.CharField(max_length=96, default="base.en")
     whisper_device = models.CharField(
@@ -514,11 +514,6 @@ class PracticeSettings(models.Model):
     whisper_no_speech_threshold = models.FloatField(default=0.3)
     whisper_condition_on_previous_text = models.BooleanField(default=True)
     whisper_chunk_seconds = models.PositiveSmallIntegerField(default=60)
-    autumn_base_url = models.URLField(blank=True, default="")
-    autumn_project = models.CharField(max_length=255, blank=True, default="")
-    autumn_subprojects = models.JSONField(default=list, blank=True)
-    autumn_active_session_id = models.IntegerField(blank=True, null=True)
-    autumn_token_enc = models.BinaryField(null=True, blank=True, editable=False)
     openai_api_key_enc = models.BinaryField(null=True, blank=True, editable=False)
     anthropic_api_key_enc = models.BinaryField(null=True, blank=True, editable=False)
     codex_token_bundle_enc = models.BinaryField(null=True, blank=True, editable=False)
@@ -539,7 +534,6 @@ class PracticeSettings(models.Model):
 
     def set_secret(self, field: str, value: str | None) -> None:
         allowed = {
-            "autumn_token": "autumn_token_enc",
             "openai_api_key": "openai_api_key_enc",
             "anthropic_api_key": "anthropic_api_key_enc",
             "codex_token_bundle": "codex_token_bundle_enc",
@@ -552,7 +546,6 @@ class PracticeSettings(models.Model):
 
     def get_secret(self, field: str) -> str | None:
         allowed = {
-            "autumn_token": "autumn_token_enc",
             "openai_api_key": "openai_api_key_enc",
             "anthropic_api_key": "anthropic_api_key_enc",
             "codex_token_bundle": "codex_token_bundle_enc",
@@ -567,7 +560,6 @@ class PracticeSettings(models.Model):
 
     def has_secret(self, field: str) -> bool:
         allowed = {
-            "autumn_token": "autumn_token_enc",
             "openai_api_key": "openai_api_key_enc",
             "anthropic_api_key": "anthropic_api_key_enc",
             "codex_token_bundle": "codex_token_bundle_enc",

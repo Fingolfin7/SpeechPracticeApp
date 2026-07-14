@@ -1,5 +1,4 @@
 {% extends "practice/base.html" %}
-{% load static %}
 {% block title %}Account | SpeechPractice{% endblock %}
 {% block content %}
 <section class="page-title">
@@ -12,9 +11,8 @@
 <div class="settings-tabs" aria-label="Settings sections">
   <a href="#settings-speech">Speech engine</a>
   <a href="#settings-whisper">Local Whisper</a>
-  <a href="#settings-connections">Connections</a>
   <a href="#settings-secrets">Secrets</a>
-  <a href="#settings-timer">Timer</a>
+  <a href="#settings-connections">Connections</a>
 </div>
 
 <section class="settings-grid">
@@ -28,7 +26,6 @@
       <div><strong>Codex</strong><span>{% if have_keys.codex %}Connected{% else %}Not connected{% endif %}</span></div>
       <div><strong>OpenAI</strong><span>{% if have_keys.openai %}Stored{% else %}Missing{% endif %}</span></div>
       <div><strong>Anthropic</strong><span>{% if have_keys.anthropic %}Stored{% else %}Missing{% endif %}</span></div>
-      <div><strong>Autumn</strong><span>{% if have_keys.autumn %}Stored{% else %}Missing{% endif %}</span></div>
     </div>
 
     <form class="settings-form" method="post">
@@ -66,36 +63,6 @@
         </details>
       </fieldset>
 
-      <fieldset class="settings-section" id="settings-connections" data-autumn-settings data-subprojects-url="{% url 'practice:autumn_subprojects' %}">
-        <legend>Connections</legend>
-        <div class="settings-status-line">
-          <span>Autumn is {% if have_keys.autumn %}connected{% else %}not connected{% endif %}</span>
-          <span>Codex is {% if have_keys.codex %}connected{% else %}not connected{% endif %}</span>
-        </div>
-        <div class="settings-subgrid">
-          <p>{{ form.autumn_base_url.label_tag }}{{ form.autumn_base_url }}</p>
-          <p>{{ form.autumn_project.label_tag }}{{ form.autumn_project }}</p>
-        </div>
-        <div class="autumn-login-grid">
-          <p>{{ form.autumn_username.label_tag }}{{ form.autumn_username }}</p>
-          <p>{{ form.autumn_password.label_tag }}{{ form.autumn_password }}</p>
-          <button type="submit" name="connect_autumn" value="1">Connect Autumn</button>
-          <button class="secondary-button" type="submit" name="disconnect_autumn" value="1" formnovalidate>Disconnect</button>
-        </div>
-        {{ form.autumn_subprojects_text }}
-        <div class="autumn-subprojects-box" data-autumn-subprojects>
-          <div class="subproject-heading">
-            <span>{{ form.autumn_subprojects.label }}</span>
-            {% if have_keys.autumn %}
-              <small>Select one or more for Start Autumn.</small>
-            {% else %}
-              <small>Connect Autumn to load subprojects.</small>
-            {% endif %}
-          </div>
-          {{ form.autumn_subprojects }}
-        </div>
-      </fieldset>
-
       <fieldset class="settings-section" id="settings-secrets">
         <legend>Secrets</legend>
       <div class="api-keys-grid">
@@ -115,14 +82,6 @@
           {{ form.anthropic_api_key }}
           <label>{{ form.clear_anthropic_api_key }} Clear key</label>
         </div>
-        <div class="api-key-item">
-          <div class="api-key-header">
-            <strong>Autumn token</strong>
-            <span>{% if have_keys.autumn %}Stored{% else %}Not stored{% endif %}</span>
-          </div>
-          {{ form.autumn_token }}
-          <label>{{ form.clear_autumn_token }} Clear token</label>
-        </div>
       </div>
       </fieldset>
 
@@ -130,7 +89,7 @@
     </form>
   </article>
 
-  <aside class="panel" id="settings-timer">
+  <aside class="panel" id="settings-connections">
     <p class="eyebrow">Connections</p>
     <div class="connection-list">
       <div class="connection-row">
@@ -145,10 +104,6 @@
         <strong>Anthropic key</strong>
         <span>{% if have_keys.anthropic %}Stored{% else %}Missing{% endif %}</span>
       </div>
-      <div class="connection-row">
-        <strong>Autumn token</strong>
-        <span>{% if have_keys.autumn %}Stored{% else %}Missing{% endif %}</span>
-      </div>
     </div>
 
     <div class="job-mini-list" style="margin-top: 16px;">
@@ -156,30 +111,6 @@
         {% csrf_token %}
         <button class="secondary-button" type="submit" name="clear_whisper_cache">Clear Whisper cache</button>
       </form>
-    </div>
-
-    <div class="job-mini-list" style="margin-top: 16px;">
-      <p class="eyebrow">Autumn timer</p>
-      {% if autumn_configured %}
-        <div class="job-stamp">
-          <strong>{% if autumn_active %}Running{% else %}Ready{% endif %}</strong>
-          <span>{{ settings_obj.autumn_project }}{% if settings_obj.autumn_subprojects %} · {{ settings_obj.autumn_subprojects|join:", " }}{% endif %}</span>
-        </div>
-        <form method="post">
-          {% csrf_token %}
-          <p>
-            <label for="autumn-note">Session note</label>
-            <textarea id="autumn-note" name="autumn_note" rows="4">{{ autumn_note }}</textarea>
-          </p>
-          {% if autumn_active %}
-            <button type="submit" name="stop_autumn_timer">Stop Autumn</button>
-          {% else %}
-            <button type="submit" name="start_autumn_timer">Start Autumn</button>
-          {% endif %}
-        </form>
-      {% else %}
-        <p class="empty">Store an Autumn token and project to enable timer controls.</p>
-      {% endif %}
     </div>
 
     <div class="job-mini-list" style="margin-top: 16px;">
@@ -211,5 +142,4 @@
     </div>
   </aside>
 </section>
-<script src="{% static 'practice/account.js' %}?v={{ static_version.account_js }}"></script>
 {% endblock %}

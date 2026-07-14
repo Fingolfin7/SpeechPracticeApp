@@ -32,8 +32,6 @@
   const scoreButton = form.querySelector("[data-score-button]");
   const scoreReason = form.querySelector("[data-score-reason]");
   const copyScoreButton = form.querySelector("[data-copy-practice-score]");
-  const autumnButton = form.querySelector("[data-autumn-toggle]");
-  const autumnForm = document.querySelector("#autumn-timer-form");
   const transcriptState = form.querySelector("[data-transcript-state]");
   const liveTranscript = form.querySelector("[data-live-transcript]");
   const practiceMetrics = form.querySelector("[data-practice-metrics]");
@@ -380,32 +378,6 @@
         ? "Ready to score this take."
         : "Record or upload a take before scoring.";
     }
-  }
-
-  function setAutumnButtonBusy(busy) {
-    if (!autumnButton) {
-      return;
-    }
-    autumnButton.disabled = busy;
-    if (busy) {
-      autumnButton.dataset.previousText = autumnButton.textContent.trim();
-      autumnButton.textContent = "Updating...";
-    } else if (autumnButton.dataset.previousText) {
-      autumnButton.textContent = autumnButton.dataset.previousText;
-      delete autumnButton.dataset.previousText;
-    }
-  }
-
-  function updateAutumnButton(payload) {
-    if (!autumnButton || !payload) {
-      return;
-    }
-    const active = Boolean(payload.active);
-    autumnButton.disabled = false;
-    autumnButton.classList.toggle("is-active", active);
-    autumnButton.name = payload.button_name || (active ? "stop_autumn_timer" : "start_autumn_timer");
-    autumnButton.textContent = payload.button_label || (active ? "Stop Autumn" : "Start Autumn");
-    delete autumnButton.dataset.previousText;
   }
 
   function timedTranscriptSegments() {
@@ -913,39 +885,6 @@
   }
 
   form.addEventListener("submit", submitPracticeForScoring);
-
-  if (autumnButton && autumnForm) {
-    autumnButton.addEventListener("click", async function (event) {
-      event.preventDefault();
-      const payload = new FormData(autumnForm);
-      payload.set(autumnButton.name, autumnButton.value || "1");
-      setAutumnButtonBusy(true);
-      try {
-        const response = await fetch(autumnForm.action, {
-          method: "POST",
-          body: payload,
-          headers: {
-            Accept: "application/json",
-            "X-Requested-With": "XMLHttpRequest",
-          },
-          credentials: "same-origin",
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data.ok) {
-          throw new Error(data.message || "Autumn timer update failed.");
-        }
-        updateAutumnButton(data);
-        if (status && data.message) {
-          status.textContent = data.message;
-        }
-      } catch (error) {
-        if (status) {
-          status.textContent = error.message || "Autumn timer update failed.";
-        }
-        setAutumnButtonBusy(false);
-      }
-    });
-  }
 
   if (copyScoreButton) {
     copyScoreButton.addEventListener("click", async function () {

@@ -20,14 +20,12 @@ from practice.models import PracticeSettings, _fernet
 DEV_SECRET_KEY = "dev-only-speechpractice-secret-key-change-before-deploy"
 
 SECRET_FIELDS = (
-    "autumn_token",
     "openai_api_key",
     "anthropic_api_key",
     "codex_token_bundle",
 )
 
 _ENC_ATTR = {
-    "autumn_token": "autumn_token_enc",
     "openai_api_key": "openai_api_key_enc",
     "anthropic_api_key": "anthropic_api_key_enc",
     "codex_token_bundle": "codex_token_bundle_enc",

@@ -212,22 +212,22 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = os.getenv("DJANGO_SECURE_HSTS_PRELOAD", "0") == "1"
 
 SCRIPT_GENERATION_PROVIDER = os.getenv("SCRIPT_GENERATION_PROVIDER", "local_template")
-OPENAI_SCRIPT_MODEL = os.getenv("OPENAI_SCRIPT_MODEL", "gpt-5.5")
+OPENAI_SCRIPT_MODEL = os.getenv("OPENAI_SCRIPT_MODEL", "gpt-5.6-luna")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_SCRIPT_MODEL = os.getenv("ANTHROPIC_SCRIPT_MODEL", "claude-sonnet-4-6")
+ANTHROPIC_SCRIPT_MODEL = os.getenv("ANTHROPIC_SCRIPT_MODEL", "claude-sonnet-5")
 
 OPENAI_SCRIPT_MODEL_CHOICES = [
+    ("gpt-5.6-sol", "GPT-5.6 Sol"),
+    ("gpt-5.6-terra", "GPT-5.6 Terra"),
+    ("gpt-5.6-luna", "GPT-5.6 Luna"),
     ("gpt-5.5", "GPT-5.5"),
-    ("gpt-5.4", "GPT-5.4"),
-    ("gpt-5.4-mini", "GPT-5.4 mini"),
-    ("gpt-5.4-nano", "GPT-5.4 nano"),
 ]
 ANTHROPIC_SCRIPT_MODEL_CHOICES = [
-    ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+    ("claude-sonnet-5", "Claude Sonnet 5"),
     ("claude-opus-4-8", "Claude Opus 4.8"),
+    ("claude-fable-5", "Claude Fable 5"),
     ("claude-haiku-4-5", "Claude Haiku 4.5"),
 ]
-DEFAULT_AUTUMN_BASE_URL = os.getenv("AUTUMN_BASE_URL", "http://127.0.0.1:8000")
 CODEX_CLIENT_ID = os.getenv("CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 CODEX_AUTH_ISSUER = os.getenv("CODEX_AUTH_ISSUER", "https://auth.openai.com")
 CODEX_CHATGPT_BASE_URL = os.getenv(

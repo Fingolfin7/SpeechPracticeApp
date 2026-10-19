@@ -784,6 +784,52 @@ small {
   gap: 6px;
 }
 
+.card-meta-line span.is-due {
+  background: var(--clay-tint);
+  border-color: transparent;
+  color: var(--clay-dark);
+}
+
+.retired-cards {
+  --type-accent: var(--locked);
+  box-shadow: none;
+  background: transparent;
+}
+
+.retired-cards summary {
+  display: grid;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.retired-cards summary small {
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 80ch;
+}
+
+.retired-card-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px 18px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.retired-card-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.retired-card-list li small {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-num);
+}
+
 .card-row-actions {
   display: flex;
   align-items: center;
@@ -2688,15 +2734,54 @@ select {
 }
 
 .progress-filters {
-  position: sticky;
-  top: 79px;
-  z-index: 5;
   padding: 10px;
   border: 1px solid rgba(36, 31, 26, 0.12);
   border-radius: var(--r-sm);
   background: var(--panel);
   backdrop-filter: blur(10px);
   box-shadow: 0 12px 34px rgba(55, 42, 24, 0.08);
+}
+
+.range-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.range-chip {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.range-chip:hover {
+  border-color: var(--grove);
+}
+
+.range-chip.is-active {
+  background: var(--grove);
+  border-color: var(--grove);
+  color: #fff;
+}
+
+.range-notice {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.progress-stat-strip strong em {
+  font-style: normal;
+  font-size: 0.4em;
+  margin-left: 4px;
+  color: var(--muted);
 }
 
 .progress-filters form {
@@ -3563,13 +3648,15 @@ button.btn-hero {
   font-weight: 600;
 }
 
-.qc-mastery {
+.qc-mastery,
+.card-mastery {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.qc-mastery .bar {
+.qc-mastery .bar,
+.card-mastery .bar {
   flex: 1;
   height: 6px;
   border-radius: 999px;
@@ -3577,14 +3664,16 @@ button.btn-hero {
   overflow: hidden;
 }
 
-.qc-mastery .bar span {
+.qc-mastery .bar span,
+.card-mastery .bar span {
   display: block;
   height: 100%;
   border-radius: 999px;
   background: var(--grove);
 }
 
-.qc-mastery small {
+.qc-mastery small,
+.card-mastery small {
   font-family: var(--font-num);
   font-size: 12px;
   color: var(--muted);
@@ -3695,6 +3784,33 @@ button.qc-btn {
 .trail-step .step-text span {
   font-size: 13px;
   color: var(--muted);
+}
+
+.trail-step.is-passed .step-node {
+  background: var(--gold);
+  color: var(--ink);
+  box-shadow: 0 4px 0 #c99532;
+}
+
+.trail-step.is-locked .step-node {
+  background: var(--locked);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.trail-step.is-locked .step-body {
+  background: transparent;
+  border-style: dashed;
+}
+
+.trail-step.is-locked .step-text strong {
+  color: var(--muted);
+}
+
+.trail-step .step-lock {
+  font-size: 18px;
+  opacity: 0.55;
+  padding: 0 10px;
 }
 
 .metrics-strip {
@@ -4375,4 +4491,50 @@ a.story-event-title:hover {
   .story-facts strong { font-size: 20px; }
   .curve-frame { padding: 12px; }
   .story-event { padding-left: 30px; }
+}
+
+/* History table */
+td.nowrap {
+  white-space: nowrap;
+}
+
+td.nowrap small {
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+.clarity-chip {
+  display: inline-block;
+  min-width: 46px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-family: var(--font-num);
+  font-weight: 700;
+  font-size: 13px;
+  text-align: center;
+}
+
+.clarity-chip.is-good {
+  background: var(--grove-tint);
+  color: var(--grove-dark);
+}
+
+.clarity-chip.is-ok {
+  background: var(--gold-tint);
+  color: var(--gold-ink);
+}
+
+.clarity-chip.is-watch {
+  background: var(--clay-tint);
+  color: var(--clay-dark);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 14px;
 }

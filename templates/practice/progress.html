@@ -7,6 +7,11 @@
 </section>
 
 <section class="progress-filters">
+  <nav class="range-chips" aria-label="Date range">
+    {% for key, label in range_options %}
+      <a class="range-chip{% if key == range_key %} is-active{% endif %}" href="?range={{ key }}{% if selected_script %}&amp;script={{ selected_script|urlencode }}{% endif %}">{{ label }}</a>
+    {% endfor %}
+  </nav>
   <form method="get">
     <p>
       <label for="start">From</label>
@@ -25,49 +30,49 @@
         {% endfor %}
       </select>
     </p>
-    <button type="submit">Refresh</button>
+    <button type="submit">Apply</button>
   </form>
+  {% if range_notice %}<p class="range-notice">{{ range_notice }}</p>{% endif %}
 </section>
 
 <section class="progress-stat-strip" aria-label="Progress metric summaries">
-  <article data-progress-stat="score">
-    <span>Score</span>
-    <strong>-</strong>
-    <small>latest take</small>
+  <article>
+    <span>Average clarity</span>
+    <strong>{% if stats.clarity_avg is not None %}{{ stats.clarity_avg }}%{% else %}-{% endif %}</strong>
+    <small>
+      {% if stats.clarity_change is not None %}
+        {% if stats.clarity_change > 0 %}&#9650; up{% elif stats.clarity_change < 0 %}&#9660; down{% else %}flat,{% endif %}
+        {% if stats.clarity_change %}{{ stats.clarity_change_abs }} pts{% endif %}
+        (first vs last {{ stats.clarity_change_window }} takes)
+      {% elif stats.scored_takes %}Too few takes to show a trend{% else %}No scored takes{% endif %}
+    </small>
   </article>
-  <article data-progress-stat="wer">
-    <span>WER</span>
-    <strong>-</strong>
-    <small>latest take</small>
+  <article>
+    <span>Best clarity</span>
+    <strong>{% if stats.clarity_best is not None %}{{ stats.clarity_best }}%{% else %}-{% endif %}</strong>
+    <small>across {{ stats.scored_takes }} scored take{{ stats.scored_takes|pluralize }}</small>
   </article>
-  <article data-progress-stat="clarity">
-    <span>Clarity</span>
-    <strong>-</strong>
-    <small>latest take</small>
+  <article>
+    <span>Speaking rate</span>
+    <strong>{% if stats.rate_avg %}{{ stats.rate_avg }}<em>wpm</em>{% else %}-{% endif %}</strong>
+    <small>clear reading is 120-160 wpm</small>
   </article>
 </section>
 
 <section class="progress-grid">
   <article class="panel chart-panel">
     <div class="panel-heading">
-      <p class="eyebrow">Score</p>
-      <span>0 to 5</span>
-    </div>
-    <canvas data-progress-chart="score" height="260"></canvas>
-  </article>
-  <article class="panel chart-panel">
-    <div class="panel-heading">
-      <p class="eyebrow">WER</p>
-      <span>lower is better</span>
-    </div>
-    <canvas data-progress-chart="wer" height="260"></canvas>
-  </article>
-  <article class="panel chart-panel">
-    <div class="panel-heading">
       <p class="eyebrow">Clarity</p>
-      <span>0 to 1</span>
+      <span>dots are takes, the line is a 5-take average</span>
     </div>
-    <canvas data-progress-chart="clarity" height="260"></canvas>
+    <canvas data-progress-chart="clarity" height="280"></canvas>
+  </article>
+  <article class="panel chart-panel">
+    <div class="panel-heading">
+      <p class="eyebrow">Speaking rate</p>
+      <span>shaded band is the 120-160 wpm target</span>
+    </div>
+    <canvas data-progress-chart="artic_rate" height="220"></canvas>
   </article>
 </section>
 
@@ -95,39 +100,6 @@
 </section>
 
 <section class="dashboard-grid">
-  <article class="panel">
-    <p class="eyebrow">Character patterns</p>
-    <div class="rank-list">
-      {% for row in summary.characters.top_character_kinds %}
-        <div><strong>{{ row.kind }}</strong><span>{{ row.error_rate|floatformat:2 }} error rate</span></div>
-      {% empty %}
-        <p class="empty">No character trend data.</p>
-      {% endfor %}
-    </div>
-  </article>
-  <article class="panel">
-    <p class="eyebrow">Position patterns</p>
-    <div class="rank-list">
-      {% for row in summary.positions.top_position_buckets %}
-        <div><strong>{{ row.bucket }}</strong><span>{{ row.errors|floatformat:0 }}/{{ row.attempts|floatformat:0 }} errors</span></div>
-      {% empty %}
-        <p class="empty">No position trend data.</p>
-      {% endfor %}
-    </div>
-  </article>
-</section>
-
-<section class="dashboard-grid">
-  <article class="panel">
-    <p class="eyebrow">Sound patterns</p>
-    <div class="rank-list">
-      {% for row in summary.sounds.top_trouble_symbols %}
-        <div><strong>{{ row.symbol }}</strong><span>{{ row.error_rate|floatformat:2 }} error rate</span></div>
-      {% empty %}
-        <p class="empty">No sound trend data.</p>
-      {% endfor %}
-    </div>
-  </article>
   <article class="panel">
     <p class="eyebrow">Coaching focus</p>
     <ul class="plain-list">

@@ -261,6 +261,8 @@ class AccountSettingsForm(forms.ModelForm):
         self.fields["openai_transcription_model"].widget = forms.Select(
             choices=settings.OPENAI_TRANSCRIPTION_MODEL_CHOICES
         )
+        self.fields["openai_script_model"].label = "OpenAI script model"
+        self.fields["openai_transcription_model"].label = "OpenAI transcription model"
         self.fields["whisper_model_name"].widget = forms.Select(
             choices=[
                 ("tiny.en", "tiny.en - fastest English"),

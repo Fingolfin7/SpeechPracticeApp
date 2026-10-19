@@ -30,7 +30,7 @@
   {% endif %}
   <div class="table-wrap">
     <table>
-      <thead><tr>{% if sessions %}<th class="bulk-cell"><span class="sr-only">Select</span></th>{% endif %}<th>Date</th><th>Script</th><th>Score</th><th>WER</th><th>CER</th><th>Rate</th></tr></thead>
+      <thead><tr>{% if sessions %}<th class="bulk-cell"><span class="sr-only">Select</span></th>{% endif %}<th>Date</th><th>Script</th><th>Clarity</th><th>CER</th><th>Rate</th></tr></thead>
       <tbody>
         {% for session in sessions %}
           <tr data-bulk-row>
@@ -43,11 +43,14 @@
                 aria-label="Select recording of {{ session.script_name }} from {{ session.timestamp }}"
               >
             </td>
-            <td>{{ session.timestamp }}</td>
+            <td class="nowrap">{% if session.when %}{{ session.when|date:"M j, Y" }} <small>{{ session.when|date:"H:i" }}</small>{% else %}{{ session.timestamp }}{% endif %}</td>
             <td><a href="{% url 'practice:session_detail' session.pk %}">{{ session.script_name }}</a></td>
-            <td>{% if session.score %}{{ session.score|floatformat:2 }}{% else %}-{% endif %}</td>
-            <td>{% if session.wer %}{{ session.wer|floatformat:2 }}{% else %}-{% endif %}</td>
-            <td>{% if session.cer %}{{ session.cer|floatformat:2 }}{% else %}-{% endif %}</td>
+            <td>
+              {% if session.clarity is not None %}
+                <span class="clarity-chip {% if session.clarity >= 0.95 %}is-good{% elif session.clarity >= 0.9 %}is-ok{% else %}is-watch{% endif %}">{% widthratio session.clarity 1 100 %}%</span>
+              {% elif not session.script_text %}<small>free speak</small>{% else %}-{% endif %}
+            </td>
+            <td>{% if session.cer is not None %}{% widthratio session.cer 1 100 %}%{% else %}-{% endif %}</td>
             <td>{% if session.artic_rate %}{{ session.artic_rate|floatformat:0 }} wpm{% else %}-{% endif %}</td>
           </tr>
         {% empty %}
@@ -56,6 +59,13 @@
       </tbody>
     </table>
   </div>
+  {% if page.has_other_pages %}
+    <nav class="pager" aria-label="History pages">
+      {% if page.has_previous %}<a class="range-chip" href="?page={{ page.previous_page_number }}">&larr; Newer</a>{% endif %}
+      <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+      {% if page.has_next %}<a class="range-chip" href="?page={{ page.next_page_number }}">Older &rarr;</a>{% endif %}
+    </nav>
+  {% endif %}
 </section>
 <script src="{% static 'practice/bulk_select.js' %}?v={{ static_version.bulk_select_js }}"></script>
 {% endblock %}

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from django.contrib import messages
 from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_not_required
+from django.core.paginator import Paginator
 from django.conf import settings as django_settings
 from django.db import IntegrityError, connection, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -50,6 +51,7 @@ from .models import (
 from .services.analytics import (
     active_scoring_jobs,
     home_snapshot,
+    parse_session_timestamp,
     refresh_improvement_cards,
     progress_series,
     script_name_options,
@@ -153,30 +155,57 @@ def dashboard(request):
     now = datetime.now()
     ladders = _practice_ladders(request.user)
     own_ladders = [ladder for ladder in ladders if ladder.user_id == request.user.pk]
+    home_ladders = (own_ladders or ladders)[:1]
+    for ladder in home_ladders:
+        ladder.home_steps = _annotate_gate_states(request.user, _ladder_steps(ladder))
+        ladder.passed_count = sum(1 for step in ladder.home_steps if step.gate_state == "passed")
     context = {
         "summary": summary,
         "today_queue": queue,
         "active_jobs": active_jobs,
         "home": home_snapshot(request.user, queue),
         "today_label": f"{now:%A}, {now:%B} {now.day}",
-        "home_ladders": (own_ladders or ladders)[:1],
+        "home_ladders": home_ladders,
     }
     return render(request, "practice/dashboard.html", context)
 
 
+PROGRESS_RANGES = [("30", "30 days", 30), ("90", "90 days", 90), ("365", "1 year", 365), ("all", "All time", None)]
+
+
 def progress(request):
-    end_dt = _parse_date_param(request.GET.get("end"), datetime.now())
-    start_dt = _parse_date_param(request.GET.get("start"), end_dt - timedelta(days=30))
+    now = datetime.now()
+    script_name = (request.GET.get("script") or "").strip() or None
+    range_key = request.GET.get("range") or ""
+    explicit_dates = bool(request.GET.get("start") or request.GET.get("end"))
+    range_notice = ""
+    if range_key and not explicit_dates:
+        days = next((days for key, _label, days in PROGRESS_RANGES if key == range_key), 30)
+        end_dt = now
+        start_dt = datetime(2000, 1, 1) if days is None else now - timedelta(days=days)
+    else:
+        end_dt = _parse_date_param(request.GET.get("end"), now)
+        start_dt = _parse_date_param(request.GET.get("start"), end_dt - timedelta(days=30))
+        if not explicit_dates:
+            range_key = "30"
     if end_dt < start_dt:
         start_dt, end_dt = end_dt, start_dt
     end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-    script_name = (request.GET.get("script") or "").strip() or None
     points = progress_series(
         user=request.user,
         start_dt=start_dt,
         end_dt=end_dt,
         script_name=script_name,
     )
+    if not points and not range_key == "all" and not explicit_dates:
+        # An empty default window is a dead end; show everything instead.
+        start_dt = datetime(2000, 1, 1)
+        points = progress_series(user=request.user, start_dt=start_dt, end_dt=end_dt, script_name=script_name)
+        if points:
+            range_notice = "No takes in that window, so this shows all time."
+            range_key = "all"
+    if range_key == "all" and points:
+        start_dt = datetime.fromisoformat(points[0]["date"]).replace(hour=0, minute=0, second=0)
     summary = trend_summary_for_range(
         user=request.user,
         start_dt=start_dt,
@@ -191,11 +220,36 @@ def progress(request):
             "end_date": end_dt.date().isoformat(),
             "selected_script": script_name or "",
             "script_options": script_name_options(request.user),
+            "range_options": [(key, label) for key, label, _days in PROGRESS_RANGES],
+            "range_key": "" if explicit_dates else range_key,
+            "range_notice": range_notice,
             "points": points,
             "points_json": json.dumps(points),
+            "stats": _progress_stats(points),
             "summary": summary,
         },
     )
+
+
+def _progress_stats(points: list[dict]) -> dict:
+    clarity = [float(p["clarity"]) for p in points if p.get("clarity") is not None]
+    rates = [float(p["artic_rate"]) for p in points if p.get("artic_rate")]
+    stats = {"takes": len(points), "scored_takes": len(clarity)}
+    if clarity:
+        stats["clarity_avg"] = round(sum(clarity) / len(clarity) * 100)
+        stats["clarity_best"] = round(max(clarity) * 100)
+    if len(clarity) >= 6:
+        # Single takes are noisy: compare the average of the first and last
+        # few takes in the range rather than the first and last take.
+        size = min(5, len(clarity) // 2)
+        first = sum(clarity[:size]) / size
+        last = sum(clarity[-size:]) / size
+        stats["clarity_change"] = round((last - first) * 100, 1)
+        stats["clarity_change_abs"] = abs(stats["clarity_change"])
+        stats["clarity_change_window"] = size
+    if rates:
+        stats["rate_avg"] = round(sum(rates) / len(rates))
+    return stats
 
 
 def practice_run(request):
@@ -442,8 +496,10 @@ def practice_run(request):
 
 
 def session_list(request):
-    sessions = PracticeSession.objects.filter(user=request.user)[:80]
-    return render(request, "practice/session_list.html", {"sessions": sessions})
+    page = Paginator(PracticeSession.objects.filter(user=request.user), 50).get_page(request.GET.get("page"))
+    for session in page:
+        session.when = parse_session_timestamp(session.timestamp)
+    return render(request, "practice/session_list.html", {"sessions": page, "page": page})
 
 
 def session_detail(request, pk: int):
@@ -499,7 +555,11 @@ def session_detail(request, pk: int):
                         f"Created or updated {len(created_cards)} focus cards from your self-review notes.",
                     )
                     return redirect("practice:cards")
-                messages.error(request, "Add a few specific self-review notes before creating cards.")
+                messages.error(
+                    request,
+                    "No word cards came out of these notes. Cards track specific words, so name the "
+                    "words you stumbled on. Pacing and articulation habits can't be measured reliably yet.",
+                )
                 return redirect("practice:session_detail", pk=session.pk)
         else:
             review_form = SelfReviewNotesForm(instance=session)
@@ -1040,9 +1100,16 @@ def card_list(request):
         )
         return redirect("practice:cards")
     cards = list(ImprovementCard.objects.filter(user=request.user))
+    now = timezone.now()
+    for card in cards:
+        card.is_due = card.due_at <= now
+    active_cards = [card for card in cards if card.status != ImprovementCard.STATUS_PAUSED]
+    # Due cards first, then the shakiest ones.
+    active_cards.sort(key=lambda card: (not card.is_due, card.mastery, card.due_at))
+    retired_cards = [card for card in cards if card.status == ImprovementCard.STATUS_PAUSED]
     grouped_cards = []
     for kind, label in ImprovementCard.KIND_CHOICES:
-        group_cards = [card for card in cards if card.kind == kind]
+        group_cards = [card for card in active_cards if card.kind == kind]
         if not group_cards:
             continue
         grouped_cards.append(
@@ -1051,7 +1118,7 @@ def card_list(request):
                 "label": label,
                 "cards": group_cards,
                 "count": len(group_cards),
-                "due_count": sum(1 for card in group_cards if card.due_at <= timezone.now()),
+                "due_count": sum(1 for card in group_cards if card.is_due),
             }
         )
     today = timezone.localdate()
@@ -1061,7 +1128,8 @@ def card_list(request):
         {
             "cards": cards,
             "grouped_cards": grouped_cards,
-            "total_count": len(cards),
+            "retired_cards": retired_cards,
+            "total_count": len(active_cards),
             "refresh_default_start": today - timedelta(days=30),
             "refresh_default_end": today,
         },

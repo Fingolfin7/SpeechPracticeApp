@@ -19,7 +19,6 @@
   <article class="panel">
     <div class="panel-heading">
       <p class="eyebrow">Speech engine</p>
-      <span>Sectioned settings</span>
     </div>
 
     <div class="connection-strip" aria-label="Connection status summary">
@@ -72,7 +71,7 @@
             <span>{% if have_keys.openai %}Stored{% else %}Not stored{% endif %}</span>
           </div>
           {{ form.openai_api_key }}
-          <label>{{ form.clear_openai_api_key }} Clear key</label>
+          <label class="check-row">{{ form.clear_openai_api_key }} Clear stored key</label>
         </div>
         <div class="api-key-item">
           <div class="api-key-header">
@@ -80,7 +79,7 @@
             <span>{% if have_keys.anthropic %}Stored{% else %}Not stored{% endif %}</span>
           </div>
           {{ form.anthropic_api_key }}
-          <label>{{ form.clear_anthropic_api_key }} Clear key</label>
+          <label class="check-row">{{ form.clear_anthropic_api_key }} Clear stored key</label>
         </div>
       </div>
       </fieldset>

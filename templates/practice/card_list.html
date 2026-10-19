@@ -22,7 +22,7 @@
   </div>
 </section>
 
-{% if grouped_cards %}
+{% if grouped_cards or retired_cards %}
   <form
     id="card-bulk-form"
     class="bulk-actions"
@@ -94,16 +94,23 @@
                 </form>
               </div>
               <a class="managed-card-title" href="{% url 'practice:card_detail' card.pk %}">{{ card.display_title }}</a>
-              <p>{{ card.prompt }}</p>
+              {% if card.stats.source == "self_review" %}<p>{{ card.prompt }}</p>{% endif %}
+              <div class="card-mastery">
+                <div class="bar"><span style="width: {% widthratio card.mastery 1 100 %}%"></span></div>
+                <small>{% widthratio card.mastery 1 100 %}% mastery</small>
+              </div>
               <div class="card-meta-line">
                 <span>{{ card.get_status_display }}</span>
-                <span>Mastery {{ card.mastery|floatformat:2 }}</span>
-                <span>Due {{ card.due_at|date:"M j, H:i" }}</span>
+                {% if card.is_due %}
+                  <span class="is-due">Due now</span>
+                {% else %}
+                  <span>Due {{ card.due_at|date:"M j" }}</span>
+                {% endif %}
+                {% if card.stats.errors is not None and card.stats.attempts and card.stats.errors <= card.stats.attempts %}
+                  <span>Missed {{ card.stats.errors|floatformat:0 }} of {{ card.stats.attempts|floatformat:0 }}</span>
+                {% endif %}
                 {% if card.stats.source_window_label %}
                   <span>From {{ card.stats.source_window_label }}</span>
-                {% endif %}
-                {% if card.stats.errors is not None and card.stats.attempts is not None %}
-                  <span>{{ card.stats.errors|floatformat:0 }}/{{ card.stats.attempts|floatformat:0 }} misses</span>
                 {% endif %}
               </div>
             </article>
@@ -111,6 +118,27 @@
         </div>
       </article>
     {% endfor %}
+    {% if not grouped_cards %}
+      <p class="empty">No active cards. Refresh from your scored sessions to propose new word cards.</p>
+    {% endif %}
+    {% if retired_cards %}
+      <details class="retired-cards card-type-section" data-bulk-section="card-bulk-form">
+        <summary>
+          <span><strong>Retired cards</strong> &middot; {{ retired_cards|length }}</span>
+          <small>Sound, letter, position, fluency, and phrase cards were built from spelling rather than audio, so they can't be graded honestly. They're kept here with their history.</small>
+        </summary>
+        <ul class="retired-card-list">
+          {% for card in retired_cards %}
+            <li data-bulk-row>
+              <input class="bulk-check" type="checkbox" name="selected" value="{{ card.pk }}" form="card-bulk-form" aria-label="Select {{ card.display_title }}">
+              <span class="pill">{{ card.get_kind_display }}</span>
+              <a href="{% url 'practice:card_detail' card.pk %}">{{ card.display_title }}</a>
+              <small>{% widthratio card.mastery 1 100 %}% mastery</small>
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
+    {% endif %}
   </section>
 {% else %}
   <section class="empty-card-state">

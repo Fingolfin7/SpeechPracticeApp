@@ -5,185 +5,151 @@
   }
 
   const points = JSON.parse(dataElement.textContent || "[]");
+  // Colors mirror the app.css tokens (grove, clay, gold).
   const metricConfig = {
-    score: { max: 5, decimals: 2, suffix: "", goodDirection: 1, color: "#3e7a5c" },
-    wer: { max: 1, decimals: 2, suffix: "", goodDirection: -1, color: "#e8703a" },
-    clarity: { max: 1, decimals: 2, suffix: "", goodDirection: 1, color: "#4c3e9e" },
+    clarity: {
+      color: "#3e7a5c",
+      format: (value) => `${Math.round(value * 100)}%`,
+      // Clarity lives in a narrow band near the top, so zoom the axis to it.
+      range: (values) => [Math.min(0.8, Math.floor(Math.min(...values) * 20) / 20), 1],
+      lines: [
+        { at: 0.95, label: "95% excellent" },
+        { at: 0.9, label: "90% good" },
+      ],
+    },
+    artic_rate: {
+      color: "#e8703a",
+      format: (value) => `${Math.round(value)}`,
+      range: (values) => [
+        Math.max(0, Math.floor(Math.min(80, ...values) / 20) * 20),
+        Math.ceil(Math.max(200, ...values) / 20) * 20,
+      ],
+      band: [120, 160],
+    },
   };
 
-  function metricValue(point, metric) {
-    const value = Number(point && point[metric]);
-    return Number.isFinite(value) ? value : null;
-  }
-
-  function formatValue(value, metric) {
-    if (!Number.isFinite(value)) {
-      return "-";
-    }
-    const config = metricConfig[metric] || metricConfig.score;
-    return value.toFixed(config.decimals) + config.suffix;
-  }
-
-  function updateStatCards() {
-    Object.keys(metricConfig).forEach((metric) => {
-      const card = document.querySelector(`[data-progress-stat="${metric}"]`);
-      if (!card) {
-        return;
-      }
-      const values = points.map((point) => metricValue(point, metric)).filter((value) => value !== null);
-      const strong = card.querySelector("strong");
-      const small = card.querySelector("small");
-      if (!values.length) {
-        strong.textContent = "-";
-        small.textContent = "No data";
-        return;
-      }
-      const latest = values[values.length - 1];
-      const first = values[0];
-      const delta = latest - first;
-      const improved = delta * metricConfig[metric].goodDirection >= 0;
-      strong.textContent = formatValue(latest, metric);
-      small.textContent = `${improved ? "improved" : "shifted"} ${Math.abs(delta).toFixed(2)} across range`;
-      card.classList.toggle("is-improved", improved);
-      card.classList.toggle("is-regressed", !improved);
+  function rollingAverage(values, size) {
+    return values.map((_value, index) => {
+      const window = values.slice(Math.max(0, index - size + 1), index + 1);
+      return window.reduce((sum, value) => sum + value, 0) / window.length;
     });
   }
 
-  function drawChart(canvas, metric, maxValue) {
+  function drawChart(canvas, metric) {
+    const config = metricConfig[metric];
+    if (!config) {
+      return;
+    }
     const ctx = canvas.getContext("2d");
     const ratio = window.devicePixelRatio || 1;
     const cssWidth = Math.max(320, Math.floor(canvas.clientWidth || canvas.getBoundingClientRect().width || 320));
-    const cssHeight = Math.max(220, Math.floor(canvas.clientHeight || Number(canvas.getAttribute("height")) || 260));
-    const width = Math.floor(cssWidth * ratio);
-    const height = Math.floor(cssHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
+    const cssHeight = Math.max(200, Math.floor(Number(canvas.getAttribute("height")) || 260));
+    canvas.width = Math.floor(cssWidth * ratio);
+    canvas.height = Math.floor(cssHeight * ratio);
+    canvas.style.height = `${cssHeight}px`;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-
     ctx.clearRect(0, 0, cssWidth, cssHeight);
-    const gradient = ctx.createLinearGradient(0, 0, cssWidth, cssHeight);
-    gradient.addColorStop(0, "#fffdf9");
-    gradient.addColorStop(1, "#f5e9d9");
-    ctx.fillStyle = gradient;
+    ctx.fillStyle = "#fffdf9";
     ctx.fillRect(0, 0, cssWidth, cssHeight);
 
-    const values = points
-      .map((point) => Number(point[metric]))
-      .filter((value) => Number.isFinite(value));
-
-    if (!values.length) {
+    const usable = points.filter((point) => Number.isFinite(Number(point[metric])) && Number(point[metric]) > 0);
+    if (!usable.length) {
       ctx.fillStyle = "#6b5e52";
       ctx.font = "15px Inter, Segoe UI, sans-serif";
-      ctx.fillText("No data for this filter", 18, cssHeight / 2);
+      ctx.fillText("No takes in this range", 18, cssHeight / 2);
       return;
     }
+    const values = usable.map((point) => Number(point[metric]));
+    const [low, high] = config.range(values);
 
-    const margin = { top: 22, right: 24, bottom: 38, left: 54 };
+    const margin = { top: 18, right: 20, bottom: 34, left: 48 };
     const plotWidth = cssWidth - margin.left - margin.right;
     const plotHeight = cssHeight - margin.top - margin.bottom;
-    const usablePoints = points.filter((point) => Number.isFinite(Number(point[metric])));
-    const localMax = maxValue || Math.max(...values, 1);
-    const localMin = 0;
+    const xFor = (index) =>
+      usable.length === 1 ? margin.left + plotWidth / 2 : margin.left + (plotWidth * index) / (usable.length - 1);
+    const yFor = (value) => {
+      const clamped = Math.max(low, Math.min(high, value));
+      return margin.top + plotHeight - ((clamped - low) / (high - low || 1)) * plotHeight;
+    };
 
-    ctx.strokeStyle = "rgba(112, 93, 71, 0.18)";
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 4; i += 1) {
-      const y = margin.top + (plotHeight * i) / 4;
+    ctx.font = "12px Inter, Segoe UI, sans-serif";
+    if (config.band) {
+      const top = yFor(config.band[1]);
+      ctx.fillStyle = "rgba(62, 122, 92, 0.1)";
+      ctx.fillRect(margin.left, top, plotWidth, yFor(config.band[0]) - top);
+    }
+
+    // Axis labels at the bottom and top of the zoomed range.
+    ctx.fillStyle = "#6b5e52";
+    ctx.fillText(config.format(high), 8, margin.top + 4);
+    ctx.fillText(config.format(low), 8, margin.top + plotHeight + 4);
+
+    (config.lines || []).forEach((line) => {
+      if (line.at <= low || line.at >= high) {
+        return;
+      }
+      const y = yFor(line.at);
+      ctx.strokeStyle = "rgba(112, 93, 71, 0.35)";
+      ctx.setLineDash([4, 5]);
+      ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(margin.left, y);
       ctx.lineTo(margin.left + plotWidth, y);
       ctx.stroke();
-    }
-    ctx.strokeStyle = "rgba(36, 31, 26, 0.32)";
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#6b5e52";
+      ctx.fillText(line.label, margin.left + 6, y - 5);
+    });
+
+    ctx.strokeStyle = "rgba(36, 31, 26, 0.25)";
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(margin.left, margin.top);
-    ctx.lineTo(margin.left, margin.top + plotHeight);
+    ctx.moveTo(margin.left, margin.top + plotHeight);
     ctx.lineTo(margin.left + plotWidth, margin.top + plotHeight);
     ctx.stroke();
 
-    function xFor(index) {
-      if (usablePoints.length === 1) {
-        return margin.left + plotWidth / 2;
-      }
-      return margin.left + (plotWidth * index) / (usablePoints.length - 1);
-    }
-
-    function yFor(value) {
-      const normalized = (value - localMin) / (localMax - localMin || 1);
-      return margin.top + plotHeight - normalized * plotHeight;
-    }
-
-    const color = (metricConfig[metric] || metricConfig.score).color;
-    const areaGradient = ctx.createLinearGradient(0, margin.top, 0, margin.top + plotHeight);
-    areaGradient.addColorStop(0, color + "44");
-    areaGradient.addColorStop(1, color + "00");
-    ctx.beginPath();
-    usablePoints.forEach((point, index) => {
-      const x = xFor(index);
-      const y = yFor(Number(point[metric]));
-      if (index === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
-    });
-    ctx.lineTo(xFor(usablePoints.length - 1), margin.top + plotHeight);
-    ctx.lineTo(xFor(0), margin.top + plotHeight);
-    ctx.closePath();
-    ctx.fillStyle = areaGradient;
-    ctx.fill();
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    usablePoints.forEach((point, index) => {
-      const x = xFor(index);
-      const y = yFor(Number(point[metric]));
-      if (index === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
-    });
-    ctx.stroke();
-
-    usablePoints.forEach((point, index) => {
-      const x = xFor(index);
-      const y = yFor(Number(point[metric]));
-      ctx.fillStyle = "#fffdf9";
+    // Individual takes: small, quiet dots.
+    usable.forEach((point, index) => {
+      ctx.fillStyle = `${config.color}66`;
       ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.arc(xFor(index), yFor(values[index]), 3.5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
-      ctx.stroke();
     });
+
+    // Rolling average: the line to read for the trend.
+    if (usable.length >= 2) {
+      const smooth = rollingAverage(values, 5);
+      ctx.strokeStyle = config.color;
+      ctx.lineWidth = 3;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      smooth.forEach((value, index) => {
+        const x = xFor(index);
+        const y = yFor(value);
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+    }
 
     ctx.fillStyle = "#6b5e52";
-    ctx.font = "12px Inter, Segoe UI, sans-serif";
-    ctx.fillText(formatValue(localMax, metric), 12, margin.top + 4);
-    ctx.fillText("0", 28, margin.top + plotHeight + 4);
-    if (usablePoints[0]) {
-      ctx.fillText(usablePoints[0].label, margin.left, cssHeight - 10);
-    }
-    if (usablePoints.length > 1) {
-      const label = usablePoints[usablePoints.length - 1].label;
-      const labelWidth = ctx.measureText(label).width;
-      ctx.fillText(label, cssWidth - margin.right - labelWidth, cssHeight - 10);
+    ctx.fillText(usable[0].label, margin.left, cssHeight - 10);
+    if (usable.length > 1) {
+      const label = usable[usable.length - 1].label;
+      ctx.fillText(label, cssWidth - margin.right - ctx.measureText(label).width, cssHeight - 10);
     }
   }
 
   function drawAll() {
     document.querySelectorAll("[data-progress-chart]").forEach((canvas) => {
-      const metric = canvas.dataset.progressChart;
-      const max = metric === "score" ? 5 : 1;
-      drawChart(canvas, metric, max);
+      drawChart(canvas, canvas.dataset.progressChart);
     });
   }
 
-  updateStatCards();
   drawAll();
   if ("ResizeObserver" in window) {
     const observer = new ResizeObserver(drawAll);

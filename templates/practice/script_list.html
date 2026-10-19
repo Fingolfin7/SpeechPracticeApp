@@ -47,7 +47,7 @@
                 <input type="checkbox" name="cards" value="{{ card.pk }}" {% if card.pk in default_ladder_card_ids %}checked{% endif %}>
                 <span>
                   <strong>{{ card.display_title }}</strong>
-                  <small>{{ card.get_kind_display }} &middot; {{ card.get_status_display }} &middot; mastery {{ card.mastery|floatformat:2 }}</small>
+                  <small>{{ card.get_kind_display }} &middot; {{ card.get_status_display }} &middot; {% widthratio card.mastery 1 100 %}% mastery</small>
                 </span>
               </label>
             {% empty %}

@@ -8,6 +8,7 @@
     <p>
       {{ home.queued_count }} rep{{ home.queued_count|pluralize }} queued for today{% if home.due_count %},
       {{ home.due_count }} due now{% endif %}. About {{ home.est_minutes }} minutes, start to finish.
+      {% if home.days_since_practice and home.days_since_practice > 2 %}Your last take was {{ home.days_since_practice }} days ago.{% endif %}
     </p>
   {% else %}
     <p>Nothing queued yet. Score a practice take and tomorrow's queue will fill with specific follow-up.</p>
@@ -79,7 +80,7 @@
             </div>
           </div>
           <div class="next-card-meta">
-            <span>Mastery <b>{{ item.card.mastery|floatformat:2 }}</b></span>
+            <span>Mastery <b>{% widthratio item.card.mastery 1 100 %}%</b></span>
             <span>Est. <b>3 min</b></span>
             <span>Reviewed <b>{{ item.review_count }}&times;</b></span>
           </div>
@@ -90,7 +91,8 @@
               <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
                 {% csrf_token %}
                 <input type="hidden" name="provider" value="local_template">
-                <button class="btn-hero" type="submit">&#9654; Generate &amp; start</button>
+                <input type="hidden" name="next" value="practice">
+                <button class="btn-hero" type="submit">&#9654; Start today's practice</button>
               </form>
             {% endif %}
             <a class="button-link secondary-button" href="{% url 'practice:card_detail' item.card.pk %}">Peek at card</a>
@@ -132,7 +134,7 @@
 
     {% if home.spark_points %}
       <div class="trend-strip">
-        <div class="trend-label">Clarity trend<strong>{{ home.clarity_now }}% this week</strong></div>
+        <div class="trend-label">Clarity trend<strong>{{ home.clarity_now }}% {% if home.metrics_window == "this week" %}this week{% else %}recently{% endif %}</strong></div>
         <svg class="sparkline" width="180" height="44" viewBox="0 0 180 44" aria-hidden="true">
           <polyline fill="none" stroke="#3e7a5c" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"
                     points="{{ home.spark_points }}"/>
@@ -165,7 +167,7 @@
           </div>
           <div class="qc-mastery">
             <div class="bar"><span style="width: {% widthratio item.card.mastery 1 100 %}%"></span></div>
-            <small>{{ item.card.mastery|floatformat:2 }}</small>
+            <small>{% widthratio item.card.mastery 1 100 %}%</small>
           </div>
           <div class="qc-actions">
             {% if item.script %}
@@ -174,7 +176,8 @@
               <form method="post" action="{% url 'practice:generate_script' item.card.pk %}">
                 {% csrf_token %}
                 <input type="hidden" name="provider" value="local_template">
-                <button class="qc-btn" type="submit">Generate</button>
+                <input type="hidden" name="next" value="practice">
+                <button class="qc-btn" type="submit" title="Writes a short drill for this card, then opens it">Practice</button>
               </form>
             {% endif %}
             <a class="quiet-link" href="{% url 'practice:card_detail' item.card.pk %}">Details</a>
@@ -200,18 +203,33 @@
             <h3>{{ ladder.title }}</h3>
             {% if ladder.theme %}<p>{{ ladder.theme }}</p>{% endif %}
           </div>
-          <span class="ladder-progress-tag">{{ ladder.steps.count }} rung{{ ladder.steps.count|pluralize }}</span>
+          <span class="ladder-progress-tag">{{ ladder.passed_count }} of {{ ladder.home_steps|length }} passed</span>
         </div>
         <div class="trail-steps">
-          {% for step in ladder.steps.all %}
-            <div class="trail-step">
-              <div class="step-node">{{ step.level }}</div>
+          {% for step in ladder.home_steps %}
+            <div class="trail-step is-{{ step.gate_state }}">
+              <div class="step-node">{% if step.gate_state == "passed" %}&#10003;{% else %}{{ step.level }}{% endif %}</div>
               <div class="step-body">
                 <div class="step-text">
                   <strong>{{ step.title }}</strong>
-                  {% if step.focus %}<span>{{ step.focus|join:", " }}</span>{% endif %}
+                  <span>
+                    {% if step.gate_state == "passed" %}
+                      Passed &middot; best {% widthratio step.best_clarity 1 100 %}% clarity
+                    {% elif step.gate_state == "locked" %}
+                      Locked &middot; pass level {{ step.level|add:"-1" }} first
+                    {% elif step.best_clarity is not None %}
+                      Best {% widthratio step.best_clarity 1 100 %}% &middot; needs {% widthratio step.min_clarity 1 100 %}% to pass
+                    {% else %}
+                      Needs {% widthratio step.min_clarity 1 100 %}% clarity to pass
+                    {% endif %}
+                    {% if ladder.source != "builtin" and step.focus %}&middot; {{ step.focus|join:", " }}{% endif %}
+                  </span>
                 </div>
-                <a class="button-link qc-btn" href="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ ladder.pk }}&amp;level={{ step.level }}&amp;script={{ step.script.pk }}">Practice</a>
+                {% if step.gate_state == "locked" %}
+                  <span class="step-lock" aria-label="Locked">&#128274;</span>
+                {% else %}
+                  <a class="button-link qc-btn{% if step.gate_state == 'passed' %} secondary-button{% endif %}" href="{% url 'practice:practice' %}?mode=quick&amp;ladder={{ ladder.pk }}&amp;level={{ step.level }}&amp;script={{ step.script.pk }}">{% if step.gate_state == "passed" %}Again{% else %}Practice{% endif %}</a>
+                {% endif %}
               </div>
             </div>
           {% endfor %}
@@ -224,7 +242,7 @@
 {% if home.metrics %}
   <section class="section" aria-label="Metrics summary">
     <div class="section-head">
-      <h2>This week at a glance</h2>
+      <h2>{% if home.metrics_window == "this week" %}This week at a glance{% else %}Your recent takes at a glance{% endif %}</h2>
       <a class="see-all" href="{% url 'practice:progress' %}">Full progress &rarr;</a>
     </div>
     <div class="metrics-strip">

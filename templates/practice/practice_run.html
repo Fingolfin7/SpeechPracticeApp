@@ -204,7 +204,7 @@
       <div class="focus-brief compact">
         <span class="pill">{{ focus_card.get_kind_display }}</span>
         <strong>{{ focus_card.display_title }}</strong>
-        <small>Mastery {{ focus_card.mastery|floatformat:2 }} &middot; due {{ focus_card.due_at|date:"M j, H:i" }}</small>
+        <small>Mastery {% widthratio focus_card.mastery 1 100 %}% &middot; due {{ focus_card.due_at|date:"M j, H:i" }}</small>
       </div>
     {% endif %}
 

@@ -672,8 +672,7 @@ class PracticeWebTests(TransactionTestCase):
             ref_local_end=6,
             ref_token_len=6,
         )
-        # A char_replace event exercises the confusion path, which reads
-        # hyp_local_* fields — kept in the fetch's .only() list.
+        # A char_replace sub event alongside the deletion.
         SessionError.objects.create(
             user=self.user,
             session_id=scored.id,
@@ -704,7 +703,7 @@ class PracticeWebTests(TransactionTestCase):
 
         from .services.analytics import trend_summary_for_range
 
-        # One session query + one event query cover all five summaries; a
+        # One session query + one event query cover every summary; a
         # higher count means deferred-field loads crept back in.
         with self.assertNumQueries(2):
             summary = trend_summary_for_range(
@@ -718,10 +717,31 @@ class PracticeWebTests(TransactionTestCase):
         self.assertNotIn("your", words)
         phrases = {row["phrase"] for row in summary["phrases"]["top_trouble_phrases"]}
         self.assertIn("steady breath today", phrases)
-        confusions = summary["characters"]["top_character_confusions"]
-        self.assertEqual(confusions[0]["from"], "k")
-        self.assertEqual(confusions[0]["to"], "cr")
+        # Spelling-derived summaries are gone: they never measured sound.
+        for removed in ("characters", "positions", "sounds"):
+            self.assertNotIn(removed, summary)
         self.assertEqual(summary["words"]["recent_session_count"], 1)
+
+    def test_word_stats_count_one_miss_per_misread_word(self):
+        from types import SimpleNamespace
+
+        from error_analytics import _word_stats, extract_error_events, word_level_events
+
+        script = "the dead are interred here and interred there"
+        events = [
+            SimpleNamespace(session_id=1, **event)
+            for event in extract_error_events(script, "the dead are turd here and interred there")
+        ]
+        # One substitution is stored as several character-span rows...
+        self.assertGreater(len(events), 1)
+        # ...but it is still a single misread word.
+        self.assertEqual(len(word_level_events(events)), 1)
+
+        stats = _word_stats([SimpleNamespace(id=1, script_text=script)], events)
+        self.assertEqual(stats["interred"]["errors"], 1.0)
+        self.assertEqual(stats["interred"]["attempts"], 2.0)
+        self.assertEqual(stats["interred"]["error_rate"], 0.5)
+        self.assertEqual(stats["interred"]["sessions_missed"], 1)
 
     def test_build_card_candidates_does_not_emit_phrase_focus(self):
         candidates = build_card_candidates(
@@ -743,6 +763,23 @@ class PracticeWebTests(TransactionTestCase):
         )
 
         self.assertEqual(candidates, [])
+
+    def test_build_card_candidates_only_proposes_words_missed_in_two_sessions(self):
+        candidates = build_card_candidates(
+            {
+                "words": {
+                    "top_trouble_words": [
+                        {"word": "steady", "error_rate": 0.5, "errors": 2, "attempts": 4, "sessions_missed": 2},
+                        {"word": "fluke", "error_rate": 0.5, "errors": 1, "attempts": 2, "sessions_missed": 1},
+                    ]
+                },
+                "sounds": {"top_trouble_symbols": [{"symbol": "KW", "error_rate": 0.4}]},
+                "positions": {"top_position_buckets": [{"bucket": "end", "error_rate": 0.1}]},
+            }
+        )
+
+        self.assertEqual([c["target_key"] for c in candidates], ["steady"])
+        self.assertEqual({c["kind"] for c in candidates}, {ImprovementCard.KIND_WORD})
 
     def test_refresh_improvement_cards_preserves_existing_srs_state(self):
         reviewed_at = timezone.now() - timezone.timedelta(days=2)
@@ -767,6 +804,7 @@ class PracticeWebTests(TransactionTestCase):
                         "error_rate": 0.8,
                         "errors": 4,
                         "attempts": 5,
+                        "sessions_missed": 2,
                     }
                 ]
             },
@@ -798,6 +836,7 @@ class PracticeWebTests(TransactionTestCase):
                         "error_rate": 0.25,
                         "errors": 1,
                         "attempts": 4,
+                        "sessions_missed": 2,
                     }
                 ]
             },
@@ -815,6 +854,50 @@ class PracticeWebTests(TransactionTestCase):
         self.assertEqual(card.status, ImprovementCard.STATUS_REVIEW)
         self.assertGreater(card.due_at, timezone.now())
 
+    def test_refresh_reseeds_unreviewed_cards_and_updates_non_candidate_stats(self):
+        stale = ImprovementCard.objects.create(
+            user=self.user,
+            title="steady",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="steady",
+            prompt="Old prompt",
+            stats={"errors": 17, "attempts": 4},
+            mastery=0.0,
+            status=ImprovementCard.STATUS_LEARNING,
+            due_at=timezone.now(),
+        )
+        quiet = ImprovementCard.objects.create(
+            user=self.user,
+            title="breath",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="breath",
+            prompt="Old prompt",
+            stats={"errors": 9, "attempts": 3},
+            mastery=0.0,
+            status=ImprovementCard.STATUS_LEARNING,
+            due_at=timezone.now(),
+        )
+        steady_row = {"word": "steady", "error_rate": 0.25, "errors": 1, "attempts": 4, "sessions_missed": 2}
+        breath_row = {"word": "breath", "error_rate": 0.0, "errors": 0, "attempts": 3, "sessions_missed": 0}
+        summary = {
+            "words": {
+                "top_trouble_words": [steady_row],
+                "stats_by_word": {"steady": steady_row, "breath": breath_row},
+            }
+        }
+
+        with patch("practice.services.analytics.trend_summary", return_value=summary):
+            refresh_improvement_cards(user=self.user, days=30)
+
+        stale.refresh_from_db()
+        quiet.refresh_from_db()
+        self.assertEqual(stale.stats["errors"], 1)
+        self.assertEqual(stale.mastery, 0.75)
+        self.assertEqual(stale.status, ImprovementCard.STATUS_REVIEW)
+        # Not a trouble word any more, but its evidence still refreshes.
+        self.assertEqual(quiet.stats["errors"], 0)
+        self.assertEqual(quiet.mastery, 1.0)
+
     def test_refresh_improvement_cards_records_exact_source_range(self):
         summary = {
             "words": {
@@ -824,6 +907,7 @@ class PracticeWebTests(TransactionTestCase):
                         "error_rate": 0.5,
                         "errors": 2,
                         "attempts": 4,
+                        "sessions_missed": 2,
                     }
                 ]
             },
@@ -858,7 +942,9 @@ class PracticeWebTests(TransactionTestCase):
             {
               "cards": [
                 {"kind": "phrase", "target": "steady breath today", "title": "Phrase", "prompt": "Practice the phrase."},
-                {"kind": "word", "target": "steady", "title": "Steady", "prompt": "Practice steady."}
+                {"kind": "word", "target": "steady", "title": "Steady", "prompt": "Practice steady."},
+                {"kind": "fluency", "target": "rushing", "title": "Rushing", "prompt": "Slow down."},
+                {"kind": "sound", "target": "final consonants", "title": "Endings", "prompt": "Finish words."}
               ]
             }
             """,
@@ -1630,19 +1716,46 @@ class PracticeWebTests(TransactionTestCase):
                 "provider": "local_template",
                 "self_review_notes": (
                     "I rushed the last sentence.\n"
-                    "I swallowed final consonants on asked and just."
+                    "I swallowed the end of 'asked'.\n"
+                    "question"
                 ),
             },
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(ImprovementCard.objects.count(), 2)
+        # Habit notes ("rushed") can't be graded, so only word cards come out.
         targets = set(ImprovementCard.objects.values_list("target_key", flat=True))
-        self.assertIn("rushing", targets)
-        self.assertIn("final consonants", targets)
-        card = ImprovementCard.objects.get(target_key="rushing")
+        self.assertEqual(targets, {"asked", "question"})
+        self.assertEqual(
+            set(ImprovementCard.objects.values_list("kind", flat=True)),
+            {ImprovementCard.KIND_WORD},
+        )
+        card = ImprovementCard.objects.get(target_key="asked")
         self.assertEqual(card.stats["source"], "self_review")
         self.assertEqual(card.stats["source_session_id"], session.pk)
+
+    def test_self_review_with_only_habit_notes_creates_no_cards(self):
+        self._create_legacy_tables()
+        session = PracticeSession.objects.create(
+            timestamp="2026-06-14T12:00:00",
+            script_name="Free Speak",
+            script_text="",
+            audio_path="recording.txt",
+            transcript="I asked just one question and then rushed the ending",
+        )
+
+        response = self.client.post(
+            reverse("practice:session_detail", args=[session.pk]),
+            {
+                "action": "create_cards_from_self_review",
+                "provider": "local_template",
+                "self_review_notes": "I rushed the last sentence and paused too little.",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(ImprovementCard.objects.count(), 0)
+        self.assertContains(response, "Cards track specific words")
 
     def test_session_detail_clears_transcript(self):
         self._create_legacy_tables()
@@ -2784,8 +2897,36 @@ class PracticeWebTests(TransactionTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Progress tracker")
-        self.assertContains(response, 'data-progress-chart="score"')
+        self.assertContains(response, 'data-progress-chart="clarity"')
+        self.assertContains(response, 'data-progress-chart="artic_rate"')
         self.assertContains(response, "Progress Drill")
+        # The default 30-day window is empty, so the page falls back to all time.
+        self.assertContains(response, "this shows all time")
+        self.assertEqual(response.context["range_key"], "all")
+        self.assertEqual(response.context["stats"]["clarity_best"], 100)
+
+    def test_history_paginates_and_shows_perfect_takes(self):
+        self._create_legacy_tables()
+        for index in range(55):
+            PracticeSession.objects.create(
+                timestamp=f"2026-06-{1 + index % 28:02d}T12:{index:02d}:00",
+                script_name=f"Take {index}",
+                script_text="clear practice text",
+                audio_path="recording.txt",
+                transcript="clear practice text",
+                wer=0.0,
+                clarity=1.0,
+                cer=0.0,
+                score=5.0,
+            )
+
+        response = self.client.get(reverse("practice:sessions"))
+        self.assertContains(response, "Page 1 of 2")
+        # A perfect take shows 100%/0%, not a dash.
+        self.assertContains(response, "100%")
+        self.assertEqual(len(response.context["sessions"]), 50)
+        second = self.client.get(reverse("practice:sessions"), {"page": 2})
+        self.assertEqual(len(second.context["sessions"]), 5)
 
     def _create_legacy_tables(self):
         existing = set(connection.introspection.table_names())

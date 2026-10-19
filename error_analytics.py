@@ -233,10 +233,13 @@ def _word_stats(
         attempts.update(words)
 
     errors = Counter()
-    for row in events:
+    missed_sessions: Dict[str, set] = {}
+    for row in word_level_events(events):
         if row.op not in ("sub", "del") or not row.ref_token:
             continue
-        errors[row.ref_token.strip().lower()] += 1
+        word = row.ref_token.strip().lower()
+        errors[word] += 1
+        missed_sessions.setdefault(word, set()).add(getattr(row, "session_id", None))
 
     for word, attempts_count in attempts.items():
         if attempts_count <= 0:
@@ -247,8 +250,36 @@ def _word_stats(
             "attempts": float(attempts_count),
             "errors": float(err_count),
             "error_rate": float(err_count) / float(attempts_count),
+            "sessions_missed": len(missed_sessions.get(word, ())),
         }
     return stats
+
+
+def word_level_events(events: Iterable) -> List:
+    """Collapse persisted error rows to one row per mistaken word.
+
+    A substituted word is stored as one row per differing character span (so
+    the transcript can highlight exactly what changed), which means a single
+    misread word can produce several rows. Anything that counts *words* must
+    go through this first, or one slip on a long word counts as several.
+    Insertions are already one row per word and pass through unchanged.
+    """
+    seen = set()
+    out: List = []
+    for row in events:
+        if row.op in ("sub", "del"):
+            ref_start = getattr(row, "ref_start", None)
+            local_start = getattr(row, "ref_local_start", None)
+            if ref_start is not None and local_start is not None:
+                word_start = int(ref_start) - int(local_start)
+            else:
+                word_start = ref_start
+            key = (getattr(row, "session_id", None), word_start, row.ref_token)
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(row)
+    return out
 
 
 def _summarize_recent_vs_prev(
@@ -320,6 +351,7 @@ def word_trend_summary(
             "most_regressed_words": [],
             "recent_session_count": len(recent_sessions),
             "previous_session_count": 0,
+            "stats_by_word": recent_stats,
         }
 
     prev_stats = _word_stats(prev_sessions, prev_events or [])
@@ -333,6 +365,7 @@ def word_trend_summary(
         "most_regressed_words": regressed,
         "recent_session_count": len(recent_sessions),
         "previous_session_count": len(prev_sessions),
+        "stats_by_word": recent_stats,
     }
 
 
@@ -468,97 +501,9 @@ def phrase_trend_summary(
     }
 
 
-def _character_stats(
-    sessions: Sequence, events: Iterable
-) -> Dict[str, Dict[str, float]]:
-    opportunities = 0
-    for sess in sessions:
-        opportunities += sum(1 for ch in clean_text_for_alignment(sess.script_text) if ch.isalpha())
-    opportunities = max(1, opportunities)
-
-    counts = Counter()
-    for row in events:
-        kind = (row.error_kind or "").strip()
-        if kind in ("char_replace", "char_insert", "vowel_delete", "cons_delete"):
-            counts[kind] += 1
-
-    stats: Dict[str, Dict[str, float]] = {}
-    for kind in ("char_replace", "char_insert", "vowel_delete", "cons_delete"):
-        err = int(counts.get(kind, 0))
-        stats[kind] = {
-            "kind": kind,
-            "attempts": float(opportunities),
-            "errors": float(err),
-            "error_rate": float(err) / float(opportunities),
-        }
-    return stats
-
-
-def _top_char_confusions(events: Iterable, top_n: int) -> List[Dict]:
-    pairs = Counter()
-    for row in events:
-        if row.error_kind != "char_replace":
-            continue
-        ref_token = (row.ref_token or "").lower()
-        hyp_token = (row.hyp_token or "").lower()
-        if not ref_token or not hyp_token:
-            continue
-        rs = int(row.ref_local_start) if row.ref_local_start is not None else 0
-        re_ = int(row.ref_local_end) if row.ref_local_end is not None else len(ref_token)
-        hs = int(row.hyp_local_start) if row.hyp_local_start is not None else 0
-        he = int(row.hyp_local_end) if row.hyp_local_end is not None else len(hyp_token)
-        rs = max(0, min(rs, len(ref_token)))
-        re_ = max(rs, min(re_, len(ref_token)))
-        hs = max(0, min(hs, len(hyp_token)))
-        he = max(hs, min(he, len(hyp_token)))
-        ref_chunk = ref_token[rs:re_] or ref_token
-        hyp_chunk = hyp_token[hs:he] or hyp_token
-        pairs[(ref_chunk, hyp_chunk)] += 1
-    out = []
-    for (r, h), cnt in pairs.most_common(top_n):
-        out.append({"from": r, "to": h, "count": cnt})
-    return out
-
-
-def character_trend_summary(
-    recent_sessions: Sequence,
-    recent_events: Sequence,
-    prev_sessions: Sequence | None = None,
-    prev_events: Sequence | None = None,
-    *,
-    top_n: int = 6,
-) -> Dict:
-    recent_stats = _character_stats(recent_sessions, recent_events)
-
-    top_kinds = sorted(
-        recent_stats.values(),
-        key=lambda x: x["error_rate"],
-        reverse=True,
-    )[:top_n]
-    confusions = _top_char_confusions(recent_events, top_n=top_n)
-
-    if prev_sessions is None:
-        return {
-            "top_character_kinds": top_kinds,
-            "most_improved_kinds": [],
-            "most_regressed_kinds": [],
-            "top_character_confusions": confusions,
-        }
-
-    prev_stats = _character_stats(prev_sessions, prev_events or [])
-    _, improved, regressed = _summarize_recent_vs_prev(
-        recent_stats,
-        prev_stats,
-        top_n=top_n,
-        min_attempts=1,
-        item_key="kind",
-    )
-    return {
-        "top_character_kinds": top_kinds,
-        "most_improved_kinds": improved,
-        "most_regressed_kinds": regressed,
-        "top_character_confusions": confusions,
-    }
+# Position and spelling-based "sound" stats below only back the evidence
+# extractors for legacy position/sound cards (paused since migration 0020).
+# They work on letters, not audio, so nothing proposes new cards from them.
 
 
 def _position_bucket(local_start: int | None, local_end: int | None, tok_len: int | None) -> str | None:
@@ -618,35 +563,6 @@ def _position_stats(
             "error_rate": float(err) / float(opp),
         }
     return stats
-
-
-def position_trend_summary(
-    recent_sessions: Sequence,
-    recent_events: Sequence,
-    prev_sessions: Sequence | None = None,
-    prev_events: Sequence | None = None,
-    *,
-    top_n: int = 4,
-) -> Dict:
-    recent_stats = _position_stats(recent_sessions, recent_events)
-    top_pos = sorted(recent_stats.values(), key=lambda x: x["error_rate"], reverse=True)[:top_n]
-
-    if prev_sessions is None:
-        return {
-            "top_position_buckets": top_pos,
-            "most_improved_positions": [],
-            "most_regressed_positions": [],
-        }
-
-    prev_stats = _position_stats(prev_sessions, prev_events or [])
-    _, improved, regressed = _summarize_recent_vs_prev(
-        recent_stats, prev_stats, top_n=top_n, min_attempts=1, item_key="bucket"
-    )
-    return {
-        "top_position_buckets": top_pos,
-        "most_improved_positions": improved,
-        "most_regressed_positions": regressed,
-    }
 
 
 DIGRAPH_SYMBOLS = [
@@ -718,7 +634,7 @@ def _phoneme_stats(
             opportunities.update(_word_to_phoneme_symbols(w))
 
     confusion_pairs = Counter()
-    for row in events:
+    for row in word_level_events(events):
         if row.op != "sub" or not row.ref_token or not row.hyp_token:
             continue
         ref_syms = _word_to_phoneme_symbols(row.ref_token)
@@ -762,51 +678,8 @@ def _phoneme_stats(
     return stats, top_pairs
 
 
-def phoneme_trend_summary(
-    recent_sessions: Sequence,
-    recent_events: Sequence,
-    prev_sessions: Sequence | None = None,
-    prev_events: Sequence | None = None,
-    *,
-    top_n: int = 6,
-    min_attempts: int = 4,
-) -> Dict:
-    recent_stats, top_pairs = _phoneme_stats(recent_sessions, recent_events)
-    top_symbols = sorted(
-        [
-            v
-            for v in recent_stats.values()
-            if int(v.get("attempts", 0)) >= int(min_attempts)
-        ],
-        key=lambda x: x["error_rate"],
-        reverse=True,
-    )[:top_n]
-
-    if prev_sessions is None:
-        return {
-            "top_trouble_symbols": top_symbols,
-            "most_improved_symbols": [],
-            "most_regressed_symbols": [],
-            "top_symbol_confusions": top_pairs,
-        }
-
-    prev_stats, _ = _phoneme_stats(prev_sessions, prev_events or [])
-    _, improved, regressed = _summarize_recent_vs_prev(
-        recent_stats, prev_stats, top_n=top_n, min_attempts=min_attempts, item_key="symbol"
-    )
-    return {
-        "top_trouble_symbols": top_symbols,
-        "most_improved_symbols": improved,
-        "most_regressed_symbols": regressed,
-        "top_symbol_confusions": top_pairs,
-    }
-
-
 def generate_feedback_summary(
     word_summary: Dict,
-    char_summary: Dict,
-    pos_summary: Dict,
-    phon_summary: Dict,
     phrase_summary: Dict | None = None,
 ) -> List[str]:
     feedback: List[str] = []
@@ -820,31 +693,6 @@ def generate_feedback_summary(
     if phrases:
         focus = "; ".join(f"'{p.get('phrase', '')}'" for p in phrases[:2])
         feedback.append(f"Phrase focus: slow down and repeat these unstable phrases: {focus}.")
-
-    char_kinds = char_summary.get("top_character_kinds", [])
-    if char_kinds and float(char_kinds[0].get("error_rate", 0.0)) > 0:
-        top = char_kinds[0]
-        feedback.append(
-            f"Character pattern: highest error type is {top.get('kind', 'unknown')} "
-            f"at {float(top.get('error_rate', 0.0)):.1%}."
-        )
-
-    pos = pos_summary.get("top_position_buckets", [])
-    if pos and float(pos[0].get("error_rate", 0.0)) > 0:
-        p = pos[0]
-        bucket = p.get("bucket", "unknown")
-        feedback.append(
-            f"Position pattern: most errors occur at {bucket} of words "
-            f"({float(p.get('error_rate', 0.0)):.1%})."
-        )
-
-    pairs = phon_summary.get("top_symbol_confusions", [])
-    if pairs:
-        p0 = pairs[0]
-        feedback.append(
-            f"Sound pattern: common confusion is {p0.get('from', '?')} -> {p0.get('to', '?')} "
-            f"({int(p0.get('count', 0))} times)."
-        )
 
     improved = word_summary.get("most_improved_words", [])
     if improved:

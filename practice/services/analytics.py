@@ -10,11 +10,8 @@ from django.db.models import Avg, Count
 from django.utils import timezone
 
 from error_analytics import (
-    character_trend_summary,
     generate_feedback_summary,
-    phoneme_trend_summary,
     phrase_trend_summary,
-    position_trend_summary,
     window_bounds,
     word_trend_summary,
 )
@@ -156,13 +153,14 @@ def _metric_tag(metric: str, value: float) -> tuple[str, str]:
     return "", "ok"
 
 
+# WER is left out because clarity is 1 - WER, and pause ratio because Whisper
+# segment gaps miss most real pauses. The value tuple order below matches the
+# home_snapshot query columns.
 _HOME_METRICS = [
-    ("wer", "WER", "pct1"),
-    ("cer", "CER", "pct1"),
     ("clarity", "Clarity", "pct0"),
+    ("cer", "CER", "pct1"),
     ("avg_conf", "Avg confidence", "conf"),
-    ("artic_rate", "Articulation", "wpm"),
-    ("pause_ratio", "Pause ratio", "pct0"),
+    ("artic_rate", "Speaking rate", "wpm"),
 ]
 
 
@@ -172,11 +170,11 @@ def home_snapshot(user=None, queue: list[TodayQueueItem] | None = None) -> dict[
     queue = queue or []
     now = datetime.now()
     rows = PracticeSession.objects.filter(user=user).exclude(score__isnull=True).values_list(
-        "timestamp", "wer", "cer", "clarity", "avg_conf", "artic_rate", "pause_ratio"
+        "timestamp", *(key for key, _label, _fmt in _HOME_METRICS)
     )
     dated: list[tuple[datetime, tuple]] = []
     for ts, *vals in rows:
-        dt = _parse_session_timestamp(ts)
+        dt = parse_session_timestamp(ts)
         if dt is not None:
             dated.append((dt, tuple(vals)))
     dated.sort(key=lambda item: item[0])
@@ -213,6 +211,8 @@ def home_snapshot(user=None, queue: list[TodayQueueItem] | None = None) -> dict[
 
     week_rows = [vals for dt, vals in dated if dt >= now - timedelta(days=7)]
     prev_rows = [vals for dt, vals in dated if now - timedelta(days=14) <= dt < now - timedelta(days=7)]
+    # With no takes this week, fall back to the most recent takes and say so.
+    metrics_window = "this week" if week_rows else "last takes"
     week_avg = _averages(week_rows or [vals for _, vals in dated[-6:]])
     prev_avg = _averages(prev_rows)
 
@@ -240,7 +240,7 @@ def home_snapshot(user=None, queue: list[TodayQueueItem] | None = None) -> dict[
     if clarity_now is not None and clarity_prev is not None:
         clarity_delta = round((clarity_now - clarity_prev) * 100)
 
-    spark_values = [vals[2] for _, vals in dated if vals[2] is not None][-8:]
+    spark_values = [vals[0] for _, vals in dated if vals[0] is not None][-8:]
     spark_points = None
     spark_last = None
     if len(spark_values) >= 2:
@@ -261,6 +261,8 @@ def home_snapshot(user=None, queue: list[TodayQueueItem] | None = None) -> dict[
         "daily_goal": daily_goal,
         "ring_offset": ring_offset,
         "metrics": metrics,
+        "metrics_window": metrics_window,
+        "days_since_practice": (today - dated[-1][0].date()).days if dated else None,
         "clarity_now": round(clarity_now * 100) if clarity_now is not None else None,
         "clarity_delta": clarity_delta,
         "clarity_delta_abs": abs(clarity_delta) if clarity_delta is not None else None,
@@ -343,7 +345,7 @@ def _fetch_trend_windows(
     recent_sessions: list = []
     prev_sessions: list = []
     for sess in sessions_qs:
-        parsed = _parse_session_timestamp(sess.timestamp)
+        parsed = parse_session_timestamp(sess.timestamp)
         if parsed is None:
             continue
         if recent_start <= parsed <= recent_end:
@@ -400,25 +402,13 @@ def trend_summary_for_range(
     words = word_trend_summary(
         recent_sessions, recent_events, prev_sessions, prev_events, top_n=6, min_attempts=2
     )
-    chars = character_trend_summary(
-        recent_sessions, recent_events, prev_sessions, prev_events, top_n=5
-    )
-    positions = position_trend_summary(
-        recent_sessions, recent_events, prev_sessions, prev_events, top_n=4
-    )
-    sounds = phoneme_trend_summary(
-        recent_sessions, recent_events, prev_sessions, prev_events, top_n=5, min_attempts=3
-    )
     phrases = phrase_trend_summary(
         recent_sessions, recent_events, prev_sessions, prev_events, top_n=5, min_attempts=1
     )
     return {
         "words": words,
-        "characters": chars,
-        "positions": positions,
-        "sounds": sounds,
         "phrases": phrases,
-        "feedback": generate_feedback_summary(words, chars, positions, sounds, phrases),
+        "feedback": generate_feedback_summary(words, phrases),
     }
 
 
@@ -446,13 +436,13 @@ def progress_series(
         rows = rows.filter(script_name=script_name)
     points = []
     for session in rows:
-        parsed = _parse_session_timestamp(session.timestamp)
+        parsed = parse_session_timestamp(session.timestamp)
         if parsed is None or parsed < start_dt or parsed > end_dt:
             continue
         points.append(
             {
                 "date": parsed.isoformat(),
-                "label": parsed.strftime("%m/%d"),
+                "label": f"{parsed:%b} {parsed.day}, {parsed.year}",
                 "script": session.script_name,
                 "score": session.score,
                 "wer": session.wer,
@@ -466,7 +456,7 @@ def progress_series(
     return points
 
 
-def _parse_session_timestamp(value: str | None) -> datetime | None:
+def parse_session_timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
@@ -496,12 +486,26 @@ def _due_date_for_mastery(mastery: float):
     return timezone.now() + timedelta(days=days)
 
 
+# A word only becomes a card once it has been missed in this many separate
+# sessions: a single bad take (or a single transcription hiccup) is not a
+# pattern worth drilling.
+MIN_SESSIONS_MISSED_FOR_CARD = 2
+
+
 def build_card_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Propose word cards from trend data.
+
+    Only word cards are proposed. Sound, character, and position patterns
+    are derived from spelling rather than audio, so they cannot be graded
+    honestly and are no longer generated.
+    """
     candidates: list[dict[str, Any]] = []
 
     for row in summary.get("words", {}).get("top_trouble_words", [])[:8]:
         word = row.get("word")
         if not word:
+            continue
+        if int(row.get("sessions_missed", 0)) < MIN_SESSIONS_MISSED_FOR_CARD:
             continue
         rate = float(row.get("error_rate", 0.0))
         candidates.append(
@@ -510,38 +514,6 @@ def build_card_candidates(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "target_key": str(word),
                 "title": str(word),
                 "prompt": f"Practice short phrases that place '{word}' at the beginning, middle, and end of a sentence.",
-                "stats": row,
-                "mastery": _mastery_from_error_rate(rate),
-            }
-        )
-
-    for row in summary.get("sounds", {}).get("top_trouble_symbols", [])[:6]:
-        symbol = row.get("symbol")
-        if not symbol:
-            continue
-        rate = float(row.get("error_rate", 0.0))
-        candidates.append(
-            {
-                "kind": ImprovementCard.KIND_SOUND,
-                "target_key": str(symbol),
-                "title": str(symbol),
-                "prompt": f"Generate minimal-pair and sentence drills that emphasize the {symbol} sound.",
-                "stats": row,
-                "mastery": _mastery_from_error_rate(rate),
-            }
-        )
-
-    for row in summary.get("positions", {}).get("top_position_buckets", [])[:4]:
-        bucket = row.get("bucket")
-        if not bucket:
-            continue
-        rate = float(row.get("error_rate", 0.0))
-        candidates.append(
-            {
-                "kind": ImprovementCard.KIND_POSITION,
-                "target_key": str(bucket),
-                "title": str(bucket),
-                "prompt": f"Practice crisp articulation for sounds at the {bucket} of words.",
                 "stats": row,
                 "mastery": _mastery_from_error_rate(rate),
             }
@@ -573,17 +545,20 @@ def refresh_improvement_cards(
             "source_window_label": _source_window_label(window_days),
         }
     refreshed_at = timezone.now()
-    count = 0
-    for candidate in build_card_candidates(summary):
-        mastery = float(candidate["mastery"])
-        status = (
-            ImprovementCard.STATUS_REVIEW
-            if mastery >= 0.65
-            else ImprovementCard.STATUS_LEARNING
-        )
-        stats = dict(candidate["stats"])
+
+    def with_window(row: dict[str, Any]) -> dict[str, Any]:
+        stats = dict(row)
         stats.update(source_window)
         stats["source_window_refreshed_at"] = refreshed_at.isoformat()
+        return stats
+
+    count = 0
+    candidate_keys = set()
+    for candidate in build_card_candidates(summary):
+        candidate_keys.add(candidate["target_key"])
+        mastery = float(candidate["mastery"])
+        status = _seed_status(mastery)
+        stats = with_window(candidate["stats"])
         defaults = {
             "title": candidate["title"],
             "prompt": candidate["prompt"],
@@ -599,13 +574,36 @@ def refresh_improvement_cards(
             defaults=defaults,
         )
         if not created:
-            ImprovementCard.objects.filter(user=user, pk=card.pk).update(
-                title=candidate["title"],
-                prompt=candidate["prompt"],
-                stats=stats,
-            )
+            updates = {"title": candidate["title"], "prompt": candidate["prompt"], "stats": stats}
+            if card.last_reviewed_at is None:
+                # Never reviewed, so there is no SRS state to protect: re-seed
+                # from the fresh evidence instead of keeping a stale guess.
+                updates.update(mastery=mastery, status=status)
+            ImprovementCard.objects.filter(user=user, pk=card.pk).update(**updates)
         count += 1 if created else 0
+
+    # Keep evidence current on the remaining active word cards too, so their
+    # miss counts reflect the same window as the freshly proposed ones.
+    stats_by_word = summary.get("words", {}).get("stats_by_word", {})
+    existing = (
+        ImprovementCard.objects.filter(user=user, kind=ImprovementCard.KIND_WORD)
+        .exclude(status=ImprovementCard.STATUS_PAUSED)
+        .exclude(target_key__in=candidate_keys)
+    )
+    for card in existing:
+        row = stats_by_word.get(str(card.target_key).strip().lower())
+        if not row:
+            continue
+        updates = {"stats": {**(card.stats or {}), **with_window(row)}}
+        if card.last_reviewed_at is None:
+            mastery = _mastery_from_error_rate(float(row.get("error_rate", 0.0)))
+            updates.update(mastery=mastery, status=_seed_status(mastery))
+        ImprovementCard.objects.filter(user=user, pk=card.pk).update(**updates)
     return count
+
+
+def _seed_status(mastery: float) -> str:
+    return ImprovementCard.STATUS_REVIEW if mastery >= 0.65 else ImprovementCard.STATUS_LEARNING
 
 
 def _source_window_label(days: int) -> str:

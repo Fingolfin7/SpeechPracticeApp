@@ -7,6 +7,7 @@ from error_analytics import (
     _position_bucket,
     _position_stats,
     clean_text_for_alignment,
+    word_level_events,
 )
 
 from practice.models import ImprovementCard, PracticeSession
@@ -79,7 +80,7 @@ def _word_evidence(target_key: str, session: PracticeSession, events: Sequence) 
     tokens = clean_text_for_alignment(session.script_text).split()
     opportunities = sum(1 for token in tokens if token == target)
     misses = 0
-    for row in events:
+    for row in word_level_events(events):
         if row.op not in {"sub", "del"}:
             continue
         if clean_text_for_alignment(row.ref_token or "").strip() == target:

@@ -266,25 +266,23 @@ def build_self_review_card_prompt(session: PracticeSession, notes: str) -> str:
         "Turn a learner's self-review notes into SpeechPractice improvement cards.\n"
         "The learner knows what they meant to say and has written where they noticed mistakes. "
         "Prefer concrete, reusable focus areas over one-off commentary.\n\n"
-        "Available card kinds:\n"
-        "- word: a specific word to practice\n"
-        "- sound: an articulation or sound pattern, including final consonants or swallowed endings\n"
-        "- position: a word-position issue such as final sounds or phrase endings\n"
-        "- fluency: pace, pausing, rushing, breath, filler, or rhythm issues\n\n"
+        "Cards track specific words only: each card's target must be a single word from the "
+        "script that the learner says they stumbled on. Skip notes about pacing, pausing, "
+        "breath, or general articulation habits - those cannot be graded yet.\n\n"
         f"Session: {session.script_name} at {session.timestamp}\n"
         f"Transcript:\n{transcript[:3000] or '[no transcript]'}\n\n"
         f"Self-review notes:\n{notes.strip()[:3000]}\n\n"
         "Return strict JSON only. Schema:\n"
         "{\n"
         '  "cards": [\n'
-        '    {"kind": "word|sound|position|fluency", "target": "short target key", '
+        '    {"kind": "word", "target": "the word", '
         '"title": "short display title", "prompt": "why and how to practice it"}\n'
         "  ]\n"
         "}\n"
         "In each card's prompt, quote or closely paraphrase the learner's own words and name "
         "the concrete failure (what happened, and where in the take) - this text later feeds "
         "drill generation, so specifics beat generic advice.\n"
-        "Return 1 to 6 cards. Do not include cards for issues the notes do not mention."
+        "Return 0 to 6 cards. Do not include cards for issues the notes do not mention."
     )
 
 
@@ -788,7 +786,7 @@ def parse_self_review_cards(
             continue
         kind = _normalize_card_kind(row.get("kind"))
         target = _clean_target(row.get("target") or row.get("target_key") or row.get("focus"))
-        if not kind or kind == ImprovementCard.KIND_PHRASE or not target:
+        if kind != ImprovementCard.KIND_WORD or not target:
             continue
         key = (kind, target.lower())
         if key in seen:
@@ -858,7 +856,7 @@ def _local_cards_from_self_review(
         if not chunk:
             continue
         kind = _kind_from_note(chunk)
-        if kind == ImprovementCard.KIND_PHRASE:
+        if kind != ImprovementCard.KIND_WORD:
             continue
         target = _target_from_note(chunk, kind)
         key = (kind, target.lower())
@@ -890,13 +888,16 @@ def _strip_json_fence(text: str) -> str:
 
 def _kind_from_note(note: str) -> str:
     lowered = note.lower()
+    # A quoted target names exactly what to practice, so it wins over the
+    # habit keywords below ("I swallowed the end of 'asked'" is a word card).
+    quoted = re.search(r'"([^"]+)"|\'([^\']+)\'|`([^`]+)`', note)
+    if quoted:
+        quoted_words = (quoted.group(1) or quoted.group(2) or quoted.group(3) or "").split()
+        return ImprovementCard.KIND_WORD if len(quoted_words) == 1 else ImprovementCard.KIND_PHRASE
     if any(token in lowered for token in ("rush", "too fast", "pace", "pause", "breath", "filler")):
         return ImprovementCard.KIND_FLUENCY
     if any(token in lowered for token in ("final consonant", "ending", "endings", "swallow", "mumble", "slur", "pronounc")):
         return ImprovementCard.KIND_SOUND
-    quoted = re.search(r'"([^"]+)"|\'([^\']+)\'|`([^`]+)`', note)
-    if quoted and len((quoted.group(1) or quoted.group(2) or quoted.group(3) or "").split()) > 1:
-        return ImprovementCard.KIND_PHRASE
     words = re.findall(r"[A-Za-z][A-Za-z'-]*", note)
     if len(words) <= 4:
         return ImprovementCard.KIND_WORD

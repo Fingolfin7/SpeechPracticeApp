@@ -2790,8 +2790,8 @@ class PracticeWebTests(TransactionTestCase):
                 {
                     "transcription_provider": "openai",
                     "script_generation_provider": "anthropic",
-                    "openai_script_model": "gpt-5.6-terra",
-                    "anthropic_script_model": "claude-sonnet-5",
+                    "openai_script_model": "gpt-6-astra",
+                    "anthropic_script_model": "claude-fable-5-1",
                     "openai_transcription_model": "whisper-1",
                     "whisper_model_name": "small.en",
                     "whisper_device": "cpu",
@@ -2812,8 +2812,8 @@ class PracticeWebTests(TransactionTestCase):
         clear_cache.assert_called_once()
         settings_obj = PracticeSettings.load()
         self.assertEqual(settings_obj.transcription_provider, "openai")
-        self.assertEqual(settings_obj.openai_script_model, "gpt-5.6-terra")
-        self.assertEqual(settings_obj.anthropic_script_model, "claude-sonnet-5")
+        self.assertEqual(settings_obj.openai_script_model, "gpt-6-astra")
+        self.assertEqual(settings_obj.anthropic_script_model, "claude-fable-5-1")
         self.assertEqual(settings_obj.whisper_model_name, "small.en")
         self.assertEqual(settings_obj.whisper_preset, "fast_cpu")
         self.assertEqual(settings_obj.whisper_chunk_seconds, 90)
@@ -2824,16 +2824,16 @@ class PracticeWebTests(TransactionTestCase):
         response = self.client.get(reverse("practice:account"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "GPT-5.6 Sol")
-        self.assertContains(response, "GPT-5.6 Terra")
-        self.assertContains(response, "GPT-5.6 Luna")
-        self.assertContains(response, "GPT-5.5")
-        self.assertNotContains(response, "GPT-5.4")
-        self.assertContains(response, "Claude Sonnet 5")
-        self.assertContains(response, "Claude Opus 4.8")
-        self.assertContains(response, "Claude Fable 5")
-        self.assertContains(response, "Claude Haiku 4.5")
-        self.assertNotContains(response, "Claude Sonnet 4.6")
+        self.assertContains(response, "GPT-6.1 Sol")
+        self.assertContains(response, "GPT-6 Luna")
+        self.assertContains(response, "GPT-6 Astra")
+        self.assertNotContains(response, "Terra")
+        self.assertNotContains(response, "GPT-5")
+        self.assertContains(response, "Claude Sonnet 5.5")
+        self.assertContains(response, "Claude Opus 5.5")
+        self.assertContains(response, "Claude Fable 5.1")
+        self.assertContains(response, "Claude Haiku 5.5")
+        self.assertNotContains(response, "Claude Opus 4.8")
         self.assertContains(response, "Local Whisper tuning")
         self.assertContains(response, "Settings sections")
         self.assertContains(response, "Advanced Whisper parameters")
@@ -2841,34 +2841,67 @@ class PracticeWebTests(TransactionTestCase):
         self.assertNotContains(response, "Autumn")
 
     def test_script_model_defaults_and_choices_match_current_catalog(self):
-        self.assertEqual(settings.OPENAI_SCRIPT_MODEL, "gpt-5.6-luna")
+        self.assertEqual(settings.OPENAI_SCRIPT_MODEL, "gpt-6-luna")
         self.assertEqual(
             settings.OPENAI_SCRIPT_MODEL_CHOICES,
             [
-                ("gpt-5.6-sol", "GPT-5.6 Sol"),
-                ("gpt-5.6-terra", "GPT-5.6 Terra"),
-                ("gpt-5.6-luna", "GPT-5.6 Luna"),
-                ("gpt-5.5", "GPT-5.5"),
+                ("gpt-6.1-sol", "GPT-6.1 Sol"),
+                ("gpt-6-luna", "GPT-6 Luna"),
+                ("gpt-6-astra", "GPT-6 Astra"),
             ],
         )
-        self.assertEqual(settings.ANTHROPIC_SCRIPT_MODEL, "claude-sonnet-5")
+        self.assertEqual(settings.ANTHROPIC_SCRIPT_MODEL, "claude-sonnet-5-5")
         self.assertEqual(
             settings.ANTHROPIC_SCRIPT_MODEL_CHOICES,
             [
-                ("claude-sonnet-5", "Claude Sonnet 5"),
-                ("claude-opus-4-8", "Claude Opus 4.8"),
-                ("claude-fable-5", "Claude Fable 5"),
-                ("claude-haiku-4-5", "Claude Haiku 4.5"),
+                ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+                ("claude-opus-5-5", "Claude Opus 5.5"),
+                ("claude-fable-5-1", "Claude Fable 5.1"),
+                ("claude-haiku-5-5", "Claude Haiku 5.5"),
             ],
         )
         self.assertEqual(
             PracticeSettings._meta.get_field("openai_script_model").default,
-            "gpt-5.6-luna",
+            "gpt-6-luna",
         )
         self.assertEqual(
             PracticeSettings._meta.get_field("anthropic_script_model").default,
-            "claude-sonnet-5",
+            "claude-sonnet-5-5",
         )
+
+    def test_retired_script_models_are_remapped_to_current_ones(self):
+        from importlib import import_module
+
+        from django.apps import apps as django_apps
+
+        migration = import_module("practice.migrations.0022_current_script_models")
+        rows = {
+            "gpt-5.6-sol": "gpt-6.1-sol",
+            "gpt-5.6-terra": "gpt-6-luna",
+            "gpt-5.5": "gpt-6-luna",
+            "gpt-6-astra": "gpt-6-astra",
+        }
+        claude = {
+            "gpt-5.6-sol": "claude-opus-4-8",
+            "gpt-5.6-terra": "claude-fable-5",
+            "gpt-5.5": "claude-haiku-4-5",
+            "gpt-6-astra": "claude-sonnet-5",
+        }
+        users = []
+        for index, old in enumerate(rows):
+            user = get_user_model().objects.create_user(username=f"model-user-{index}")
+            PracticeSettings.objects.create(user=user, openai_script_model=old, anthropic_script_model=claude[old])
+            users.append((user, old))
+
+        migration.remap_models(django_apps, None)
+
+        for user, old in users:
+            settings_obj = PracticeSettings.objects.get(user=user)
+            self.assertEqual(settings_obj.openai_script_model, rows[old])
+            self.assertEqual(
+                settings_obj.anthropic_script_model,
+                migration.ANTHROPIC_RENAMES[claude[old]],
+            )
 
     def test_account_page_clears_whisper_cache_on_request(self):
         with patch("practice.views.clear_local_whisper_cache") as clear_cache:

@@ -212,21 +212,20 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = os.getenv("DJANGO_SECURE_HSTS_PRELOAD", "0") == "1"
 
 SCRIPT_GENERATION_PROVIDER = os.getenv("SCRIPT_GENERATION_PROVIDER", "local_template")
-OPENAI_SCRIPT_MODEL = os.getenv("OPENAI_SCRIPT_MODEL", "gpt-5.6-luna")
+OPENAI_SCRIPT_MODEL = os.getenv("OPENAI_SCRIPT_MODEL", "gpt-6-luna")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_SCRIPT_MODEL = os.getenv("ANTHROPIC_SCRIPT_MODEL", "claude-sonnet-5")
+ANTHROPIC_SCRIPT_MODEL = os.getenv("ANTHROPIC_SCRIPT_MODEL", "claude-sonnet-5-5")
 
 OPENAI_SCRIPT_MODEL_CHOICES = [
-    ("gpt-5.6-sol", "GPT-5.6 Sol"),
-    ("gpt-5.6-terra", "GPT-5.6 Terra"),
-    ("gpt-5.6-luna", "GPT-5.6 Luna"),
-    ("gpt-5.5", "GPT-5.5"),
+    ("gpt-6.1-sol", "GPT-6.1 Sol"),
+    ("gpt-6-luna", "GPT-6 Luna"),
+    ("gpt-6-astra", "GPT-6 Astra"),
 ]
 ANTHROPIC_SCRIPT_MODEL_CHOICES = [
-    ("claude-sonnet-5", "Claude Sonnet 5"),
-    ("claude-opus-4-8", "Claude Opus 4.8"),
-    ("claude-fable-5", "Claude Fable 5"),
-    ("claude-haiku-4-5", "Claude Haiku 4.5"),
+    ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+    ("claude-opus-5-5", "Claude Opus 5.5"),
+    ("claude-fable-5-1", "Claude Fable 5.1"),
+    ("claude-haiku-5-5", "Claude Haiku 5.5"),
 ]
 CODEX_CLIENT_ID = os.getenv("CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 CODEX_AUTH_ISSUER = os.getenv("CODEX_AUTH_ISSUER", "https://auth.openai.com")

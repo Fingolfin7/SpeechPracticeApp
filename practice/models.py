@@ -511,8 +511,8 @@ class PracticeSettings(models.Model):
         default=TRANSCRIPTION_OPENAI,
         choices=TRANSCRIPTION_CHOICES,
     )
-    openai_script_model = models.CharField(max_length=96, default="gpt-5.6-luna")
-    anthropic_script_model = models.CharField(max_length=96, default="claude-sonnet-5")
+    openai_script_model = models.CharField(max_length=96, default="gpt-6-luna")
+    anthropic_script_model = models.CharField(max_length=96, default="claude-sonnet-5-5")
     openai_transcription_model = models.CharField(max_length=96, default="whisper-1")
     tts_precheck_enabled = models.BooleanField(default=True)
     whisper_model_name = models.CharField(max_length=96, default="base.en")

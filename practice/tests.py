@@ -2965,7 +2965,7 @@ class FakeBaselineReader:
 
 class TtsPrecheckTests(TestCase):
     def setUp(self):
-        self.user = get_user_model().objects.create_user(username="prechecker", password="pass-123-xyz")
+        self.user = get_user_model().objects.create_user(username="prechecker")
         self.client.force_login(self.user)
         self.card = ImprovementCard.objects.create(
             user=self.user,

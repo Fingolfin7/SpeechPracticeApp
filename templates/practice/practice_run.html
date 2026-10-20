@@ -175,9 +175,11 @@
           <span>{{ selected_script.tags|join:", " }}</span>
         {% endif %}
       </p>
+      <p class="precheck-note" data-script-precheck{% if not selected_script.precheck_note %} hidden{% endif %}>{{ selected_script.precheck_note }}</p>
       <div class="script-reader" data-script-body>{{ selected_script.body|linebreaks }}</div>
     {% else %}
       <p class="script-meta" data-script-meta><span>Upload or create a script to begin.</span></p>
+      <p class="precheck-note" data-script-precheck hidden></p>
       <div class="script-reader empty" data-script-body>
         <p>Your practice text will appear here after a script is available.</p>
       </div>

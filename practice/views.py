@@ -4,6 +4,7 @@ import re
 import json
 import mimetypes
 import random
+import time
 import uuid
 from datetime import datetime, timedelta
 
@@ -79,6 +80,12 @@ from .services.codex_auth import (
 )
 from .services.session_display import audio_exists, highlighted_session_text, session_segments
 from .services.script_import import import_script_items, parse_script_upload
+from .services.precheck import (
+    STATUS_PASSED as PRECHECK_PASSED,
+    STATUS_SKIPPED as PRECHECK_SKIPPED,
+    precheck_ladder_draft,
+    precheck_script_draft,
+)
 from .services.script_generation import (
     generate_cards_from_self_review,
     generate_ladder_draft,
@@ -1042,6 +1049,7 @@ def script_preview(request, pk: int):
             "source": script.get_source_display(),
             "difficulty": script.difficulty,
             "tags": script.tags or [],
+            "precheck_note": script.precheck_note,
         }
     )
 
@@ -1433,11 +1441,20 @@ def card_delete(request, pk: int):
 def generate_script_for_card(request, pk: int):
     card = get_object_or_404(ImprovementCard, user=request.user, pk=pk)
     provider = request.POST.get("provider") or None
+    started = time.monotonic()
     try:
         draft = generate_script_draft(card, provider_name=provider)
     except Exception as exc:
         messages.error(request, f"Script generation failed: {exc}")
         return redirect("practice:card_detail", pk=card.pk)
+    targets = [card.target_key] if card.target_key else []
+    draft, precheck = precheck_script_draft(
+        draft,
+        user=request.user,
+        targets=targets,
+        provider_name=provider,
+        started=started,
+    )
     script = PracticeScript.objects.create(
         user=request.user,
         title=draft.title,
@@ -1448,6 +1465,7 @@ def generate_script_for_card(request, pk: int):
         tags=[card.kind, card.target_key],
         target_patterns=[{"kind": card.kind, "target": card.target_key}],
         difficulty=2,
+        precheck=precheck.stored(0, draft.body),
     )
     GeneratedPracticeScript.objects.create(
         user=request.user,
@@ -1455,12 +1473,14 @@ def generate_script_for_card(request, pk: int):
         script=script,
         model_provider=draft.provider,
         auth_source=draft.auth_source,
-        prompt_snapshot=draft.prompt_snapshot,
+        prompt_snapshot=_with_revision_prompt(draft.prompt_snapshot, precheck),
     )
     messages.success(
         request,
-        f"Generated a starter practice script for this card using {_generation_source_label(draft.provider, draft.auth_source)}.",
+        f"Generated a starter practice script for this card using {_generation_source_label(draft.provider, draft.auth_source)}."
+        + _precheck_success_suffix(precheck),
     )
+    _precheck_messages(request, precheck, targets)
     if request.POST.get("next") == "practice":
         return redirect(f"{reverse('practice:practice')}?mode=quick&script={script.pk}&card={card.pk}")
     return redirect("practice:scripts")
@@ -1475,11 +1495,21 @@ def generate_practice_ladder(request):
         messages.error(request, "Add or refresh improvement cards before generating a practice ladder.")
         return redirect(f"{reverse('practice:practice')}?mode=quick")
 
+    started = time.monotonic()
     try:
         draft = generate_ladder_draft(cards, theme=theme, provider_name=provider)
     except Exception as exc:
         messages.error(request, f"Practice ladder generation failed: {exc}")
         return redirect(f"{reverse('practice:practice')}?mode=quick")
+    targets = [card.target_key for card in cards if card.target_key]
+    draft, precheck = precheck_ladder_draft(
+        draft,
+        user=request.user,
+        targets=targets,
+        provider_name=provider,
+        started=started,
+    )
+    prompt_snapshot = _with_revision_prompt(draft.prompt_snapshot, precheck)
 
     ladder = PracticeLadder.objects.create(
         user=request.user,
@@ -1489,7 +1519,7 @@ def generate_practice_ladder(request):
         source_ref="cards:" + ",".join(str(card.pk) for card in cards),
         model_provider=draft.provider,
         auth_source=draft.auth_source,
-        prompt_snapshot=draft.prompt_snapshot,
+        prompt_snapshot=prompt_snapshot,
     )
     ladder.cards.set(cards)
     target_patterns = [
@@ -1499,7 +1529,8 @@ def generate_practice_ladder(request):
     ]
     created_steps = []
     used_levels: set[int] = set()
-    for level_draft in sorted(draft.levels, key=lambda item: item.level)[:5]:
+    level_numbers = {}
+    for draft_index, level_draft in sorted(enumerate(draft.levels), key=lambda item: item[1].level)[:5]:
         requested_level = max(1, min(5, int(level_draft.level or len(created_steps) + 1)))
         level = requested_level if requested_level not in used_levels else 0
         if not level:
@@ -1519,7 +1550,9 @@ def generate_practice_ladder(request):
             tags=tags,
             target_patterns=target_patterns,
             difficulty=level,
+            precheck=precheck.stored(draft_index, level_draft.body),
         )
+        level_numbers[draft_index] = level
         step = PracticeLadderStep.objects.create(
             ladder=ladder,
             script=script,
@@ -1536,7 +1569,7 @@ def generate_practice_ladder(request):
                 script=script,
                 model_provider=draft.provider,
                 auth_source=draft.auth_source,
-                prompt_snapshot=draft.prompt_snapshot,
+                prompt_snapshot=prompt_snapshot,
             )
 
     if not created_steps:
@@ -1547,8 +1580,10 @@ def generate_practice_ladder(request):
     first_step = sorted(created_steps, key=lambda item: item.level)[0]
     messages.success(
         request,
-        f"Generated a five-step practice ladder using {_generation_source_label(draft.provider, draft.auth_source)}.",
+        f"Generated a five-step practice ladder using {_generation_source_label(draft.provider, draft.auth_source)}."
+        + _precheck_success_suffix(precheck),
     )
+    _precheck_messages(request, precheck, targets, level_numbers=level_numbers)
     if request.POST.get("next") == "scripts":
         return redirect(f"{reverse('practice:scripts')}?kind=drill")
     return redirect(
@@ -1910,6 +1945,76 @@ def _unique_tags(tags: list[str]) -> list[str]:
         seen.add(clean)
         result.append(clean)
     return result[:12]
+
+
+def _with_revision_prompt(prompt_snapshot: str, precheck) -> str:
+    if not precheck.revision_prompt:
+        return prompt_snapshot
+    return f"{prompt_snapshot}\n\n--- TTS pre-check revision ---\n{precheck.revision_prompt}"
+
+
+def _precheck_success_suffix(precheck) -> str:
+    if precheck.status == PRECHECK_PASSED and not precheck.revised:
+        return " Pre-check passed: a perfect text-to-speech reading transcribed cleanly."
+    return ""
+
+
+def _describe_word_misses(misses) -> str:
+    return ", ".join(miss.describe() for miss in misses)
+
+
+def _precheck_messages(request, precheck, targets: list[str], level_numbers: dict | None = None) -> None:
+    """Tell the learner what the TTS pre-check found and what the model did about it."""
+    if precheck.status == PRECHECK_SKIPPED:
+        if precheck.reason != "disabled":
+            messages.info(request, f"Text-to-speech pre-check skipped: {precheck.reason}.")
+        return
+
+    def where(keys) -> str:
+        if level_numbers is None:
+            return ""
+        levels = sorted(level_numbers[key] for key in keys if key in level_numbers)
+        if not levels:
+            return ""
+        label = "level" if len(levels) == 1 else "levels"
+        return f" in {label} {', '.join(str(level) for level in levels)}"
+
+    fixed = precheck.fixed_misses(targets)
+    if fixed:
+        pronoun = "them" if len(fixed) > 1 else "it"
+        messages.info(
+            request,
+            "Pre-check: a perfect text-to-speech reading came back wrong on "
+            f"{_describe_word_misses(fixed)}, so the model replaced {pronoun}{where(precheck.revised)}.",
+        )
+    remaining = precheck.remaining(targets)
+    if remaining:
+        words = {}
+        for misses in remaining.values():
+            for miss in misses:
+                words.setdefault(miss.word.lower(), miss)
+        reason = f" ({precheck.revision_note})" if precheck.revision_note else ""
+        messages.warning(
+            request,
+            "Pre-check: even a perfect text-to-speech reading still gets "
+            f"{_describe_word_misses(words.values())} wrong{where(remaining.keys())}{reason}. "
+            "Those will likely count as misses however you say them.",
+        )
+    for target in precheck.target_misses(targets):
+        tally = f"{target.failed} of {target.total} times"
+        if target.mostly_failed:
+            messages.warning(
+                request,
+                f"Pre-check: the recognizer got your practice target {target.miss.describe()} wrong "
+                f"{tally} even from a perfect reading, so misses on it are mostly not your "
+                "pronunciation. Consider retiring that card.",
+            )
+        else:
+            messages.info(
+                request,
+                f"Pre-check: a perfect reading still got your practice target {target.miss.describe()} "
+                f"wrong {tally}, so the odd miss on it may be the recognizer rather than you.",
+            )
 
 
 def _generation_source_label(provider: str, auth_source: str) -> str:

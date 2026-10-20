@@ -238,6 +238,7 @@ class AccountSettingsForm(forms.ModelForm):
             "openai_script_model",
             "anthropic_script_model",
             "openai_transcription_model",
+            "tts_precheck_enabled",
             "whisper_model_name",
             "whisper_device",
             "whisper_preset",

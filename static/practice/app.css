@@ -2957,6 +2957,26 @@ select {
   width: auto;
 }
 
+.field-help {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  max-width: 62ch;
+}
+
+.precheck-note {
+  margin: 0 0 12px;
+  padding: 9px 13px;
+  border-radius: var(--r-sm);
+  background: var(--gold-tint);
+  color: var(--gold-ink);
+  font-size: 0.92rem;
+}
+
+.precheck-note[hidden] {
+  display: none;
+}
+
 .api-keys-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

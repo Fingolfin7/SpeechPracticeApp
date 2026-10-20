@@ -286,6 +286,131 @@ def build_self_review_card_prompt(session: PracticeSession, notes: str) -> str:
     )
 
 
+REVISION_SYSTEM_PROMPT = (
+    "You repair read-aloud practice scripts so a speech recognizer can grade them fairly. "
+    "Change as little as possible and follow the output format exactly."
+)
+
+_REVISION_INTRO = (
+    "A text-to-speech voice read your script aloud with perfect pronunciation, and the "
+    "speech recognizer that grades the learner transcribed that reading. The words below "
+    "came back wrong even so, which means the learner would be marked down for them no "
+    "matter how well they speak.\n\n"
+)
+
+_REVISION_RULES = (
+    "Replace or rephrase each failing word with ordinary English that the recognizer will "
+    "spell the same way: avoid invented names, unusual or archaic spellings, numerals, "
+    "abbreviations, and words that sound like other words. If a British spelling came back "
+    "American, use the American spelling. Change nothing you do not have to."
+)
+
+
+def _describe_misses(misses) -> str:
+    return "; ".join(miss.describe() for miss in misses)
+
+
+def _target_list(targets) -> str:
+    quoted = [f'"{target}"' for target in targets if target]
+    return ", ".join(quoted) if quoted else "none"
+
+
+def build_ladder_revision_prompt(
+    draft: GeneratedLadderDraft,
+    targets: list[str],
+    misses_by_level: dict,
+) -> str:
+    blocks = []
+    for level in draft.levels:
+        misses = misses_by_level.get(level.level)
+        if not misses:
+            continue
+        blocks.append(
+            f"Level {level.level} - {level.title}\n"
+            f"Words that failed: {_describe_misses(misses)}\n"
+            f"Current lines:\n{level.body}"
+        )
+    return (
+        _REVISION_INTRO
+        + "\n\n".join(blocks)
+        + "\n\nRewrite only these levels. "
+        + _REVISION_RULES
+        + f" Keep the practice targets ({_target_list(targets)}), and keep each level's "
+        "story beat, difficulty, and line count.\n\n"
+        "Return strict JSON only. Schema:\n"
+        '{"levels": [{"level": 2, "title": "short level title", "focus": ["target"], '
+        '"lines": ["line 1", "line 2", "..."]}]}'
+    )
+
+
+def build_script_revision_prompt(
+    draft: GeneratedScriptDraft,
+    targets: list[str],
+    misses,
+) -> str:
+    return (
+        _REVISION_INTRO
+        + f"Words that failed: {_describe_misses(misses)}\n"
+        f"Current script:\n{draft.body}\n\n"
+        + _REVISION_RULES
+        + f" Keep the practice targets ({_target_list(targets)}) and the line count.\n\n"
+        "Return exactly this format and nothing else:\n"
+        f"TITLE: {draft.title}\n"
+        "SCRIPT:\n"
+        "<line 1>\n"
+        "..."
+    )
+
+
+def revise_ladder_levels(
+    provider: ScriptGenerationProvider,
+    draft: GeneratedLadderDraft,
+    targets: list[str],
+    misses_by_level: dict,
+) -> tuple[list[LadderLevelDraft], str]:
+    """Ask the generating model to rewrite the levels whose words failed the pre-check."""
+    complete = getattr(provider, "complete", None)
+    if complete is None or not misses_by_level:
+        return [], ""
+    prompt = build_ladder_revision_prompt(draft, targets, misses_by_level)
+    text = complete(system=REVISION_SYSTEM_PROMPT, user_prompt=prompt, max_output_tokens=4000)
+    try:
+        raw = json.loads(_strip_json_fence(text))
+    except json.JSONDecodeError:
+        return [], prompt
+    rows = raw.get("levels") if isinstance(raw, dict) else raw
+    if not isinstance(rows, list):
+        return [], prompt
+    return [level for level in _parse_level_rows(rows) if level.level in misses_by_level], prompt
+
+
+def revise_script_draft(
+    provider: ScriptGenerationProvider,
+    draft: GeneratedScriptDraft,
+    targets: list[str],
+    misses,
+) -> tuple[GeneratedScriptDraft | None, str]:
+    """Ask the generating model to rewrite a drill whose words failed the pre-check."""
+    complete = getattr(provider, "complete", None)
+    if complete is None or not misses:
+        return None, ""
+    prompt = build_script_revision_prompt(draft, targets, misses)
+    text = complete(system=REVISION_SYSTEM_PROMPT, user_prompt=prompt, max_output_tokens=2000)
+    title, body = parse_generated_script(text, fallback_title=draft.title)
+    if not body.strip():
+        return None, prompt
+    return (
+        GeneratedScriptDraft(
+            title=title,
+            body=body,
+            prompt_snapshot=draft.prompt_snapshot,
+            provider=draft.provider,
+            auth_source=draft.auth_source,
+        ),
+        prompt,
+    )
+
+
 class LocalTemplateScriptProvider:
     name = "local_template"
 
@@ -351,7 +476,7 @@ class OpenAIScriptProvider:
             model,
             system=DRILL_SYSTEM_PROMPT,
             user_prompt=prompt,
-            max_output_tokens=700,
+            max_output_tokens=2000,
         )
         title, body = parse_generated_script(text, fallback_title=f"Drill: {card.display_title}")
         return GeneratedScriptDraft(
@@ -379,7 +504,7 @@ class OpenAIScriptProvider:
             model,
             system=LADDER_SYSTEM_PROMPT,
             user_prompt=prompt,
-            max_output_tokens=2200,
+            max_output_tokens=6000,
         )
         title, ladder_theme, levels = parse_generated_ladder(text, fallback_title="Generated Practice Ladder")
         return GeneratedLadderDraft(
@@ -390,6 +515,20 @@ class OpenAIScriptProvider:
             provider=f"openai:{model}",
             auth_source=auth_source,
         )
+
+    def complete(self, *, system: str, user_prompt: str, max_output_tokens: int) -> str:
+        app_settings = _practice_settings(self.user)
+        model = (app_settings.openai_script_model if app_settings else None) or settings.OPENAI_SCRIPT_MODEL
+        from openai import OpenAI
+
+        text, _auth_source = self._generate_text(
+            OpenAI,
+            model,
+            system=system,
+            user_prompt=user_prompt,
+            max_output_tokens=max_output_tokens,
+        )
+        return text
 
     def _generate_text(
         self,
@@ -490,30 +629,16 @@ class AnthropicScriptProvider:
         self.user = user
 
     def generate(self, card: ImprovementCard) -> GeneratedScriptDraft:
-        app_settings = _practice_settings(self.user or card.user)
-        api_key = (app_settings.get_secret("anthropic_api_key") if app_settings else None) or settings.ANTHROPIC_API_KEY
-        model = (app_settings.anthropic_script_model if app_settings else None) or settings.ANTHROPIC_SCRIPT_MODEL
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY is required for Anthropic script generation.")
-        try:
-            import anthropic
-        except ImportError as exc:
-            raise RuntimeError("Install the optional 'anthropic' package to use Anthropic script generation.") from exc
-
+        model = self._model(self.user or card.user)
         prompt = build_generation_prompt(card)
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=model,
-            max_tokens=700,
+        text = self.complete(
             system=DRILL_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
+            user_prompt=prompt,
+            max_output_tokens=2000,
+            user=self.user or card.user,
+            purpose="script generation",
         )
-        parts = []
-        for block in getattr(message, "content", []) or []:
-            text = getattr(block, "text", None)
-            if text:
-                parts.append(text)
-        title, body = parse_generated_script("\n".join(parts), fallback_title=f"Drill: {card.display_title}")
+        title, body = parse_generated_script(text, fallback_title=f"Drill: {card.display_title}")
         return GeneratedScriptDraft(
             title=title,
             body=body,
@@ -527,32 +652,17 @@ class AnthropicScriptProvider:
         cards: list[ImprovementCard],
         theme: str = "",
     ) -> GeneratedLadderDraft:
-        app_settings = _practice_settings(self.user or (cards[0].user if cards else None))
-        api_key = (app_settings.get_secret("anthropic_api_key") if app_settings else None) or settings.ANTHROPIC_API_KEY
-        model = (app_settings.anthropic_script_model if app_settings else None) or settings.ANTHROPIC_SCRIPT_MODEL
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY is required for Anthropic ladder generation.")
-        try:
-            import anthropic
-        except ImportError as exc:
-            raise RuntimeError("Install the optional 'anthropic' package to use Anthropic ladder generation.") from exc
+        user = self.user or (cards[0].user if cards else None)
+        model = self._model(user)
         prompt = build_ladder_generation_prompt(cards, theme)
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=model,
-            max_tokens=2200,
+        text = self.complete(
             system=LADDER_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
+            user_prompt=prompt,
+            max_output_tokens=6000,
+            user=user,
+            purpose="ladder generation",
         )
-        parts = []
-        for block in getattr(message, "content", []) or []:
-            text = getattr(block, "text", None)
-            if text:
-                parts.append(text)
-        title, ladder_theme, levels = parse_generated_ladder(
-            "\n".join(parts),
-            fallback_title="Generated Practice Ladder",
-        )
+        title, ladder_theme, levels = parse_generated_ladder(text, fallback_title="Generated Practice Ladder")
         return GeneratedLadderDraft(
             title=title,
             theme=ladder_theme,
@@ -561,6 +671,42 @@ class AnthropicScriptProvider:
             provider=f"anthropic:{model}",
             auth_source="api_key",
         )
+
+    def complete(
+        self,
+        *,
+        system: str,
+        user_prompt: str,
+        max_output_tokens: int,
+        user=None,
+        purpose: str = "script generation",
+    ) -> str:
+        app_settings = _practice_settings(user or self.user)
+        api_key = (app_settings.get_secret("anthropic_api_key") if app_settings else None) or settings.ANTHROPIC_API_KEY
+        if not api_key:
+            raise RuntimeError(f"ANTHROPIC_API_KEY is required for Anthropic {purpose}.")
+        try:
+            import anthropic
+        except ImportError as exc:
+            raise RuntimeError(f"Install the optional 'anthropic' package to use Anthropic {purpose}.") from exc
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model=self._model(user or self.user),
+            max_tokens=max_output_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        parts = []
+        for block in getattr(message, "content", []) or []:
+            text = getattr(block, "text", None)
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+
+    @staticmethod
+    def _model(user) -> str:
+        app_settings = _practice_settings(user)
+        return (app_settings.anthropic_script_model if app_settings else None) or settings.ANTHROPIC_SCRIPT_MODEL
 
 
 def generate_local_template(card: ImprovementCard) -> GeneratedScriptDraft:
@@ -734,14 +880,22 @@ def parse_generated_ladder(text: str, fallback_title: str) -> tuple[str, str, li
             cleaned = cleaned[4:].strip()
     try:
         raw = json.loads(cleaned)
-    except json.JSONDecodeError:
-        return fallback_title, "Generated practice ladder", [
-            LadderLevelDraft(level=1, title="Generated Drill", body=cleaned or "Read this line clearly.")
-        ]
+    except json.JSONDecodeError as exc:
+        # Usually a reply cut off at the output cap; saving the raw JSON as a rung is worse than failing.
+        raise ValueError("the model's ladder JSON was incomplete or invalid. Try again") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("the model did not return a ladder object. Try again")
     title = str(raw.get("title") or fallback_title).strip()[:255]
     theme = str(raw.get("theme") or "").strip()
+    levels = _parse_level_rows(raw.get("levels") or [])
+    return title or fallback_title, theme, levels or [
+        LadderLevelDraft(level=1, title="Generated Drill", body="Read this line clearly.")
+    ]
+
+
+def _parse_level_rows(rows) -> list[LadderLevelDraft]:
     levels = []
-    for idx, row in enumerate(raw.get("levels") or [], start=1):
+    for idx, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
             continue
         try:
@@ -761,9 +915,7 @@ def parse_generated_ladder(text: str, fallback_title: str) -> tuple[str, str, li
             focus = tuple(str(item).strip() for item in focus_raw if str(item).strip())
         if body:
             levels.append(LadderLevelDraft(level=level, title=level_title, body=body, focus=focus))
-    return title or fallback_title, theme, levels or [
-        LadderLevelDraft(level=1, title="Generated Drill", body="Read this line clearly.")
-    ]
+    return levels
 
 
 def parse_self_review_cards(

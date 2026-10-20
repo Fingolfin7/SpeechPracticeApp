@@ -28,6 +28,7 @@
   const scriptMeta = document.querySelector("[data-script-meta]");
   const scriptWordCount = document.querySelector("[data-script-word-count]");
   const scriptBody = document.querySelector("[data-script-body]");
+  const scriptPrecheck = document.querySelector("[data-script-precheck]");
   const ladderSelect = document.querySelector("[data-ladder-select]");
   const scoreButton = form.querySelector("[data-score-button]");
   const scoreReason = form.querySelector("[data-score-reason]");
@@ -107,6 +108,14 @@
     });
   }
 
+  function renderPrecheck(note) {
+    if (!scriptPrecheck) {
+      return;
+    }
+    scriptPrecheck.textContent = note;
+    scriptPrecheck.hidden = !note;
+  }
+
   function renderMeta(script) {
     const values = [
       script.practice_kind,
@@ -133,6 +142,7 @@
       scriptWordCount.textContent = "No script selected";
       scriptMeta.replaceChildren();
       renderBody("Your practice text will appear here after a script is available.");
+      renderPrecheck("");
       return;
     }
 
@@ -154,6 +164,7 @@
       scriptWordCount.textContent = `${script.word_count} words`;
       renderMeta(script);
       renderBody(script.body);
+      renderPrecheck(script.precheck_note || "");
     } catch (error) {
       if (requestId === previewRequestId) {
         scriptWordCount.textContent = "Preview unavailable";

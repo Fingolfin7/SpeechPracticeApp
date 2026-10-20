@@ -126,6 +126,8 @@ class PracticeScript(models.Model):
     tags = models.JSONField(default=list, blank=True)
     target_patterns = models.JSONField(default=list, blank=True)
     difficulty = models.PositiveSmallIntegerField(default=1)
+    # TTS baseline pre-check of generated scripts (services/precheck.py); empty = not checked.
+    precheck = models.JSONField(default=dict, blank=True)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
@@ -146,6 +148,32 @@ class PracticeScript(models.Model):
     @property
     def word_count(self) -> int:
         return len(self.body.split())
+
+    def body_digest(self) -> str:
+        return hashlib.sha1((self.body or "").encode("utf-8")).hexdigest()[:16]
+
+    @property
+    def precheck_misses(self) -> list[dict]:
+        """Words a perfect TTS reading of the current body still got wrong."""
+        precheck = self.precheck or {}
+        if precheck.get("body_digest") != self.body_digest():
+            return []
+        return [row for row in precheck.get("misses") or [] if row.get("word")]
+
+    @property
+    def precheck_note(self) -> str:
+        misses = self.precheck_misses
+        if not misses:
+            return ""
+        shown = []
+        for row in misses[:6]:
+            heard = row.get("heard")
+            shown.append(f'"{row["word"]}" (heard as "{heard}")' if heard else f'"{row["word"]}" (dropped)')
+        more = f" and {len(misses) - 6} more" if len(misses) > 6 else ""
+        return (
+            "Pre-check: even a perfect text-to-speech reading of this script came back wrong on "
+            f"{', '.join(shown)}{more}. Misses on those are the recognizer, not you."
+        )
 
 
 class ImprovementCard(models.Model):
@@ -486,6 +514,7 @@ class PracticeSettings(models.Model):
     openai_script_model = models.CharField(max_length=96, default="gpt-5.6-luna")
     anthropic_script_model = models.CharField(max_length=96, default="claude-sonnet-5")
     openai_transcription_model = models.CharField(max_length=96, default="whisper-1")
+    tts_precheck_enabled = models.BooleanField(default=True)
     whisper_model_name = models.CharField(max_length=96, default="base.en")
     whisper_device = models.CharField(
         max_length=16,

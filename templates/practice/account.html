@@ -39,6 +39,8 @@
           <p>{{ form.anthropic_script_model.label_tag }}{{ form.anthropic_script_model }}</p>
           <p>{{ form.openai_transcription_model.label_tag }}{{ form.openai_transcription_model }}</p>
         </div>
+        <label class="check-row">{{ form.tts_precheck_enabled }} Pre-check generated scripts with a text-to-speech reading</label>
+        <p class="field-help">Before a drill or ladder is saved, a TTS voice reads it and your transcription engine transcribes it. Words that fail even then are sent back to the model to replace. Uses your OpenAI API key, about 1&cent; per level.</p>
       </fieldset>
 
       <fieldset class="settings-section" id="settings-whisper">

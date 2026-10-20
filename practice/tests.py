@@ -2940,3 +2940,179 @@ class PracticeWebTests(TransactionTestCase):
                     pass
         SessionError.objects.all().delete()
         PracticeSession.objects.all().delete()
+
+
+class FakeBaselineReader:
+    """Stands in for TTS + Whisper: "hears" the text with a few fixed confusions."""
+
+    confusions = {"Vael": "Vale", "answerd": "answered"}
+
+    def __init__(self, user=None):
+        self.checked = []
+
+    def check_many(self, texts):
+        from .services.precheck import PrecheckResult, find_baseline_misses
+
+        results = {}
+        for key, text in texts.items():
+            self.checked.append(text)
+            heard = text
+            for written, spoken in self.confusions.items():
+                heard = heard.replace(written, spoken)
+            results[key] = PrecheckResult(transcript=heard, misses=find_baseline_misses(text, heard), text=text)
+        return results
+
+
+class TtsPrecheckTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="prechecker", password="pass-123-xyz")
+        self.client.force_login(self.user)
+        self.card = ImprovementCard.objects.create(
+            user=self.user,
+            title="Word: crisp",
+            kind=ImprovementCard.KIND_WORD,
+            target_key="crisp",
+        )
+
+    def _ladder_draft(self):
+        from .services.script_generation import GeneratedLadderDraft, LadderLevelDraft
+
+        bodies = {
+            1: "A crisp wind crossed the dock.",
+            2: "Sergeant Vael kept the crisp ledger.\nEvery crate was answerd for.",
+            3: "The crisp flag snapped above the gate.",
+        }
+        return GeneratedLadderDraft(
+            title="Dockside Ladder",
+            theme="A night at the docks",
+            levels=tuple(
+                LadderLevelDraft(level=level, title=f"Level {level}", body=body, focus=("crisp",))
+                for level, body in bodies.items()
+            ),
+            prompt_snapshot="original ladder prompt",
+            provider="openai:test-model",
+            auth_source="api_key",
+        )
+
+    def _post_ladder(self, provider):
+        with (
+            patch("practice.views.generate_ladder_draft", return_value=self._ladder_draft()),
+            patch("practice.services.precheck.BaselineReader", FakeBaselineReader),
+            patch("practice.services.precheck.get_script_generation_provider", return_value=provider),
+        ):
+            return self.client.post(
+                reverse("practice:generate_ladder"),
+                {"provider": "openai", "cards": [str(self.card.pk)]},
+                follow=True,
+            )
+
+    def test_find_baseline_misses_lists_each_failing_word_once(self):
+        from .services.precheck import WordMiss, find_baseline_misses
+
+        misses = find_baseline_misses(
+            "Vael met Vael on the rockcrete quay at dawn.",
+            "Vale met Vale on the rock crete at dawn.",
+        )
+
+        # Split compounds are tolerated exactly like scoring; repeats are reported once.
+        self.assertEqual(misses, (WordMiss("Vael", "Vale"), WordMiss("quay", "")))
+
+    def test_truncated_ladder_json_is_an_error_not_a_rung(self):
+        with self.assertRaises(ValueError):
+            parse_generated_ladder('{"title": "Cut off", "levels": [{"level": 1, "lines": ["A li', fallback_title="x")
+
+    def test_target_misses_count_how_often_the_target_failed(self):
+        from .services.precheck import PrecheckReport, PrecheckResult, find_baseline_misses
+
+        results = {}
+        for key, (text, heard) in enumerate(
+            [
+                ("The crisp air. A crisp coat.", "The crisps air. A crisp coat."),
+                ("Crisp light on crisp snow.", "Crisp light on crisp snow."),
+            ]
+        ):
+            results[key] = PrecheckResult(transcript=heard, misses=find_baseline_misses(text, heard), text=text)
+        report = PrecheckReport(status="flagged", results=results)
+
+        [target] = report.target_misses(["crisp"])
+        self.assertEqual((target.failed, target.total), (1, 4))
+        self.assertFalse(target.mostly_failed)
+        self.assertEqual(report.remaining(["crisp"]), {})
+
+    def test_ladder_precheck_tells_the_model_which_words_failed(self):
+        provider = SimpleNamespace(
+            complete=Mock(
+                return_value=(
+                    '{"levels": [{"level": 2, "title": "Level 2", "focus": ["crisp"], '
+                    '"lines": ["Sergeant Mara kept the crisp ledger.", "Every crate was counted."]}]}'
+                )
+            )
+        )
+
+        response = self._post_ladder(provider)
+
+        prompt = provider.complete.call_args.kwargs["user_prompt"]
+        self.assertIn("Level 2", prompt)
+        self.assertIn('"Vael" (heard as "Vale")', prompt)
+        self.assertIn('"answerd" (heard as "answered")', prompt)
+        self.assertNotIn("Level 1 -", prompt)
+        step = PracticeLadderStep.objects.get(ladder__user=self.user, level=2)
+        self.assertIn("Sergeant Mara", step.script.body)
+        self.assertEqual(step.script.precheck["status"], "passed")
+        self.assertTrue(step.script.precheck["revised"])
+        self.assertEqual(step.script.precheck_note, "")
+        self.assertIn("TTS pre-check revision", step.ladder.prompt_snapshot)
+        self.assertContains(response, "so the model replaced them in level 2")
+
+    def test_ladder_precheck_warns_about_words_that_still_fail(self):
+        FakeBaselineReader.confusions = {"Vael": "Vale", "answerd": "answered", "crisp": "crisps"}
+        self.addCleanup(setattr, FakeBaselineReader, "confusions", {"Vael": "Vale", "answerd": "answered"})
+        provider = SimpleNamespace(complete=Mock(return_value="not json"))
+
+        response = self._post_ladder(provider)
+
+        self.assertContains(response, "still gets &quot;Vael&quot; (heard as &quot;Vale&quot;)")
+        self.assertContains(response, "the model did not return usable rewrites")
+        self.assertContains(response, "practice target &quot;crisp&quot; (heard as &quot;crisps&quot;) wrong 3 of 3 times")
+        self.assertContains(response, "Consider retiring that card.")
+        # The target is never sent to the model as a word to replace.
+        self.assertNotIn('"crisp" (heard', provider.complete.call_args.kwargs["user_prompt"])
+        step = PracticeLadderStep.objects.get(ladder__user=self.user, level=2)
+        self.assertIn('"Vael" (heard as "Vale")', step.script.precheck_note)
+        practice_page = self.client.get(
+            reverse("practice:practice"),
+            {"mode": "quick", "ladder": step.ladder_id, "level": 2, "script": step.script_id},
+        )
+        self.assertContains(practice_page, "Misses on those are the recognizer, not you.")
+        preview = self.client.get(reverse("practice:script_preview", args=[step.script_id])).json()
+        self.assertIn("Vael", preview["precheck_note"])
+        # Editing the script invalidates the stored pre-check.
+        step.script.body = "A brand new line."
+        self.assertEqual(step.script.precheck_note, "")
+
+    @override_settings(OPENAI_API_KEY="")
+    def test_drill_precheck_is_skipped_without_an_openai_key(self):
+        response = self.client.post(
+            reverse("practice:generate_script", args=[self.card.pk]),
+            {"provider": "local_template"},
+            follow=True,
+        )
+
+        self.assertContains(response, "Text-to-speech pre-check skipped: it needs an OpenAI API key")
+        script = PracticeScript.objects.get(source_ref=f"card:{self.card.pk}")
+        self.assertEqual(script.precheck, {})
+
+    def test_drill_precheck_can_be_turned_off(self):
+        settings_obj = PracticeSettings.load(self.user)
+        settings_obj.tts_precheck_enabled = False
+        settings_obj.save()
+
+        with patch("practice.services.precheck.BaselineReader") as reader:
+            response = self.client.post(
+                reverse("practice:generate_script", args=[self.card.pk]),
+                {"provider": "local_template"},
+                follow=True,
+            )
+
+        reader.assert_not_called()
+        self.assertNotContains(response, "pre-check")

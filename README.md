@@ -26,6 +26,10 @@ SpeechPractice is a local Django web app for deliberate speaking practice. It gi
 
 The current branch is the Django rebuild. The old Qt desktop GUI has been removed; use `manage.py` or `run_server.bat` to run the web app.
 
+## Native-Audio Evaluation Experiment (Proposed)
+
+An isolated [native-audio evaluation specification](docs/native-audio-evaluation-spec.md) lives on the `experiment/native-audio-evaluation` branch. Its aim is to **replace**, rather than supplement, the Whisper-based score in an experimental workflow: record audio, pass the actual recording plus a standing evaluation prompt to an audio-native model, then receive intelligibility ratings and specific observations of stumbling points. This is a **proposal only**, not an implemented or validated speech-quality metric. `master` retains the existing Whisper pipeline.
+
 ## Requirements
 
 - Python 3.10-3.12. This checkout usually uses `.venv312`.

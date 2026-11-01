@@ -1,0 +1,21 @@
+{% extends "practice/base.html" %}
+{% load static %}
+{% block title %}Experimental audio | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-shell">
+  <h1>Experimental audio assessment</h1>
+  <p>This early experiment listens to your recording directly. Its feedback and ratings are exploratory and unvalidated, not a diagnosis. They are separate from your existing scores.</p>
+  <p>When you choose Assess, your recording and any reference are sent to OpenAI GPT Audio 1.5 for processing. OpenAI's <a href="https://developers.openai.com/api/docs/guides/your-data" target="_blank" rel="noopener">data retention policies</a> apply. You own and can delete your saved recordings and assessments here; deletion here does not necessarily remove provider-retained data.</p>
+  <form action="{% url 'practice:native_audio_create' %}" method="post" enctype="multipart/form-data" id="native-audio-form">
+    {% csrf_token %}
+    <p><button type="button" id="record">Record</button> <button type="button" id="stop" disabled>Stop</button> <span id="record-status" role="status"></span></p>
+    <audio id="preview" controls hidden></audio>
+    <p><label for="audio">Recording (up to 120 seconds and 10 MB)</label><br><input id="audio" name="audio" type="file" accept="audio/webm,audio/ogg,audio/mp4,audio/wav,audio/mpeg,audio/x-wav" required></p>
+    <p><label for="reference">Optional reference passage (off by default; up to 5,000 characters)</label><br><textarea id="reference" name="reference" maxlength="5000" rows="4"></textarea></p>
+    <button type="submit">Save recording</button>
+  </form>
+  <h2>Saved recordings</h2>
+  <ul>{% for take in takes %}<li><a href="{% url 'practice:native_audio_take' take.pk %}">Recording {{ take.pk }} · {{ take.created_at }}</a></li>{% empty %}<li>No recordings yet.</li>{% endfor %}</ul>
+</section>
+<script src="{% static 'practice/native_audio.js' %}" defer></script>
+{% endblock %}

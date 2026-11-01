@@ -594,3 +594,39 @@ class PracticeSettings(models.Model):
             "codex_token_bundle": "codex_token_bundle_enc",
         }
         return bool(getattr(self, allowed[field]))
+
+class NativeAudioTake(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="native_audio_takes")
+    created_at = models.DateTimeField(auto_now_add=True)
+    original_path = models.CharField(max_length=500)
+    content_type = models.CharField(max_length=50, default="audio/webm")
+    wav_path = models.CharField(max_length=500, blank=True)
+    wav_sha256 = models.CharField(max_length=64, blank=True)
+    duration_seconds = models.FloatField(null=True, blank=True)
+    reference = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+
+class NativeAudioAssessment(models.Model):
+    take = models.ForeignKey(NativeAudioTake, on_delete=models.CASCADE, related_name="assessments")
+    created_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, default="running")
+    submission_id = models.UUIDField(unique=True, null=True, editable=False)
+    prompt_version = models.CharField(max_length=32)
+    prompt_text = models.TextField()
+    prompt_sha256 = models.CharField(max_length=64)
+    requested_model = models.CharField(max_length=100)
+    resolved_model = models.CharField(max_length=100, blank=True)
+    parameters = models.JSONField(default=dict)
+    request_id = models.CharField(max_length=200, blank=True)
+    usage = models.JSONField(default=dict)
+    sent_audio_sha256 = models.CharField(max_length=64, blank=True)
+    result = models.JSONField(default=dict)
+    raw_text = models.TextField(blank=True)
+    error = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [models.UniqueConstraint(fields=["take"], condition=models.Q(status__in=["pending", "running"]), name="native_audio_one_active_per_take")]

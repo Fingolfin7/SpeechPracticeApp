@@ -1,0 +1,30 @@
+{% extends "practice/base.html" %}
+{% block title %}Experimental recording | SpeechPractice{% endblock %}
+{% block content %}
+<section class="page-shell">
+  <p><a href="{% url 'practice:native_audio' %}">← Experimental audio</a></p>
+  <h1>Experimental recording {{ take.pk }}</h1>
+  <audio controls preload="metadata" src="{% url 'practice:native_audio_play' take.pk %}"></audio>
+  {% if take.reference %}<h2>Reference provided</h2><p>{{ take.reference|linebreaksbr }}</p>{% else %}<p>No reference provided.</p>{% endif %}
+  {% if active %}<p>An assessment is running. Reload this page to check its status.</p>
+    {% if recoverable %}<form method="post" action="{% url 'practice:native_audio_recover' take.pk %}">{% csrf_token %}<p>If the request was interrupted, you can mark this attempt interrupted. The original request may still have incurred charges; this does not resend it.</p><button type="submit">Mark stale attempt interrupted</button></form>{% endif %}
+  {% else %}
+    <form method="post" action="{% url 'practice:native_audio_assess' take.pk %}">{% csrf_token %}<input type="hidden" name="submission_id" value="{{ submission_id }}"><p>Each assessment sends audio to OpenAI and may incur API charges. A retry creates a new assessment.</p><p>This experimental request runs while the server process remains active. A browser, proxy, or server timeout may interrupt the result; check this page before retrying.</p><button type="submit">Assess recording</button></form>
+    <form method="post" action="{% url 'practice:native_audio_delete' take.pk %}" onsubmit="return confirm('Delete this recording and all its experimental assessments?')">{% csrf_token %}<button type="submit">Delete recording and assessments</button></form>
+  {% endif %}
+  <h2>Experimental assessments</h2>
+  {% for assessment in take.assessments.all %}
+    <article>
+      <h3>{{ assessment.created_at }} · {{ assessment.status }}</h3>
+      {% if assessment.status == 'complete' %}
+        <p>Experimental ratings (1–5): intelligibility {{ assessment.result.overall_intelligibility }}, articulation {{ assessment.result.articulation }}, pacing {{ assessment.result.pacing }}.</p>
+        <h4>Observations</h4><ul>{% for item in assessment.result.observations %}<li>{{ item }}</li>{% empty %}<li>No issue reported.</li>{% endfor %}</ul>
+        <h4>Strengths</h4><ul>{% for item in assessment.result.strengths %}<li>{{ item }}</li>{% empty %}<li>None reported.</li>{% endfor %}</ul>
+        <h4>Next steps</h4><ul>{% for item in assessment.result.next_steps %}<li>{{ item }}</li>{% empty %}<li>None reported.</li>{% endfor %}</ul>
+        <p>Uncertainty: {{ assessment.result.uncertainty }}</p>
+      {% else %}<p>{{ assessment.error }}</p>{% endif %}
+      <details><summary>Assessment audit details</summary><p>Prompt {{ assessment.prompt_version }} · SHA-256 {{ assessment.prompt_sha256 }}</p><p>Requested model {{ assessment.requested_model }} · returned model {{ assessment.resolved_model|default:"unavailable" }}</p><p>Converted WAV SHA-256 {{ take.wav_sha256|default:"unavailable" }} · duration {{ take.duration_seconds|default:"unavailable" }} seconds</p><p>Request audio SHA-256 {{ assessment.sent_audio_sha256|default:"unavailable" }} · request ID {{ assessment.request_id|default:"unavailable" }}</p><p>Parameters: {{ assessment.parameters }} · usage: {{ assessment.usage }}</p><pre style="white-space:pre-wrap">{{ assessment.prompt_text }}</pre></details>
+    </article>
+  {% empty %}<p>No assessments yet.</p>{% endfor %}
+</section>
+{% endblock %}

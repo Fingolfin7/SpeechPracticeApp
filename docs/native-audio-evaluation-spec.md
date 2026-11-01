@@ -1,65 +1,26 @@
-# Experimental spec: native-audio speech assessment
+# Experimental native-audio assessment
 
-Status: **proposal / unimplemented**, on `experiment/native-audio-evaluation`. This branch is an isolated replacement experiment, **not** a Whisper add-on to the existing scoring pipeline. No production scoring change is implied by this document.
+Status: **implemented as an isolated, undeployed MVP**. Add a deployment feature gate and decide who can access it **before merging or deploying**. No production change or validation is implied.
 
-## Goal
+## Flow and boundaries
 
-Evaluate a speaker's **human-facing intelligibility and delivery from their recorded audio**, not whether a speech recognizer can recover a known script. Give the user a short rating, specific evidence of where delivery became difficult to follow, and actionable guidance. The primary user is practising clearer spoken English, particularly articulation and mumbling.
+Authenticated users record or upload a take, listen to it, optionally supply a reference (empty by default), and explicitly request an assessment. The server sends the converted audio directly to `gpt-audio-1.5` through Chat Completions with text-only output. There is no Whisper call, transcript-derived metric, delegated model, automatic pairwise comparison or trend. Legacy sessions, errors, cards, ladders and scores are untouched. Experimental 1–5 ratings reflect unvalidated model judgments, not clinical measurements or direct human listener judgments.
 
-## Minimal user flow (first prototype)
+The original recording and the exact 24 kHz mono PCM WAV sent to OpenAI are stored separately and deleted along with assessments when the user deletes the take. Recordings are limited to 10 MB and 120 seconds; ffmpeg must be installed. Conversion and provider failures retain the recording. Explicit retry creates a new assessment and can incur another charge. A unique submission ID and one-active-assessment constraint guard duplicate requests. SDK automatic retries are disabled. An attempt still running after five minutes may be explicitly marked interrupted; it is never automatically resent, and a provider call may have incurred charges even if the outcome is unknown.
 
-1. Open a simple experimental recording page (existing browser microphone capture may be reused).
-2. Optionally paste/select a reference passage. The reference is context for detecting where words may have stumbled; it must **not** cause the model to assume that unclear sounds were articulated clearly.
-3. Press Record, speak, then press Stop. Show playback and let the user submit or discard the take.
-4. Send **audio itself** plus a versioned standing evaluation prompt to an audio-native model. Do **not** first turn it into a Whisper transcript or calculate WER/CER/clarity from a transcript.
-5. Show a compact report: overall intelligibility, articulation, pacing, specific audible stumbling points, and two concrete things to practise next.
-6. Save the recording reference, model identifier, prompt version, optional passage, assessment, and any errors. Allow replay and comparison between takes.
+This prototype performs assessment during the web request. It requires the Django worker to stay alive, and a browser, proxy or server timeout can interrupt the request before the provider responds. Check attempt status before retrying. Use durable background processing and review worker/proxy timeouts before deployment; a disconnected or killed worker does not prove the provider did not process the request.
 
-For a first pass, use the API model `gpt-live-1` for a session-based proof of concept if its actual API flow supports the intended scoring response. **GPT-Live-1.1 is the ChatGPT product's voice-model name, not a separately documented API SKU**. Because Live is optimised for continuous conversation and may delegate reasoning, compare a simpler **recording-in, assessment-out** experiment with `gpt-audio-1.5` over Chat Completions before choosing an API implementation. Avoid claiming these models give clinically validated articulation scores.
+The audio and optional reference go to OpenAI when the user assesses. `store=false` is requested but does not eliminate all provider retention: [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data) describe account-dependent retention and exceptions. Users own their recordings and may delete app-held copies; app deletion cannot promise deletion of provider-retained data. Access to takes, playback, assessment and deletion is authenticated and scoped to the owner.
 
-## Draft evaluation prompt (version 0)
+The prompt instructs the model to listen to the audio and treat any reference as untrusted context, not evidence that a sound was clearly articulated. Structured outputs are not supported by this model. The application validates the response schema; refusals, abstentions, incomplete responses, provider errors and malformed output receive no structured ratings. Timestamps and accuracy are not guaranteed. Per attempt, it records the prompt version, full prompt including reference and hash, requested and returned model, request parameters, request ID and usage when returned, and the hash of the exact WAV placed in the request. A hash recorded before an error does not prove OpenAI received it. This supports auditability, not deterministic reproducibility or proof of model interpretation.
 
-> You are a speech-intelligibility practice evaluator. Listen to the **actual audio** as a first-time English-speaking listener. Judge how easy the speaker is to understand, independently of how well an automatic transcription system might reconstruct the words. If a reference passage is provided, use it only to locate intended phrases, not to excuse unclear delivery. Give evidence-based, specific feedback about audible articulation, consonant endings, word boundaries, pacing, hesitations, and relevant pauses. Do not infer a problem you cannot hear; do not diagnose disorders or make claims about personality, native language, or identity. Different accents are acceptable; assess intelligibility rather than accent conformity. Flag uncertainty and avoid false precision. Give at most three concrete observations and two suggested exercises. Return the following fields in concise machine-readable text: overall_intelligibility_1_to_5, articulation_1_to_5, pacing_1_to_5, stumbling_points (each with an approximate location if verifiable, an audible observation, and confidence), strengths, next_steps, and uncertainty_notes.
+## Pilot: predeclared decisions
 
-Use stable anchors such as short quoted phrases where exact timestamps cannot be justified. If the chosen model has no guaranteed structured-output mode, validate and normalize the returned content in the application, and gracefully display a plain-language response on parse failure. **Do not fabricate word-level timings.**
+Before trying the model, record sample IDs and human listening judgments without seeing model results. Include repeated assessments of identical takes, a mix with and without a reference, deliberately clearer, faster and less clearly articulated variants, and degraded/background-noise samples. Where feasible add a second independent listener. Inspect every cited issue against playback, including possible accent-related penalties; record latency, errors, usage and costs. Do not claim validation from this small pilot.
 
-## Proposed data contract
+- **Continue to a larger, independently reviewed pilot only if:** the model commonly identifies points human listeners can verify, suggestions are useful, repeat judgments are reasonably stable for the intended use, references do not systematically turn unclear speech into confident claims, degraded audio prompts appropriate uncertainty, and cost and latency are acceptable to the user.
+- **Stop or redesign if:** it frequently invents problems, confidently rates unintelligible or degraded audio, penalizes accent independently of understandability, changes conclusions materially on repeats or with the reference, fails to abstain when needed, or costs/latency are unacceptable. Resolve privacy, reliability and feature-gating issues before any rollout.
 
-- **Inputs:** authorized user, audio recording (or stream), optional reference passage, requested evaluation prompt version.
-- **Outputs:** model and prompt identifiers, three ordinal 1-to-5 judgments clearly labelled as *experimental*, an array of no more than three audible stumbling observations, two suggested next exercises, uncertainties, duration, provider usage / estimated cost if available.
-- **Observations:** short excerpt or approximate interval, concrete symptom (for example: swallowed ending, compressed word boundary, rushed phrase, long hesitation), confidence: low/medium/high. The model should be allowed to return **no issue detected**.
-- **Failure handling:** report unavailable/invalid assessment without giving a bogus perfect or zero score; preserve recording so user can retry deliberately; never log API keys.
+These hypotheses are qualitative decision criteria, not pass rates or validation thresholds. Agree on sample counts and measurable thresholds before collecting a pilot dataset if a formal comparison is desired.
 
-## What this replaces and what it does not
-
-- Replace the experiment's default **Whisper transcription -> reference comparison -> WER-derived clarity and score** path.
-- Do not reuse `clarity = 1 - WER` or the existing logistic score as an intelligibility rating.
-- Keep the existing `master` application unchanged while evaluating this alternative. Reusing browser recording, authentication, audio storage, playback, and session UI is fine. The experiment should not silently mutate historical records or break previous reports.
-- A model's assertion that it detected a stumble is **not** ground truth. Do not imply clinical validation or a normative interpretation of 1–5 ratings.
-
-## Acceptance / pilot evaluation
-
-- A user can record, submit, receive and replay a model assessment without a Whisper call in that experiment's scoring path.
-- Feedback identifies **audible** locations or phrases and actionable next steps, not generic praise or unsupported specificity.
-- Run identical takes at least twice (to probe rating variability), then test intentionally clearer/slurred/fast variants and a few background-noise cases. Compare outputs with the user's own playback judgments; where practical, obtain a second human listener's judgment on a small sample.
-- Check whether the model penalizes accent rather than difficulty of understanding. Check hallucinated mistakes against playback.
-- Track **session duration**, total API usage, latency, and errors before defaulting to this method.
-- Keep scores and trends separate from legacy Whisper metrics; the numbers have different meanings.
-
-## Cost and model selection notes (checked 2026-11-01)
-
-- `whisper-1` transcription: **$0.006 per audio minute**.
-- `gpt-live-1`: **$0.05 per active Live session minute**, billed per second, **plus any delegated backend model/tool usage**. A ten-minute session costs about **$0.50** for the voice layer alone. Session elapsed time may differ from audio recording length, especially if the app leaves a session open while the user reviews results.
-- This is approximately 8.33x the Whisper per-minute baseline **only when session duration equals recording duration** and excludes backend charges. It is not an all-inclusive evaluation quote.
-- `gpt-audio-1.5` audio input is charged per audio token (published rate $32 / million input audio tokens), so benchmark actual usage instead of translating its price into a confident flat per-minute estimate.
-
-References:
-- https://developers.openai.com/api/docs/models/gpt-live-1
-- https://developers.openai.com/api/docs/models/gpt-audio-1.5
-- https://developers.openai.com/api/docs/models/whisper-1
-- https://developers.openai.com/api/docs/guides/live-delegation
-- https://developers.openai.com/api/docs/pricing
-
-## Out of scope for the first experiment
-
-No automatic rewrite of practice scripts, no phoneme-level diagnosis without dedicated validation, no forced pronunciation targets, no migration of historical WER records, no mandatory speech-generating conversation, and no production rollout decision before the pilot.
+API interface: [Audio in Chat Completions](https://developers.openai.com/api/docs/guides/audio-chat-completions), [GPT-Audio-1.5](https://developers.openai.com/api/docs/models/gpt-audio-1.5).

@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from django.urls import path
 
-from . import views
+from . import views, native_audio_views
 
 app_name = "practice"
 
 urlpatterns = [
+    path("experimental/audio/", native_audio_views.index, name="native_audio"),
+    path("experimental/audio/create/", native_audio_views.create, name="native_audio_create"),
+    path("experimental/audio/<int:pk>/", native_audio_views.detail, name="native_audio_take"),
+    path("experimental/audio/<int:pk>/assess/", native_audio_views.assess, name="native_audio_assess"),
+    path("experimental/audio/<int:pk>/play/", native_audio_views.audio, name="native_audio_play"),
+    path("experimental/audio/<int:pk>/recover/", native_audio_views.recover, name="native_audio_recover"),
+    path("experimental/audio/<int:pk>/delete/", native_audio_views.delete, name="native_audio_delete"),
     path("healthz/", views.health, name="health"),
     path("accounts/signup/", views.signup, name="signup"),
     path("", views.dashboard, name="dashboard"),

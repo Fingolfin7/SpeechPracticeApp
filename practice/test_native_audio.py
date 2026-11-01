@@ -40,13 +40,13 @@ VALID = {"status": "ok", "overall_intelligibility": 4, "articulation": 3, "pacin
          "observations": ["Ending unclear"], "strengths": ["Even pace"], "next_steps": ["Slow down"], "uncertainty": "Some noise"}
 
 
-@override_settings(OPENAI_API_KEY="test-key")
+@override_settings(OPENAI_API_KEY="test-key", NATIVE_AUDIO_EXPERIMENT_ENABLED=True)
 class NativeAudioTests(TestCase):
     def setUp(self):
         self.media = tempfile.TemporaryDirectory(); self.override = override_settings(MEDIA_ROOT=self.media.name)
         self.override.enable(); self.addCleanup(self.media.cleanup); self.addCleanup(self.override.disable)
-        self.owner = get_user_model().objects.create_user(username="native-owner", password="pass")
-        self.other = get_user_model().objects.create_user(username="native-other", password="pass")
+        self.owner = get_user_model().objects.create_user(username="native-owner", password="pass", is_staff=True)
+        self.other = get_user_model().objects.create_user(username="native-other", password="pass", is_staff=True)
         self.client.force_login(self.owner)
         path = default_storage.save("native-audio/test.wav", ContentFile(wav_bytes()))
         self.take = NativeAudioTake.objects.create(user=self.owner, original_path=path, content_type="audio/wav", reference="Example phrase")
@@ -64,7 +64,7 @@ class NativeAudioTests(TestCase):
         self.client.force_login(self.other)
         for name in ("take", "play"):
             self.assertEqual(self.client.get(self.url(name)).status_code, 404)
-        for name in ("assess", "delete", "recover"):
+        for name in ("assess", "delete", "recover", "rebuild"):
             self.assertEqual(self.client.post(self.url(name), {"submission_id": uuid.uuid4()}).status_code, 404)
         self.client.logout(); self.assertEqual(self.client.get(self.url("take")).status_code, 302)
 
@@ -75,7 +75,7 @@ class NativeAudioTests(TestCase):
         counts_before = {model: model.objects.count() for model in legacy}
         submission = uuid.uuid4(); self.client.post(self.url("assess"), {"submission_id": submission})
         a = self.take.assessments.get(); self.take.refresh_from_db()
-        self.assertEqual(a.status, "complete"); self.assertEqual(a.result, VALID)
+        self.assertEqual(a.status, "complete"); self.assertEqual(a.result, VALID); self.assertEqual(a.raw_text, json.dumps(VALID))
         self.assertEqual((a.request_id, a.resolved_model, a.usage), ("req-1", "gpt-audio-version", {"total_tokens": 123}))
         self.assertEqual(a.prompt_sha256, hashlib.sha256(a.prompt_text.encode()).hexdigest())
         self.assertIn("Example phrase", a.prompt_text)
@@ -108,7 +108,7 @@ class NativeAudioTests(TestCase):
         for provider_response, expected in cases:
             openai.return_value.chat.completions.create.return_value = provider_response
             self.client.post(self.url("assess"), {"submission_id": uuid.uuid4()})
-            a = self.take.assessments.first(); self.assertEqual(a.status, expected); self.assertEqual(a.result, {})
+            a = self.take.assessments.first(); self.assertEqual(a.status, expected); self.assertEqual(a.result, {}); self.assertTrue(a.raw_text)
 
     @patch("practice.services.native_audio.run_assessment")
     def test_duplicate_running_and_recovery_do_not_call_provider(self, run):
@@ -129,7 +129,7 @@ class NativeAudioTests(TestCase):
     @patch("openai.OpenAI")
     def test_interrupted_during_conversion_does_not_start_provider_request(self, openai):
         assessment = self.assessment()
-        def interrupt(_take):
+        def interrupt(_take, assessment_id=None):
             NativeAudioAssessment.objects.filter(pk=assessment.pk).update(status="interrupted")
             return b"converted"
         with patch("practice.services.native_audio.convert", side_effect=interrupt):
@@ -143,6 +143,74 @@ class NativeAudioTests(TestCase):
         with self.assertRaises(service.AudioError):
             service.convert(self.take)
         self.assertTrue(default_storage.exists(path))
+    def test_feature_gate_and_staff_restriction(self):
+        urls = [("get", reverse("practice:native_audio")), ("post", reverse("practice:native_audio_create")),
+                ("get", self.url("take")), ("get", self.url("play"))] + [("post", self.url(n)) for n in ("assess", "delete", "recover", "rebuild")]
+        with override_settings(NATIVE_AUDIO_EXPERIMENT_ENABLED=False):
+            for method, url in urls:
+                self.assertEqual(getattr(self.client, method)(url).status_code, 404)
+            self.assertNotContains(self.client.get(reverse("practice:dashboard")), "Experimental audio")
+        self.owner.is_staff = False; self.owner.save(update_fields=["is_staff"])
+        for method, url in urls:
+            self.assertEqual(getattr(self.client, method)(url).status_code, 404)
+        self.assertNotContains(self.client.get(reverse("practice:dashboard")), "Experimental audio")
+
+    def test_playback_range(self):
+        result = self.client.get(self.url("play"), HTTP_RANGE="bytes=1-4")
+        self.assertEqual(result.status_code, 206); self.assertEqual(result.content, wav_bytes()[1:5])
+        self.assertEqual(result["Content-Range"], f"bytes 1-4/{len(wav_bytes())}")
+        self.assertEqual(self.client.get(self.url("play"), HTTP_RANGE="bytes=999999-").status_code, 416)
+
+    @patch("openai.OpenAI")
+    def test_missing_and_corrupt_conversion_can_be_rebuilt_without_changing_old_audit(self, openai):
+        openai.return_value.chat.completions.create.return_value = response(json.dumps(VALID))
+        self.client.post(self.url("assess"), {"submission_id": uuid.uuid4()})
+        old = self.take.assessments.first(); old_hash = old.sent_audio_sha256
+        self.take.refresh_from_db(); old_path = self.take.wav_path
+        default_storage.delete(old_path)
+        self.client.post(self.url("assess"), {"submission_id": uuid.uuid4()})
+        failed = self.take.assessments.first(); self.assertIn("missing", failed.error)
+        self.client.post(self.url("rebuild")); self.take.refresh_from_db()
+        self.assertIn(old_path, self.take.archived_wav_paths); self.assertEqual(self.take.wav_path, "")
+        self.client.post(self.url("assess"), {"submission_id": uuid.uuid4()})
+        old.refresh_from_db(); self.assertEqual(old.sent_audio_sha256, old_hash)
+        self.take.refresh_from_db(); new_path = self.take.wav_path
+        self.assertNotEqual(new_path, old_path); self.assertTrue(default_storage.exists(new_path))
+        with default_storage.open(new_path, "wb") as stream: stream.write(b"corrupt")
+        self.client.post(self.url("assess"), {"submission_id": uuid.uuid4()})
+        self.assertIn("integrity", self.take.assessments.first().error)
+        self.client.post(self.url("rebuild")); self.take.refresh_from_db()
+        self.assertIn(new_path, self.take.archived_wav_paths)
+        self.client.post(self.url("delete")); self.assertFalse(default_storage.exists(new_path))
+
+    def test_delete_failure_keeps_database_and_original(self):
+        self.take.wav_path = default_storage.save("native-audio/derived.wav", ContentFile(b"wav"))
+        self.take.save(update_fields=["wav_path"])
+        with patch.object(default_storage, "delete", side_effect=OSError("failed")):
+            self.client.post(self.url("delete"))
+        self.assertTrue(NativeAudioTake.objects.filter(pk=self.take.pk).exists())
+        self.assertTrue(default_storage.exists(self.take.original_path))
+
+    def test_user_delete_protected_until_recordings_deleted(self):
+        from django.db.models.deletion import ProtectedError
+        with self.assertRaises(ProtectedError): self.owner.delete()
+
+    def test_extra_browser_mime_types_and_save_validation(self):
+        for mime in ("audio/x-m4a", "audio/mp3", "video/webm"):
+            upload = SimpleUploadedFile("file", wav_bytes(), content_type=mime)
+            result = self.client.post(reverse("practice:native_audio_create"), {"audio": upload})
+            self.assertEqual(result.status_code, 302)
+            take = NativeAudioTake.objects.filter(content_type=mime).first()
+            self.assertTrue(take.wav_path)
+        bad = SimpleUploadedFile("file", wav_bytes(121), content_type="audio/wav")
+        result = self.client.post(reverse("practice:native_audio_create"), {"audio": bad}, follow=True)
+        self.assertContains(result, "could not be validated")
+
+    def test_json_fence_is_tolerated_only_if_complete(self):
+        self.assertEqual(service.validate("```json\n" + json.dumps(VALID) + "\n```"), VALID)
+        self.assertIsNone(service.validate("```json\n" + json.dumps(VALID)))
+        self.assertIsNone(service.validate("```json\n" + json.dumps(VALID) + "\n``` trailing"))
+
     def test_validation_rejects_bad_ratings_and_malformed_report(self):
         for raw in ('{"status":"ok","overall_intelligibility":5}', '{"status":"abstain"}', 'null', json.dumps({**VALID, "pacing": True}), json.dumps({**VALID, "pacing": 6})):
             self.assertIsNone(service.validate(raw))

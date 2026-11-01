@@ -10,7 +10,7 @@
     {% csrf_token %}
     <p><button type="button" id="record">Record</button> <button type="button" id="stop" disabled>Stop</button> <span id="record-status" role="status"></span></p>
     <audio id="preview" controls hidden></audio>
-    <p><label for="audio">Recording (up to 120 seconds and 10 MB)</label><br><input id="audio" name="audio" type="file" accept="audio/webm,audio/ogg,audio/mp4,audio/wav,audio/mpeg,audio/x-wav" required></p>
+    <p><label for="audio">Recording (up to 120 seconds and 10 MB; browser capture stops at 118 seconds to allow for encoding)</label><br><input id="audio" name="audio" type="file" accept="audio/webm,audio/ogg,audio/mp4,audio/wav,audio/mpeg,audio/x-wav,audio/x-m4a,audio/mp3,video/webm" required></p>
     <p><label for="reference">Optional reference passage (off by default; up to 5,000 characters)</label><br><textarea id="reference" name="reference" maxlength="5000" rows="4"></textarea></p>
     <button type="submit">Save recording</button>
   </form>

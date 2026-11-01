@@ -35,8 +35,8 @@
       recorder.start();
       record.disabled = true;
       stop.disabled = false;
-      status.textContent = 'Recording… It will stop after two minutes.';
-      timer = setTimeout(() => { if (recorder.state === 'recording') recorder.stop(); }, 120000);
+      status.textContent = 'Recording… It will stop after 118 seconds to allow for encoding.';
+      timer = setTimeout(() => { if (recorder.state === 'recording') recorder.stop(); }, 118000);
     } catch (_) {
       if (stream) stream.getTracks().forEach(track => track.stop());
       status.textContent = 'Microphone unavailable. Check your browser permission or choose an audio file.';

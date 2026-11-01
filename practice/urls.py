@@ -12,6 +12,7 @@ urlpatterns = [
     path("experimental/audio/<int:pk>/", native_audio_views.detail, name="native_audio_take"),
     path("experimental/audio/<int:pk>/assess/", native_audio_views.assess, name="native_audio_assess"),
     path("experimental/audio/<int:pk>/play/", native_audio_views.audio, name="native_audio_play"),
+    path("experimental/audio/<int:pk>/rebuild/", native_audio_views.rebuild, name="native_audio_rebuild"),
     path("experimental/audio/<int:pk>/recover/", native_audio_views.recover, name="native_audio_recover"),
     path("experimental/audio/<int:pk>/delete/", native_audio_views.delete, name="native_audio_delete"),
     path("healthz/", views.health, name="health"),

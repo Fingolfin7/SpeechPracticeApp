@@ -49,6 +49,8 @@ MIDDLEWARE = [
 if not DEBUG:
     MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
 
+NATIVE_AUDIO_EXPERIMENT_ENABLED = os.getenv("NATIVE_AUDIO_EXPERIMENT_ENABLED", "0") == "1"
+
 REQUIRE_LOGIN = os.getenv("DJANGO_REQUIRE_LOGIN", "1") == "1"
 if REQUIRE_LOGIN:
     authentication_index = MIDDLEWARE.index(
@@ -73,6 +75,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "practice.context_processors.static_version",
+                "practice.context_processors.native_audio_access",
             ],
         },
     },

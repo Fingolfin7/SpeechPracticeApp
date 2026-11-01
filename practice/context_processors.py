@@ -40,3 +40,6 @@ def static_version(_request):
     )
     cache.set(cache_key, version, timeout)
     return {"static_version": version}
+
+def native_audio_access(request):
+    return {"native_audio_enabled": bool(settings.NATIVE_AUDIO_EXPERIMENT_ENABLED and request.user.is_authenticated and request.user.is_staff)}

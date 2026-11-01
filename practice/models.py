@@ -596,12 +596,13 @@ class PracticeSettings(models.Model):
         return bool(getattr(self, allowed[field]))
 
 class NativeAudioTake(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="native_audio_takes")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="native_audio_takes")
     created_at = models.DateTimeField(auto_now_add=True)
     original_path = models.CharField(max_length=500)
     content_type = models.CharField(max_length=50, default="audio/webm")
     wav_path = models.CharField(max_length=500, blank=True)
     wav_sha256 = models.CharField(max_length=64, blank=True)
+    archived_wav_paths = models.JSONField(default=list, blank=True)
     duration_seconds = models.FloatField(null=True, blank=True)
     reference = models.TextField(blank=True)
 

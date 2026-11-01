@@ -143,17 +143,51 @@ class NativeAudioTests(TestCase):
         with self.assertRaises(service.AudioError):
             service.convert(self.take)
         self.assertTrue(default_storage.exists(path))
-    def test_feature_gate_and_staff_restriction(self):
-        urls = [("get", reverse("practice:native_audio")), ("post", reverse("practice:native_audio_create")),
-                ("get", self.url("take")), ("get", self.url("play"))] + [("post", self.url(n)) for n in ("assess", "delete", "recover", "rebuild")]
-        with override_settings(NATIVE_AUDIO_EXPERIMENT_ENABLED=False):
-            for method, url in urls:
-                self.assertEqual(getattr(self.client, method)(url).status_code, 404)
-            self.assertNotContains(self.client.get(reverse("practice:dashboard")), "Experimental audio")
-        self.owner.is_staff = False; self.owner.save(update_fields=["is_staff"])
-        for method, url in urls:
-            self.assertEqual(getattr(self.client, method)(url).status_code, 404)
+    def assert_owner_management_without_new_work(self):
+        self.assertContains(self.client.get(reverse("practice:dashboard")), "Experimental audio")
+        self.assertContains(self.client.get(reverse("practice:native_audio")), f"Recording {self.take.pk}")
+        detail = self.client.get(self.url("take"))
+        self.assertContains(detail, "Delete recording and assessments")
+        self.assertNotContains(detail, "Assess recording")
+        self.assertEqual(self.client.get(self.url("play")).status_code, 200)
+        for name in ("assess", "rebuild"):
+            self.assertEqual(self.client.post(self.url(name), {"submission_id": uuid.uuid4()}).status_code, 404)
+        self.assertEqual(self.client.post(reverse("practice:native_audio_create")).status_code, 404)
+        active = self.assessment()
+        NativeAudioAssessment.objects.filter(pk=active.pk).update(created_at=timezone.now() - timedelta(minutes=6))
+        self.client.post(self.url("recover")); active.refresh_from_db(); self.assertEqual(active.status, "interrupted")
+        self.client.post(self.url("delete"))
+        self.assertFalse(NativeAudioTake.objects.filter(pk=self.take.pk).exists())
         self.assertNotContains(self.client.get(reverse("practice:dashboard")), "Experimental audio")
+        self.assertEqual(self.client.get(reverse("practice:native_audio")).status_code, 404)
+
+    @patch("openai.OpenAI")
+    def test_disabled_flag_owner_can_manage_own_takes_but_cannot_start_work(self, openai):
+        with override_settings(NATIVE_AUDIO_EXPERIMENT_ENABLED=False):
+            self.assert_owner_management_without_new_work()
+        openai.assert_not_called()
+
+    @patch("openai.OpenAI")
+    def test_nonstaff_owner_can_manage_own_takes_but_cannot_start_work(self, openai):
+        self.owner.is_staff = False; self.owner.save(update_fields=["is_staff"])
+        self.assert_owner_management_without_new_work()
+        openai.assert_not_called()
+
+    def test_disabled_pilot_does_not_expose_other_users_takes(self):
+        self.client.force_login(self.other)
+        self.other.is_staff = False; self.other.save(update_fields=["is_staff"])
+        with override_settings(NATIVE_AUDIO_EXPERIMENT_ENABLED=False):
+            self.assertEqual(self.client.get(reverse("practice:native_audio")).status_code, 404)
+            for name in ("take", "play"):
+                self.assertEqual(self.client.get(self.url(name)).status_code, 404)
+            for name in ("delete", "recover"):
+                self.assertEqual(self.client.post(self.url(name)).status_code, 404)
+            self.assertTrue(NativeAudioTake.objects.filter(pk=self.take.pk).exists())
+
+    @override_settings(DEBUG=True)
+    def test_media_url_is_not_publicly_served_by_django(self):
+        self.client.logout()
+        self.assertEqual(self.client.get("/media/" + self.take.original_path).status_code, 404)
 
     def test_playback_range(self):
         result = self.client.get(self.url("play"), HTTP_RANGE="bytes=1-4")

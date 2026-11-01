@@ -9,8 +9,9 @@
   {% if active %}<p>An assessment is running. Reload this page to check its status.</p>
     {% if recoverable %}<form method="post" action="{% url 'practice:native_audio_recover' take.pk %}">{% csrf_token %}<p>If the request was interrupted, you can mark this attempt interrupted. The original request may still have incurred charges; this does not resend it.</p><button type="submit">Mark stale attempt interrupted</button></form>{% endif %}
   {% else %}
-    <form method="post" action="{% url 'practice:native_audio_assess' take.pk %}">{% csrf_token %}<input type="hidden" name="submission_id" value="{{ submission_id }}"><p>Each assessment sends audio to OpenAI and may incur API charges. A retry creates a new assessment.</p><p>This experimental request runs while the server process remains active. A browser, proxy, or server timeout may interrupt the result; check this page before retrying.</p><button type="submit">Assess recording</button></form>
+    {% if native_audio_enabled %}<form method="post" action="{% url 'practice:native_audio_assess' take.pk %}">{% csrf_token %}<input type="hidden" name="submission_id" value="{{ submission_id }}"><p>Each assessment sends audio to OpenAI and may incur API charges. A retry creates a new assessment.</p><p>This experimental request runs while the server process remains active. A browser, proxy, or server timeout may interrupt the result; check this page before retrying.</p><button type="submit">Assess recording</button></form>
     {% if take.wav_path %}<form method="post" action="{% url 'practice:native_audio_rebuild' take.pk %}">{% csrf_token %}<button type="submit">Rebuild converted audio for next assessment</button></form>{% endif %}
+    {% else %}<p>New assessments are unavailable. You can delete this saved recording.</p>{% endif %}
     <form method="post" action="{% url 'practice:native_audio_delete' take.pk %}" onsubmit="return confirm('Delete this recording and all its experimental assessments?')">{% csrf_token %}<button type="submit">Delete recording and assessments</button></form>
   {% endif %}
   <h2>Experimental assessments</h2>

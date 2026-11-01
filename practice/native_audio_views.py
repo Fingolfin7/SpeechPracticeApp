@@ -27,9 +27,11 @@ def native_audio_access(view):
 
 
 @login_required
-@native_audio_access
 def index(request):
-    return render(request, "practice/native_audio.html", {"takes": NativeAudioTake.objects.filter(user=request.user).prefetch_related("assessments")})
+    takes = NativeAudioTake.objects.filter(user=request.user).prefetch_related("assessments")
+    if not (settings.NATIVE_AUDIO_EXPERIMENT_ENABLED and request.user.is_staff) and not takes.exists():
+        raise Http404
+    return render(request, "practice/native_audio.html", {"takes": takes})
 
 
 @login_required
@@ -59,7 +61,6 @@ def create(request):
 
 
 @login_required
-@native_audio_access
 def detail(request, pk):
     take = get_object_or_404(NativeAudioTake.objects.prefetch_related("assessments"), pk=pk, user=request.user)
     return render(request, "practice/native_audio_take.html", {"take": take, "submission_id": uuid.uuid4(), "active": take.assessments.filter(status__in=["pending", "running"]).exists(), "recoverable": take.assessments.filter(status__in=["pending", "running"], created_at__lt=timezone.now() - timedelta(minutes=5)).exists()})
@@ -91,7 +92,6 @@ def assess(request, pk):
 
 
 @login_required
-@native_audio_access
 def audio(request, pk):
     take = get_object_or_404(NativeAudioTake, pk=pk, user=request.user)
     try:
@@ -134,7 +134,6 @@ def audio(request, pk):
 
 
 @login_required
-@native_audio_access
 @require_POST
 def delete(request, pk):
     with transaction.atomic():
@@ -156,7 +155,6 @@ def delete(request, pk):
 
 
 @login_required
-@native_audio_access
 @require_POST
 def recover(request, pk):
     with transaction.atomic():

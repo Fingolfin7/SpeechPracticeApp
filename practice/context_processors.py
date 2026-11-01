@@ -42,4 +42,10 @@ def static_version(_request):
     return {"static_version": version}
 
 def native_audio_access(request):
-    return {"native_audio_enabled": bool(settings.NATIVE_AUDIO_EXPERIMENT_ENABLED and request.user.is_authenticated and request.user.is_staff)}
+    user = request.user
+    enabled = bool(settings.NATIVE_AUDIO_EXPERIMENT_ENABLED and user.is_authenticated and user.is_staff)
+    owns_takes = False
+    if user.is_authenticated and not enabled:
+        from practice.models import NativeAudioTake
+        owns_takes = NativeAudioTake.objects.filter(user=user).exists()
+    return {"native_audio_enabled": enabled, "native_audio_accessible": enabled or owns_takes}

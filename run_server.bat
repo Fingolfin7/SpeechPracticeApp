@@ -1,39 +1,51 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
-
-REM Start the SpeechPractice Django dev server for this PC and the local network.
+setlocal EnableExtensions
 cd /d "%~dp0"
 
-set "HOST=0.0.0.0"
-set "PORT=8000"
-if not "%~1"=="" set "PORT=%~1"
+if not exist ".venv312\Scripts\python.exe" (
+    echo Creating a local Python environment...
+    py -3.12 -m venv .venv312
+    if errorlevel 1 (
+        echo Could not create the environment. Install Python 3.12 and run this file again.
+        pause
+        exit /b 1
+    )
+)
+set "PYTHON=.venv312\Scripts\python.exe"
 
-set "DJANGO_DEBUG=1"
-set "DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,*"
+"%PYTHON%" check_studio_dependencies.py >nul 2>&1
+if errorlevel 1 (
+    echo Installing SpeechPractice dependencies...
+    "%PYTHON%" -m pip install -r requirements-studio.txt
+    if errorlevel 1 (
+        echo Dependencies could not be installed. Check your internet connection and run this file again.
+        pause
+        exit /b 1
+    )
+    "%PYTHON%" check_studio_dependencies.py >nul 2>&1
+    if errorlevel 1 (
+        echo The installed dependencies do not meet requirements-studio.txt. Review the installation output and try again.
+        pause
+        exit /b 1
+    )
+)
 
-if exist ".venv312\Scripts\python.exe" (
-    set "PYTHON=.venv312\Scripts\python.exe"
-) else if exist ".venv\Scripts\python.exe" (
-    set "PYTHON=.venv\Scripts\python.exe"
-) else (
-    set "PYTHON=python"
+where ffmpeg >nul 2>&1
+if errorlevel 1 (
+    echo ffmpeg was not found on your PATH. Install ffmpeg, then run this file again.
+    pause
+    exit /b 1
 )
 
 echo.
-echo Starting SpeechPractice Django server...
+echo SpeechPractice is starting on this computer only.
+echo Open http://127.0.0.1:8765/ in your browser.
+echo Keep this window open while using the app; press Ctrl+C to stop it.
 echo.
-echo Local:
-echo   http://127.0.0.1:%PORT%/
-echo.
-echo Local network:
-for /f "tokens=2 delims=:" %%A in ('ipconfig ^| findstr /R /C:"IPv4.*"') do (
-    set "IP=%%A"
-    set "IP=!IP: =!"
-    echo   http://!IP!:%PORT%/
+"%PYTHON%" manage_studio.py runserver 127.0.0.1:8765 --noreload --insecure
+if errorlevel 1 (
+    echo.
+    echo The server could not start. If port 8765 is in use, close the other app and try again.
+    pause
+    exit /b 1
 )
-echo.
-echo Using: %PYTHON%
-echo Press Ctrl+C to stop the server.
-echo.
-
-"%PYTHON%" manage.py runserver %HOST%:%PORT%

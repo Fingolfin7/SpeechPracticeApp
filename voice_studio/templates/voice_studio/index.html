@@ -1,0 +1,42 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpeechPractice</title>
+  <link rel="icon" href="{% static 'voice_studio/icon.svg' %}" type="image/svg+xml">
+  <link rel="stylesheet" href="{% static 'voice_studio/studio.css' %}">
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead"><span class="brand-mark" aria-hidden="true">◖</span><span>SpeechPractice</span><span class="local-label">On this computer</span></header>
+    <div class="intro"><h1>Hear yourself more clearly.</h1><p>Record a short sample and get practical feedback on clarity, pronunciation and mumbling.</p></div>
+    <div class="workspace">
+      <section class="record-panel" aria-labelledby="record-heading">
+        <div class="panel-heading"><h2 id="record-heading">Your recording</h2><span>Up to 2 minutes</span></div>
+        <form id="practice-form" method="post" action="{% url 'studio_evaluate' %}">
+          {% csrf_token %}
+          <div class="recorder" id="recorder">
+            <div class="mic-graphic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="9" y="3" width="6" height="12" rx="3" stroke="currentColor" stroke-width="1.6"/><path d="M6 11.5a6 6 0 0 0 12 0M12 17.5V21M9 21h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+            <p class="record-title" id="record-title">Ready when you are</p>
+            <p class="record-hint" id="record-status" role="status" aria-live="polite">Find a quiet place, then press record.</p>
+            <div class="record-actions"><button id="record" class="primary" type="button">Record</button><button id="stop" class="secondary" type="button" disabled>Stop</button></div>
+          </div>
+          <div id="playback" class="playback" hidden><span>Listen back</span><audio id="preview" controls preload="metadata"></audio><p>You can record again before sending.</p></div>
+          <div class="key-field"><label for="api-key">OpenAI API key</label><input id="api-key" name="api_key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key" required><p>Your key is used for this request only and is not saved.</p></div>
+          <button class="send" id="send" type="submit" disabled>Send for feedback</button>
+          <p class="privacy">Your recording is sent to OpenAI for processing and may incur API charges. <a href="https://developers.openai.com/api/docs/guides/your-data" target="_blank" rel="noopener noreferrer">OpenAI's data policies</a> apply. This app keeps no history; temporary conversion files are deleted after the request.</p>
+        </form>
+      </section>
+      <section class="feedback-panel" aria-labelledby="feedback-heading" aria-live="polite">
+        <div class="panel-heading"><h2 id="feedback-heading">Your feedback</h2><span>Experimental</span></div>
+        <div id="feedback-empty" class="empty"><div class="listening-mark" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div><p>You'll see your feedback here after you send a recording.</p></div>
+        <div id="feedback-result" class="result" hidden></div>
+        <p class="feedback-note">AI feedback can miss things or be mistaken. Listen back and use your own judgment.</p>
+      </section>
+    </div>
+  </main>
+  <script src="{% static 'voice_studio/studio.js' %}" defer></script>
+</body>
+</html>
